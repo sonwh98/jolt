@@ -481,7 +481,7 @@
 (defn indexed? [x] (vector? x))
 ;; sorted? is defined by the next tier (25-sorted) — declared here so this
 ;; tier compiles (forward references are analysis errors).
-(declare sorted?)
+(declare sorted? tree-sorted?)
 
 (defn reversible? [x] (or (vector? x) (sorted? x)))
 (defn seqable? [x]

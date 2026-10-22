@@ -68,6 +68,8 @@
 (is "[(take 3 (.seqFrom ss 10 true)) (take 3 (.seqFrom sm 10 false)) (.seqFrom ss 100 true) (take 2 (.seq ss false))]"
     "[(12 15 18) ([9 90] [6 60] [3 30]) nil (99 96)]")
 
+(is "(do (deftype UserSorted [xs] clojure.lang.Sorted (comparator [_] compare) (entryKey [_ e] e) (seq [_ asc] (seq (if asc xs (reverse xs)))) (seqFrom [_ k asc] (seq (drop-while #(if asc (neg? (compare % k)) (pos? (compare % k))) (if asc xs (reverse xs)))))) (let [s (UserSorted. [1 2 3])] [(sorted? s) (subseq s > 1) (rsubseq s < 3) (subseq s >= 1 < 3) (rsubseq s > 1 <= 3)]))" "[true (2 3) (2 1) (1 2) (3 2)]")
+
 ;; --- hash: the hash of the equivalent hash map/set, cached ------------------
 (is "[(= (hash sm) (hash (into {} sm))) (= (hash ss) (hash (into #{} ss)))]" "[true true]")
 (is "[(= (hash (sorted-map)) (hash {})) (= (hash (sorted-set)) (hash #{}))]" "[true true]")

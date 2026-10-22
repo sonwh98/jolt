@@ -377,7 +377,12 @@
 
 (defn sorted-map? [x] (= :jolt/sorted-map (sfield x :jolt/type)))
 (defn sorted-set? [x] (= :jolt/sorted-set (sfield x :jolt/type)))
-(defn sorted? [x] (or (sorted-map? x) (sorted-set? x)))
+;; jolt's own red-black tier (htable + :ops); the fast paths below need it
+(defn- tree-sorted? [x] (or (sorted-map? x) (sorted-set? x)))
+;; Clojure: (instance? clojure.lang.Sorted coll). Any deftype/reify declaring
+;; Sorted qualifies (data.priority-map, user B-trees). instance-check: the
+;; instance? macro is tier 30.
+(defn sorted? [x] (or (tree-sorted? x) (instance-check clojure.lang.Sorted x)))
 
 ;; --- subseq / rsubseq ---------------------------------------------------------
 ;; test is one of < <= > >= applied Clojure-style to the comparator result:
@@ -392,14 +397,21 @@
 
 ;; clojure.core/mk-bound-fn
 (defn- mk-bound-fn [sc test k]
-  (let [cmp (the-cmp sc) map? (sorted-map? sc)]
-    (fn [e] (test (cmp (if map? (key e) e) k) 0))))
+  (if (tree-sorted? sc)
+    (let [cmp (the-cmp sc) map? (sorted-map? sc)]
+      (fn [e] (test (cmp (if map? (key e) e) k) 0)))
+    (let [cmp (.comparator sc)]                 ; clojure.core/mk-bound-fn
+      (fn [e] (test (.compare cmp (.entryKey sc e) k) 0)))))
 
 (defn- seq-from [sc k asc?]
-  (jolt.host/sorted-seq-from (sfield sc :tree) asc? (sc-mode sc) (the-cmp sc) k))
+  (if (tree-sorted? sc)
+    (jolt.host/sorted-seq-from (sfield sc :tree) asc? (sc-mode sc) (the-cmp sc) k)
+    (.seqFrom sc k asc?)))
 
 (defn- sc-seq [sc asc?]
-  (jolt.host/sorted-seq (sfield sc :tree) asc? (sc-mode sc)))
+  (if (tree-sorted? sc)
+    (jolt.host/sorted-seq (sfield sc :tree) asc? (sc-mode sc))
+    (.seq sc asc?)))
 
 (defn- assert-sorted [sc]
   (when-not (sorted? sc)

@@ -28,7 +28,7 @@
     (nil? m) nil
     ;; associative? is false for a sorted SET, so one falls through to the throw
     (associative? m)
-    (if (sorted? m)
+    (if (tree-sorted? m)
       ((get (jolt.host/ref-get m :ops) :entry-at) m k)
       (when (contains? m k) (jolt.host/map-entry k (get m k))))
     ;; a java.util.Map has no Clojure key object to preserve, and neither does a
@@ -177,7 +177,7 @@
     ;; a defrecord without its own empty can't have one (RT: UnsupportedOperation)
     (record? coll) (throw (new UnsupportedOperationException
                                (str "Can't create empty: " (.getName (class coll)))))
-    (sorted? coll) (with-meta ((get (jolt.host/ref-get coll :ops) :empty) coll) (meta coll))
+    (tree-sorted? coll) (with-meta ((get (jolt.host/ref-get coll :ops) :empty) coll) (meta coll))
     (map? coll) (with-meta {} (meta coll))
     (set? coll) (with-meta #{} (meta coll))
     (vector? coll) (with-meta [] (meta coll))

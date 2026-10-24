@@ -476,10 +476,14 @@
          (%r-jolt-nth coll i d)))))
 ;; assoc: replacing a declared field copies the value vector; any other key grows
 ;; the extension map (the value vector is shared — fields are immutable).
+;; Only a defrecord is associative this way (IRecord, as on the JVM). A deftype
+;; that declares assoc answers through it; any other deftype is not
+;; Associative, so it falls through to the base refusal (ClassCastException,
+;; naming the class), matching both the JVM and jolt's own associative?.
 (define %r-jolt-assoc1 jolt-assoc1)
 (set! jolt-assoc1 (lambda (coll k v)
   (cond ((jrec-cl coll "assoc") => (lambda (m) (jolt-invoke m coll k v)))
-        ((jrec? coll)
+        ((jrec-record? coll)
          (let ((i (and (keyword? k) (jrec-field-index coll k))))
             (if i
                 (let ((v2 (let ((flags (hashtable-ref chez-record-dbl-tbl (jrec-tag coll) #f)))

@@ -1,0 +1,25 @@
+### cmd: ./watchdog.sh 60 ./w2.exe -:d5 qualify
+*** GC: 38us, .6K alloc, 6.0M heap, .6K live (0% 592+56)
+=== W2 blocking-GC witness (p1a-r2): mode=qualify ===
+W2: t=1795023507.521935 start
+W2-B: EXECUTING on the runtime t=1795023507.521979
+W2-A: OBSERVED B executing on the runtime (synchronized) t=1795023507.534523
+W2-A: entering blocking foreign call (B synchronized and executing) t=1795023507.534609
+W2C: foreign call ENTERED, blocking on handshake (deadline 6s)
+W2C: foreign call RETURNING (cause=deadline, blocked 6000ms)
+W2-B: observed A's entry signal; starting real GC rounds t=1795023513.535334
+W2-B: round 1 t=1795023513.535408 start (c-in-block=0 a-calls-done=0)
+*** GC: 497us, 112K alloc, 6.5M heap, 1.6M live (24% 68784+1607864)
+W2-B: round 1 t=1795023513.536893 done (capi-gc-return=0)
+W2-B: calling the C release handshake FROM SCHEME after round 1 (real collection completed) t=1795023513.536965
+W2-B: round 2 t=1795023513.537042 start (c-in-block=0 a-calls-done=0)
+*** GC: 514us, 140K alloc, 6.5M heap, 1.6M live (24% 68784+1607864)
+W2-B: round 2 t=1795023513.538448 done (capi-gc-return=0)
+W2-B: round 3 t=1795023513.538541 start (c-in-block=0 a-calls-done=0)
+*** GC: 489us, 162K alloc, 6.5M heap, 1.6M live (24% 68784+1607864)
+W2-B: round 3 t=1795023513.53974 done (capi-gc-return=0)
+W2-A: foreign call returned t=1795023513.539801 release-cause=deadline
+W2: observed state: release-cause=deadline rounds-during-block=0 rounds-after=3 handshake-called-from-scheme=#t capi-handshake-calls=1 handshake-during-block=0 blocked-ms=6000 witness-object=(last-round=3 round-count=3)
+W2-QUALIFY-VERDICT: FAIL (blocking unqualified on this build: release-cause=deadline, rounds-during-block=0, handshake-during-block=0; B was synchronized and provably executing BEFORE A entered C, but completed all rounds only AFTER the foreign call returned — the handshake was called from Scheme only after B's real collections, which on this build can only happen after C returned; astra §2 'actual collection and another Scheme thread's progress while C remains blocked' is not satisfied)
+### exit=0
+### w2-outcome: run completed (verdict derived from observed state; see the W2-QUALIFY-VERDICT line)

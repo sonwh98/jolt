@@ -1,8 +1,23 @@
 ### cmd: ./watchdog.sh 60 ./w3.exe phase1-nobeat
 W3: calling ___setup from the primordial thread
 W3: ___setup returned; runtime live (___VERSION=409008)
+W3-CONTROL: owner-thread callbacks through the SAME c-define entries the worker will use
+W3-CONTROL: scheme_w3_add(20,22) = 42 (expected 42)
+W3-CONTROL: scheme_w3_add_alloc(50,22) = 1072 (expected 1072)
+W3-CONTROL: scheme_w3_gc_rounds(2) = 2 (expected 2; real collections on the owner thread)
+W3-CONTROL-VERDICT: PASS (owner Gambit thread drives the same c-define entries with correct values before any foreign-thread phase)
 W3-PHASE1: spawning raw pthread (primordial will park in pthread_join)
 W3-PHASE1: heartbeat interval = 0.010000
 W3-PHASE1: heartbeat DISABLED for this run
-./watchdog.sh: line 21:  1532 Segmentation fault: 11  "$@"
-### exit=139
+W3-WORKER: scheme_w3_add_alloc(50,22) = 1072 (expected 1072)
+W3-WORKER: scheme_w3_add(20,22) = 42
+W3-WORKER: scheme_w3_add(21,22) = 43
+W3-WORKER: scheme_w3_add(22,22) = 44
+W3-WORKER: drove 3 real gc rounds (runtime *** GC: reports below with -:d5)
+W3-WORKER: final scheme_w3_add(1,1) = 2
+W3-PHASE1: worker joined, exit=0
+W3-PHASE1-VERDICT: REFUSAL-NOT-REPRODUCED (worker survived with correct values — undocumented serialized reuse of the single pstate; a nondeterminism caveat, NEVER qualification of foreign-thread entry)
+W3: calling ___cleanup
+W3: ___cleanup returned
+### exit=0
+### w3-outcome: REFUSAL-NOT-REPRODUCED (worker survived — undocumented serialized reuse of the single pstate, never qualification of foreign-thread entry)

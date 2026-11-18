@@ -1,0 +1,12 @@
+### cmd: ./watchdog.sh 60 ./w3.exe control
+W3: calling ___setup from the primordial thread
+W3: ___setup returned; runtime live (___VERSION=409008)
+W3-CONTROL: owner-thread callbacks through the SAME c-define entries the worker will use
+W3-CONTROL: scheme_w3_add(20,22) = 42 (expected 42)
+W3-CONTROL: scheme_w3_add_alloc(50,22) = 1072 (expected 1072)
+W3-CONTROL: scheme_w3_gc_rounds(2) = 2 (expected 2; real collections on the owner thread)
+W3-CONTROL-VERDICT: PASS (owner Gambit thread drives the same c-define entries with correct values before any foreign-thread phase)
+W3: calling ___cleanup
+W3: ___cleanup returned
+### exit=0
+### w3-outcome: CONTROL-PASS (owner-thread callbacks through the same c-define entries succeeded before any foreign-thread phase)

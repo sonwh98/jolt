@@ -1,7 +1,8 @@
 ### cmd: ./watchdog.sh 120 ./w1.exe
-=== W1 errno-atomicity witness ===
-EAGAIN=35 EACCES=13 EIO=5
-W1-CHECKS=4000
+=== W1 errno-atomicity witness (p1a-r2: capture-before-allocation + negative controls) ===
+EAGAIN=35 EACCES=13 EIO=5 intervening-clobber=4242
+W1-NEGATIVE-CONTROL: OK (shape G captured AFTER the intervening clobber and reported it — the assertions distinguish capture order, so the immediate-capture shapes are load-bearing)
+W1-CHECKS=5901
 W1-FAILURES=0
-W1-VERDICT: PASS (result+errno pair captured atomically at the shim; capture order proven by post-capture and ___AT_END clobbers; per-invocation capture proven by nesting and threads)
+W1-VERDICT: PASS (every shim captured (result,errno) immediately after the target, before ANY allocation/conversion/re-entry: shapes A/C preserve the target's own errno, shape B preserves errno=42 on success, shape E captures before the nested Scheme re-entry, shape F defeats an intervening clobber written between target and capture; shape G proves the assertions distinguish capture order; the ___AT_END clobber (shape D) and the two-thread interleave add conversion-boundary and scheduling pressure)
 ### exit=0

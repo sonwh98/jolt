@@ -1,0 +1,10 @@
+### cmd: ./watchdog.sh 60 ./w4.exe mode1
+=== W4 mode1: M1 + M2 + M3 ===
+W4-M1: same-thread callback w4_call_cb(4) -> 40 expected 40 => OK
+W4-M2: nested C->Scheme->C->Scheme w4_nested_a(1) -> 1107 expected 1107 => OK
+W4-M3: thread A foreign call returned t=1795020337.534208 (blocked ~2s from 1795020337.523282)
+W4-M3: thread B attempting callback t=1795020337.834804
+W4-M3: thread B callback completed t=1795020337.835392 -> 90
+W4-M3: B-completed-during-A-block probe = 0 => no callback from B during A's foreign call (callbacks from other Gambit threads are serialized AFTER the foreign call; no released-frame concurrency exists — see W2)
+W4-VERDICT: PASS (M1 same-thread callback, M2 documented nesting, M3 callbacks from other Gambit threads only run while no foreign call occupies the single processor)
+### exit=0

@@ -1,0 +1,8 @@
+### cmd: ./watchdog.sh 60 ./w3.exe phase1-nobeat
+W3: calling ___setup from the primordial thread
+W3: ___setup returned; runtime live (___VERSION=409008)
+W3-PHASE1: spawning raw pthread (primordial will park in pthread_join)
+W3-PHASE1: heartbeat interval = 0.010000
+W3-PHASE1: heartbeat DISABLED for this run
+./watchdog.sh: line 21:  1532 Segmentation fault: 11  "$@"
+### exit=139

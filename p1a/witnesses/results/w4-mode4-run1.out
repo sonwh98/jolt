@@ -1,0 +1,7 @@
+### cmd: ./watchdog.sh 60 ./w4.exe mode4 (run 1 of 3)
+=== W4 mode4: M4 callback from a raw foreign pthread ===
+W4-M4: calling w4_ft_call (worker pthread will invoke the c-define'd callback while this Gambit thread parks inside the C call)
+W4-M4: foreign-pthread callback returned 1005
+W4-M4: w4_ft_call returned 0
+W4-VERDICT: PASS-QUALIFIED (foreign-pthread callback completed — serialized reuse of the single pstate; NO documented protocol; W3 shows the general foreign-thread entry crashes)
+### exit=0

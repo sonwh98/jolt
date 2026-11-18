@@ -1,0 +1,7 @@
+### cmd: ./watchdog.sh 120 ./w1.exe
+=== W1 errno-atomicity witness ===
+EAGAIN=35 EACCES=13 EIO=5
+W1-CHECKS=4000
+W1-FAILURES=0
+W1-VERDICT: PASS (result+errno pair captured atomically at the shim; capture order proven by post-capture and ___AT_END clobbers; per-invocation capture proven by nesting and threads)
+### exit=0

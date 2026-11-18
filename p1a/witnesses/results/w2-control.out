@@ -1,0 +1,22 @@
+### cmd: ./watchdog.sh 60 ./w2.exe -:d5 control
+*** GC: 33us, .6K alloc, 6.0M heap, .6K live (0% 592+56)
+=== W2 blocking-GC witness: mode=control ===
+W2: t=1795020328.91705 start
+W2-B: round 1 t=1795020328.917097 allocating + ##gc (runtime primitive)
+*** GC: 507us, 93K alloc, 6.5M heap, 1.6M live (24% 69936+1607840)
+W2-B: round 1 t=1795020328.918424 done (capi-gc-return=0)
+W2-B: round 2 t=1795020328.918517 allocating + ##gc (runtime primitive)
+*** GC: 465us, 113K alloc, 6.5M heap, 1.6M live (24% 69936+1607840)
+W2-B: round 2 t=1795020328.919724 done (capi-gc-return=0)
+W2-B: round 3 t=1795020328.919776 allocating + ##gc (runtime primitive)
+*** GC: 460us, 134K alloc, 6.5M heap, 1.6M live (24% 69936+1607840)
+W2-B: round 3 t=1795020328.920845 done (capi-gc-return=0)
+W2-A: non-blocking foreign call 1 t=1795020328.920896
+W2C: non-blocking foreign call entered+returned
+W2-A: non-blocking foreign call 2 t=1795020329.226073
+W2C: non-blocking foreign call entered+returned
+W2-A: non-blocking foreign call 3 t=1795020329.526865
+W2C: non-blocking foreign call entered+returned
+W2-A: all non-blocking calls returned
+W2-VERDICT: PASS (control: real collections completed while another thread made foreign calls; the *** GC: report lines above are the runtime's own collection evidence)
+### exit=0

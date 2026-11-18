@@ -1,0 +1,5 @@
+### cmd: ./watchdog.sh 60 ./w4.exe mode5
+=== W4 mode5: M5 exception inside a callback ===
+W4-M5: calling w4_call_raise(3) — callback raises a Scheme error
+*** ERROR IN w4-m5 -- w4-cb-raise: deliberate exception 3
+### exit=70

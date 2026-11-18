@@ -1,0 +1,18 @@
+### cmd: ./watchdog.sh 60 ./w2.exe -:d5 blocked
+*** GC: 30us, .6K alloc, 6.0M heap, .6K live (0% 592+56)
+=== W2 blocking-GC witness: mode=blocked ===
+W2: t=1795020329.854461 start
+W2C: foreign call ENTERED, blocking on handshake (deadline 6s)
+W2C: foreign call RETURNING after blocked interval
+W2-B: round 1 t=1795020335.854959 allocating + ##gc (runtime primitive)
+*** GC: 834us, 93K alloc, 6.5M heap, 1.6M live (24% 69472+1607840)
+W2-B: round 1 t=1795020335.859698 done (capi-gc-return=0)
+W2-B: round 2 t=1795020335.859851 allocating + ##gc (runtime primitive)
+*** GC: 482us, 114K alloc, 6.5M heap, 1.6M live (24% 69472+1607840)
+W2-B: round 2 t=1795020335.86145 done (capi-gc-return=0)
+W2-B: round 3 t=1795020335.861508 allocating + ##gc (runtime primitive)
+*** GC: 467us, 134K alloc, 6.5M heap, 1.6M live (24% 69472+1607840)
+W2-B: round 3 t=1795020335.862604 done (capi-gc-return=0)
+W2: blocked window from t=1795020329.854498 to t=1795020335.862667
+W2-VERDICT: FAIL (blocked: no collection and no other-thread progress while the foreign call was blocked — every W2-B line above appears after 'W2C: foreign call RETURNING'; the VM has a single processor and 4.9.8 has no foreign-release mechanism, so the blocking row cannot be satisfied on this build)
+### exit=0

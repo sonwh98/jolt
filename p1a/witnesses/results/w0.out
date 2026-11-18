@@ -1,0 +1,20 @@
+### cmd: ./watchdog.sh 60 ./w0-config.exe
+=== W0 build-configuration witness ===
+___VERSION=409008
+___SINGLE_VM=defined
+___SINGLE_THREADED_VMS=defined
+___MAX_PROCESSORS=1
+___USE_POSIX_THREAD_SYSTEM=defined
+___SINGLE_HOST=defined (-D by gambuild-C)
+___SINGLE_HOST_LIMIT=30000
+___USE_RC_ALLOCATION_FOR_FOREIGN=defined
+min-heap-bytes=2097152
+max-heap-bytes=0
+live-percent=50
+parallelism-level=1
+##cpu-count=8
+##core-count=8
+##current-vm-processor-count=1
+after ##current-vm-resize(4): processor-count=1 (before: 1)
+W0-VERDICT: PASS (configuration recorded)
+### exit=0

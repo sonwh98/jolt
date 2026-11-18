@@ -1,0 +1,6 @@
+### cmd: ./watchdog.sh 60 ./w3.exe phase3
+W3: calling ___setup from the primordial thread
+W3: ___setup returned; runtime live (___VERSION=409008)
+W3-PHASE3: owner Gambit thread parks INSIDE a cfun call while the worker pthread enters Scheme
+./watchdog.sh: line 21:  1590 Segmentation fault: 11  "$@"
+### exit=139

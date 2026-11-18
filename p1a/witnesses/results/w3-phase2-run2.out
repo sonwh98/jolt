@@ -1,0 +1,5 @@
+### cmd: ./watchdog.sh 60 ./w3.exe phase2 (run 2 of 2)
+W3: calling ___setup from the primordial thread
+W3: ___setup returned; runtime live (___VERSION=409008)
+W3-PHASE2: spawning raw pthread WHILE primordial runs scheme_w3_spin
+### exit=70

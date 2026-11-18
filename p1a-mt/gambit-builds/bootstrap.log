@@ -1,0 +1,433 @@
+*** using a dummy gsc-boot
+rm -f gsc-boot gsc-boot
+cp gsc-boot.bat.windows gsc-boot
+cp gsc-boot.unix gsc-boot
+chmod +x gsc-boot
+/Applications/Xcode.app/Contents/Developer/usr/bin/make stamp
+Gambit is not being built from a Git clone. Creating empty stamp.h.
+*** making phase1
+making phase1 in lib
+making phase1 in include
+making phase1 in bin
+making phase1 in gsi
+making phase1 in gsc
+make[3]: Nothing to be done for `phase1'.
+make[3]: Nothing to be done for `phase1'.
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/lib/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/lib/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/lib/../include -f -warnings -link -flat -o _gambit.c -preload _kernel.c _system.c _num.c _std.c _eval.c _module.c _io.c _nonstd.c _thread.c _repl.c
+*** making phase2
+making phase2 in gsi
+making phase2 in lib
+making phase2 in bin
+making phase2 in gsc
+making phase2 in include
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../include -f  -prelude "(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)(define-cond-expand-feature|enable-sharp-dot|)(define-cond-expand-feature|enable-bignum|)(define-cond-expand-feature|enable-ratnum|)(define-cond-expand-feature|enable-cpxnum|)(define-cond-expand-feature|enable-s8vector|)(define-cond-expand-feature|enable-u16vector|)(define-cond-expand-feature|enable-s16vector|)(define-cond-expand-feature|enable-u32vector|)(define-cond-expand-feature|enable-s32vector|)(define-cond-expand-feature|enable-u64vector|)(define-cond-expand-feature|enable-s64vector|)(define-cond-expand-feature|enable-f32vector|)(define-cond-expand-feature|enable-smp|)(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/_gambit -o _gambitgsi.c -preload _gsilib.c
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../include -f  -prelude "(##namespace(\"c#\"))(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/_gambit -o _gambitgsc.c -preload _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../include -f  -prelude "(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)(define-cond-expand-feature|enable-sharp-dot|)(define-cond-expand-feature|enable-bignum|)(define-cond-expand-feature|enable-ratnum|)(define-cond-expand-feature|enable-cpxnum|)(define-cond-expand-feature|enable-s8vector|)(define-cond-expand-feature|enable-u16vector|)(define-cond-expand-feature|enable-s16vector|)(define-cond-expand-feature|enable-u32vector|)(define-cond-expand-feature|enable-s32vector|)(define-cond-expand-feature|enable-u64vector|)(define-cond-expand-feature|enable-s64vector|)(define-cond-expand-feature|enable-f32vector|)(define-cond-expand-feature|enable-smp|)(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/header.scm\")" -warnings -link -l _gambitgsi -o _gsi_.c -preload _gsi.c
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../include -f  -prelude "(##namespace(\"c#\"))(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/header.scm\")" -warnings -link -l _gambitgsc -o _gsc_.c -preload _gsc.c
+*** making phase3
+making phase3 in bin
+making phase3 in gsc
+making phase3 in gsi
+making phase3 in include
+making phase3 in lib
+make[3]: Nothing to be done for `phase3'.
+make[3]: Nothing to be done for `phase3'.
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _io.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _repl.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_repl.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _eval.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_eval.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _nonstd.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _kernel.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_kernel.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _thread.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_thread.c -D___LIBRARY
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../include -f  -prelude "(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)(define-cond-expand-feature|enable-sharp-dot|)(define-cond-expand-feature|enable-bignum|)(define-cond-expand-feature|enable-ratnum|)(define-cond-expand-feature|enable-cpxnum|)(define-cond-expand-feature|enable-s8vector|)(define-cond-expand-feature|enable-u16vector|)(define-cond-expand-feature|enable-s16vector|)(define-cond-expand-feature|enable-u32vector|)(define-cond-expand-feature|enable-s32vector|)(define-cond-expand-feature|enable-u64vector|)(define-cond-expand-feature|enable-s64vector|)(define-cond-expand-feature|enable-f32vector|)(define-cond-expand-feature|enable-smp|)(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/_gambit -o _gambitgsi.c -preload _gsilib.c
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../include -f  -prelude "(##namespace(\"c#\"))(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/_gambit -o _gambitgsc.c -preload _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gambitgsc.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsc -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsc/_gambitgsc.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gambitgsi.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsi -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsi/_gambitgsi.c -D___LIBRARY
+rm -f "libgambitgsi.a" "libgambitgsi.a" "libgambitgsi.a"
+ar rc libgambitgsi.a  _gsilib.o _gambitgsi.o && ranlib libgambitgsi.a
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:1:2: error: unterminated conditional directive
+    1 | #ifdef ___LINKER_INFO
+      |  ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:4: error: unterminated function-like macro invocation
+ 35113 |    ___GOTO(___L373__23__
+       |    ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:8082:9: note: macro '___GOTO' defined here
+ 8082 | #define ___GOTO(lbl)goto lbl;
+      |         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected expression
+ 35113 |    ___GOTO(___L373__23__
+       |                         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected '}'
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14366:1: note: to match this '{'
+ 14366 | ___BEGIN_M_COD
+       | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6793:16: note: expanded from macro '___BEGIN_COD'
+ 6793 | ___WORD ___pc; { ___WORD ___start, ___temp; \
+      |                ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected '}'
+ 35113 |    ___GOTO(___L373__23__
+       |                         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14366:1: note: to match this '{'
+ 14366 | ___BEGIN_M_COD
+       | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6792:28: note: expanded from macro '___BEGIN_COD'
+ 6792 | ___processor_state ___ps;) { \
+      |                            ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14757:15: error: use of undeclared label '___L210__23__23_parse_2d_psettings_21_'
+ 14757 | ___DEF_M_HLBL(___L210__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14758:15: error: use of undeclared label '___L211__23__23_parse_2d_psettings_21_'
+ 14758 | ___DEF_M_HLBL(___L211__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14759:15: error: use of undeclared label '___L212__23__23_parse_2d_psettings_21_'
+ 14759 | ___DEF_M_HLBL(___L212__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14760:15: error: use of undeclared label '___L213__23__23_parse_2d_psettings_21_'
+ 14760 | ___DEF_M_HLBL(___L213__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14761:15: error: use of undeclared label '___L214__23__23_parse_2d_psettings_21_'
+ 14761 | ___DEF_M_HLBL(___L214__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14762:15: error: use of undeclared label '___L215__23__23_parse_2d_psettings_21_'
+ 14762 | ___DEF_M_HLBL(___L215__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14763:15: error: use of undeclared label '___L216__23__23_parse_2d_psettings_21_'
+ 14763 | ___DEF_M_HLBL(___L216__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14764:15: error: use of undeclared label '___L217__23__23_parse_2d_psettings_21_'
+ 14764 | ___DEF_M_HLBL(___L217__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14765:15: error: use of undeclared label '___L218__23__23_parse_2d_psettings_21_'
+ 14765 | ___DEF_M_HLBL(___L218__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14766:15: error: use of undeclared label '___L219__23__23_parse_2d_psettings_21_'
+ 14766 | ___DEF_M_HLBL(___L219__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14767:15: error: use of undeclared label '___L220__23__23_parse_2d_psettings_21_'
+ 14767 | ___DEF_M_HLBL(___L220__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14768:15: error: use of undeclared label '___L221__23__23_parse_2d_psettings_21_'
+ 14768 | ___DEF_M_HLBL(___L221__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14769:15: error: use of undeclared label '___L222__23__23_parse_2d_psettings_21_'
+ 14769 | ___DEF_M_HLBL(___L222__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14770:15: error: use of undeclared label '___L223__23__23_parse_2d_psettings_21_'
+ 14770 | ___DEF_M_HLBL(___L223__23__23_parse_2d_psettings_21_)
+       |               ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+make[3]: *** [_io.o] Error 1
+make[3]: *** Waiting for unfinished jobs....
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:1:2: error: unterminated conditional directive
+    1 | #ifdef ___LINKER_INFO
+      |  ^
+if test "" != ""; then \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	fi
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:4: error: use of undeclared identifier '___ADD_CLO_'
+ 31308 |    ___ADD_CLO_
+       |    ^~~~~~~~~~~
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31306:4: note: to match this '{'
+ 31306 |    ___BEGIN_SETUP_CLO(2,___STK(0),18)
+       |    ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:8321:39: note: expanded from macro '___BEGIN_SETUP_CLO'
+ 8321 | #define ___BEGIN_SETUP_CLO(n,clo,lbl) \
+      |                                       ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:5885:1: note: to match this '{'
+ 5885 | ___BEGIN_M_COD
+      | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6793:16: note: expanded from macro '___BEGIN_COD'
+ 6793 | ___WORD ___pc; { ___WORD ___start, ___temp; \
+      |                ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:5885:1: note: to match this '{'
+ 5885 | ___BEGIN_M_COD
+      | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6792:28: note: expanded from macro '___BEGIN_COD'
+ 6792 | ___processor_state ___ps;) { \
+      |                            ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8102:15: error: use of undeclared label '___L12__23__23_infix_2d_lvalue_2d_access'
+ 8102 | ___DEF_M_HLBL(___L12__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8103:15: error: use of undeclared label '___L13__23__23_infix_2d_lvalue_2d_access'
+ 8103 | ___DEF_M_HLBL(___L13__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8104:15: error: use of undeclared label '___L14__23__23_infix_2d_lvalue_2d_access'
+ 8104 | ___DEF_M_HLBL(___L14__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8105:15: error: use of undeclared label '___L15__23__23_infix_2d_lvalue_2d_access'
+ 8105 | ___DEF_M_HLBL(___L15__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8106:15: error: use of undeclared label '___L16__23__23_infix_2d_lvalue_2d_access'
+ 8106 | ___DEF_M_HLBL(___L16__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8107:15: error: use of undeclared label '___L17__23__23_infix_2d_lvalue_2d_access'
+ 8107 | ___DEF_M_HLBL(___L17__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8108:15: error: use of undeclared label '___L18__23__23_infix_2d_lvalue_2d_access'
+ 8108 | ___DEF_M_HLBL(___L18__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8109:15: error: use of undeclared label '___L19__23__23_infix_2d_lvalue_2d_access'
+ 8109 | ___DEF_M_HLBL(___L19__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8110:15: error: use of undeclared label '___L20__23__23_infix_2d_lvalue_2d_access'
+ 8110 | ___DEF_M_HLBL(___L20__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8111:15: error: use of undeclared label '___L21__23__23_infix_2d_lvalue_2d_access'
+ 8111 | ___DEF_M_HLBL(___L21__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8112:15: error: use of undeclared label '___L22__23__23_infix_2d_lvalue_2d_access'
+ 8112 | ___DEF_M_HLBL(___L22__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8113:15: error: use of undeclared label '___L23__23__23_infix_2d_lvalue_2d_access'
+ 8113 | ___DEF_M_HLBL(___L23__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8114:15: error: use of undeclared label '___L24__23__23_infix_2d_lvalue_2d_access'
+ 8114 | ___DEF_M_HLBL(___L24__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8115:15: error: use of undeclared label '___L25__23__23_infix_2d_lvalue_2d_access'
+ 8115 | ___DEF_M_HLBL(___L25__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+make[3]: *** [_nonstd.o] Error 1
+rm -f "libgambitgsc.a" "libgambitgsc.a" "libgambitgsc.a"
+ar rc libgambitgsc.a  _host.o _utils.o _source.o _parms.o _env.o _ptree1.o _ptree2.o _gvm.o _back.o _front.o _prims.o _assert.o _asm.o _x86.o _arm.o _riscv.o _codegen.o _t-univ-1.o _t-univ-2.o _t-univ-3.o _t-univ-4.o _t-cpu-abstract-machine.o _t-cpu-primitives.o _t-cpu-object-desc.o _t-cpu-utils.o _t-cpu-backend-x86.o _t-cpu-backend-arm.o _t-cpu-backend-riscv.o _t-cpu.o _t-c-1.o _t-c-2.o _t-c-3.o _gsclib.o _gambitgsc.o && ranlib libgambitgsc.a
+if test "" != ""; then \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	fi
+make[2]: *** [lib-phase3] Error 1
+*** making phase4
+making phase4 in lib
+making phase4 in gsi
+making phase4 in bin
+making phase4 in gsc
+making phase4 in include
+make[3]: Nothing to be done for `phase4'.
+make[3]: Nothing to be done for `phase4'.
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../include -f  -prelude "(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)(define-cond-expand-feature|enable-sharp-dot|)(define-cond-expand-feature|enable-bignum|)(define-cond-expand-feature|enable-ratnum|)(define-cond-expand-feature|enable-cpxnum|)(define-cond-expand-feature|enable-s8vector|)(define-cond-expand-feature|enable-u16vector|)(define-cond-expand-feature|enable-s16vector|)(define-cond-expand-feature|enable-u32vector|)(define-cond-expand-feature|enable-s32vector|)(define-cond-expand-feature|enable-u64vector|)(define-cond-expand-feature|enable-s64vector|)(define-cond-expand-feature|enable-f32vector|)(define-cond-expand-feature|enable-smp|)(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/_gambit -o _gambitgsi.c -preload _gsilib.c
+make[3]: Nothing to be done for `phase4'.
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../include -f  -prelude "(##namespace(\"c#\"))(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/header.scm\")" -warnings -link -l /Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/_gambit -o _gambitgsc.c -preload _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gambitgsi.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsi -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsi/_gambitgsi.c -D___LIBRARY
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsi/../include -f  -prelude "(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)(define-cond-expand-feature|enable-sharp-dot|)(define-cond-expand-feature|enable-bignum|)(define-cond-expand-feature|enable-ratnum|)(define-cond-expand-feature|enable-cpxnum|)(define-cond-expand-feature|enable-s8vector|)(define-cond-expand-feature|enable-u16vector|)(define-cond-expand-feature|enable-s16vector|)(define-cond-expand-feature|enable-u32vector|)(define-cond-expand-feature|enable-s32vector|)(define-cond-expand-feature|enable-u64vector|)(define-cond-expand-feature|enable-s64vector|)(define-cond-expand-feature|enable-f32vector|)(define-cond-expand-feature|enable-smp|)(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsi/../lib/header.scm\")" -warnings -link -l _gambitgsi -o _gsi_.c -preload _gsi.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gambitgsc.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsc -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsc/_gambitgsc.c -D___LIBRARY
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/gsc/../include -f  -prelude "(##namespace(\"c#\"))(##include\"/Users/sto/workspace/gambit-v4.9.8-src/gsc/../lib/header.scm\")" -warnings -link -l _gambitgsc -o _gsc_.c -preload _gsc.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gsi_.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsi -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsi/_gsi_.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _gsc_.o -I/Users/sto/workspace/gambit-v4.9.8-src/gsc -DHAVE_CONFIG_H /Users/sto/workspace/gambit-v4.9.8-src/gsc/_gsc_.c
+rm -f "libgambitgsi.a" "libgambitgsi.a" "libgambitgsi.a"
+ar rc libgambitgsi.a  _gsilib.o _gambitgsi.o && ranlib libgambitgsi.a
+if test "" != ""; then \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	fi
+gcc -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include"  -o gsi    _gsi.o _gsi_.o "/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/lib/libgambit.a"  libgambitgsi.a
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _gsilib.c _gsi.c _gambitgsi.c _gsi_.c; fi
+rm -f "libgambitgsc.a" "libgambitgsc.a" "libgambitgsc.a"
+ar rc libgambitgsc.a  _host.o _utils.o _source.o _parms.o _env.o _ptree1.o _ptree2.o _gvm.o _back.o _front.o _prims.o _assert.o _asm.o _x86.o _arm.o _riscv.o _codegen.o _t-univ-1.o _t-univ-2.o _t-univ-3.o _t-univ-4.o _t-cpu-abstract-machine.o _t-cpu-primitives.o _t-cpu-object-desc.o _t-cpu-utils.o _t-cpu-backend-x86.o _t-cpu-backend-arm.o _t-cpu-backend-riscv.o _t-cpu.o _t-c-1.o _t-c-2.o _t-c-3.o _gsclib.o _gambitgsc.o && ranlib libgambitgsc.a
+if test "" != ""; then \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	fi
+gcc -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include"  -o gsc    _gsc.o _gsc_.o "/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/lib/libgambit.a"  libgambitgsc.a
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c _gsc.c _gambitgsc.c _gsc_.c; fi
+making core in include
+making core in bin
+making core in lib
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _io.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include" -c -o _nonstd.o -I/Users/sto/workspace/gambit-v4.9.8-src/lib -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"/Users/sto/workspace/gambit-v4.9.8-src/configure '--enable-single-host' '--enable-multiple-threaded-vms' '--enable-smp' '--enable-max-processors=8'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL /Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c -D___LIBRARY
+../gsc-boot -:~~bin=/Users/sto/workspace/gambit-v4.9.8-src/lib/../bin,~~lib=/Users/sto/workspace/gambit-v4.9.8-src/lib/../lib,~~include=/Users/sto/workspace/gambit-v4.9.8-src/lib/../include -f -warnings -link -flat -o _gambit.c -preload _kernel.c _system.c _num.c _std.c _eval.c _module.c _io.c _nonstd.c _thread.c _repl.c
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:1:2: error: unterminated conditional directive
+    1 | #ifdef ___LINKER_INFO
+      |  ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:4: error: unterminated function-like macro invocation
+ 35113 |    ___GOTO(___L373__23__
+       |    ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:8082:9: note: macro '___GOTO' defined here
+ 8082 | #define ___GOTO(lbl)goto lbl;
+      |         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected expression
+ 35113 |    ___GOTO(___L373__23__
+       |                         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected '}'
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14366:1: note: to match this '{'
+ 14366 | ___BEGIN_M_COD
+       | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6793:16: note: expanded from macro '___BEGIN_COD'
+ 6793 | ___WORD ___pc; { ___WORD ___start, ___temp; \
+      |                ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:35113:25: error: expected '}'
+ 35113 |    ___GOTO(___L373__23__
+       |                         ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14366:1: note: to match this '{'
+ 14366 | ___BEGIN_M_COD
+       | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6792:28: note: expanded from macro '___BEGIN_COD'
+ 6792 | ___processor_state ___ps;) { \
+      |                            ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14757:15: error: use of undeclared label '___L210__23__23_parse_2d_psettings_21_'
+ 14757 | ___DEF_M_HLBL(___L210__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14758:15: error: use of undeclared label '___L211__23__23_parse_2d_psettings_21_'
+ 14758 | ___DEF_M_HLBL(___L211__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14759:15: error: use of undeclared label '___L212__23__23_parse_2d_psettings_21_'
+ 14759 | ___DEF_M_HLBL(___L212__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14760:15: error: use of undeclared label '___L213__23__23_parse_2d_psettings_21_'
+ 14760 | ___DEF_M_HLBL(___L213__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14761:15: error: use of undeclared label '___L214__23__23_parse_2d_psettings_21_'
+ 14761 | ___DEF_M_HLBL(___L214__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14762:15: error: use of undeclared label '___L215__23__23_parse_2d_psettings_21_'
+ 14762 | ___DEF_M_HLBL(___L215__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14763:15: error: use of undeclared label '___L216__23__23_parse_2d_psettings_21_'
+ 14763 | ___DEF_M_HLBL(___L216__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14764:15: error: use of undeclared label '___L217__23__23_parse_2d_psettings_21_'
+ 14764 | ___DEF_M_HLBL(___L217__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14765:15: error: use of undeclared label '___L218__23__23_parse_2d_psettings_21_'
+ 14765 | ___DEF_M_HLBL(___L218__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14766:15: error: use of undeclared label '___L219__23__23_parse_2d_psettings_21_'
+ 14766 | ___DEF_M_HLBL(___L219__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14767:15: error: use of undeclared label '___L220__23__23_parse_2d_psettings_21_'
+ 14767 | ___DEF_M_HLBL(___L220__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14768:15: error: use of undeclared label '___L221__23__23_parse_2d_psettings_21_'
+ 14768 | ___DEF_M_HLBL(___L221__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14769:15: error: use of undeclared label '___L222__23__23_parse_2d_psettings_21_'
+ 14769 | ___DEF_M_HLBL(___L222__23__23_parse_2d_psettings_21_)
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_io.c:14770:15: error: use of undeclared label '___L223__23__23_parse_2d_psettings_21_'
+ 14770 | ___DEF_M_HLBL(___L223__23__23_parse_2d_psettings_21_)
+       |               ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+make[1]: *** [_io.o] Error 1
+make[1]: *** Waiting for unfinished jobs....
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:1:2: error: unterminated conditional directive
+    1 | #ifdef ___LINKER_INFO
+      |  ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:4: error: use of undeclared identifier '___ADD_CLO_'
+ 31308 |    ___ADD_CLO_
+       |    ^~~~~~~~~~~
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31306:4: note: to match this '{'
+ 31306 |    ___BEGIN_SETUP_CLO(2,___STK(0),18)
+       |    ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:8321:39: note: expanded from macro '___BEGIN_SETUP_CLO'
+ 8321 | #define ___BEGIN_SETUP_CLO(n,clo,lbl) \
+      |                                       ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:5885:1: note: to match this '{'
+ 5885 | ___BEGIN_M_COD
+      | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6793:16: note: expanded from macro '___BEGIN_COD'
+ 6793 | ___WORD ___pc; { ___WORD ___start, ___temp; \
+      |                ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:31308:15: error: expected '}'
+ 31308 |    ___ADD_CLO_
+       |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:5885:1: note: to match this '{'
+ 5885 | ___BEGIN_M_COD
+      | ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6764:30: note: expanded from macro '___BEGIN_M_COD'
+ 6764 | #define ___BEGIN_M_COD ___SM(___BEGIN_COD,___NOTHING)
+      |                              ^
+/Users/sto/workspace/jolt-ffi-mt/p1a-mt/gambit-builds/mt/include/gambit.h:6792:28: note: expanded from macro '___BEGIN_COD'
+ 6792 | ___processor_state ___ps;) { \
+      |                            ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8102:15: error: use of undeclared label '___L12__23__23_infix_2d_lvalue_2d_access'
+ 8102 | ___DEF_M_HLBL(___L12__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8103:15: error: use of undeclared label '___L13__23__23_infix_2d_lvalue_2d_access'
+ 8103 | ___DEF_M_HLBL(___L13__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8104:15: error: use of undeclared label '___L14__23__23_infix_2d_lvalue_2d_access'
+ 8104 | ___DEF_M_HLBL(___L14__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8105:15: error: use of undeclared label '___L15__23__23_infix_2d_lvalue_2d_access'
+ 8105 | ___DEF_M_HLBL(___L15__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8106:15: error: use of undeclared label '___L16__23__23_infix_2d_lvalue_2d_access'
+ 8106 | ___DEF_M_HLBL(___L16__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8107:15: error: use of undeclared label '___L17__23__23_infix_2d_lvalue_2d_access'
+ 8107 | ___DEF_M_HLBL(___L17__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8108:15: error: use of undeclared label '___L18__23__23_infix_2d_lvalue_2d_access'
+ 8108 | ___DEF_M_HLBL(___L18__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8109:15: error: use of undeclared label '___L19__23__23_infix_2d_lvalue_2d_access'
+ 8109 | ___DEF_M_HLBL(___L19__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8110:15: error: use of undeclared label '___L20__23__23_infix_2d_lvalue_2d_access'
+ 8110 | ___DEF_M_HLBL(___L20__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8111:15: error: use of undeclared label '___L21__23__23_infix_2d_lvalue_2d_access'
+ 8111 | ___DEF_M_HLBL(___L21__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8112:15: error: use of undeclared label '___L22__23__23_infix_2d_lvalue_2d_access'
+ 8112 | ___DEF_M_HLBL(___L22__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8113:15: error: use of undeclared label '___L23__23__23_infix_2d_lvalue_2d_access'
+ 8113 | ___DEF_M_HLBL(___L23__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8114:15: error: use of undeclared label '___L24__23__23_infix_2d_lvalue_2d_access'
+ 8114 | ___DEF_M_HLBL(___L24__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+/Users/sto/workspace/gambit-v4.9.8-src/lib/_nonstd.c:8115:15: error: use of undeclared label '___L25__23__23_infix_2d_lvalue_2d_access'
+ 8115 | ___DEF_M_HLBL(___L25__23__23_infix_2d_lvalue_2d_access)
+      |               ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+make[1]: *** [_nonstd.o] Error 1
+make: *** [core-recursive] Error 1
+real 53.08
+user 95.92
+sys 2.84

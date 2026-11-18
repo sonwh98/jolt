@@ -1,0 +1,15 @@
+### cmd: ./watchdog.sh 120 ./w3mt.exe bridge-concurrent
+W3MT: calling ___setup from the primordial thread (parallelism_level=2, debug_settings=85)
+W3MT: ___setup returned; runtime live (___VERSION=409008, processor_count=2, max=8)
+W3MT-BRIDGE-CONCURRENT: bridge worker attaches WHILE owner allocates in Scheme (membership hole under concurrent GC pressure)
+W3MT-BRIDGE: round 1: TLS pstate before attach = 0x0 (raw pthread is unregistered: expected 0)
+W3MT-BRIDGE: round 1: vms->processor_count = 2, attaching at aligned_pstate slot 2 (___MAX_PROCESSORS=8)
+W3MT-BRIDGE: round 1: ___setup_pstate(slot 2) = 0 (0 = no error)
+W3MT-BRIDGE: round 1: TLS bound to attached pstate = 0x100870e58 (membership NOT established: vms->processor_count still 2)
+W3MT-BRIDGE: round 1: first entry scheme_w3mt_pid() = 2
+W3MT-BRIDGE: round 1: scheme_w3mt_add(20,22) = 42 (expected 2) WRONG
+W3MT-BRIDGE: round 1: scheme_w3mt_add_alloc(50,22) = 1072 (expected 1072) OK
+W3MT-BRIDGE: round 1: TLS unbound (TLS pstate now = 0x0)
+W3MT-BRIDGE: round 1: ___cleanup_pstate(slot 2) returned
+./watchdog.sh: line 21: 38618 Segmentation fault: 11  "$@"
+### exit=139

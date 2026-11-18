@@ -1,0 +1,12 @@
+### cmd: ./watchdog.sh 60 ./w3mt.exe owner
+W3MT: calling ___setup from the primordial thread (parallelism_level=2, debug_settings=85)
+W3MT: ___setup returned; runtime live (___VERSION=409008, processor_count=2, max=8)
+W3MT-OWNER: control — C->Scheme entry from the OS thread that ran ___setup
+W3MT-OWNER: scheme_w3mt_pid() = 0 (owner processor id)
+W3MT-OWNER: scheme_w3mt_add(20,22) = 42 (expected 2) WRONG
+W3MT-OWNER: scheme_w3mt_add_alloc(50,22) = 1072 (expected 1072) OK
+W3MT-OWNER: scheme_w3mt_gc_rounds(2) = 2 (expected 2) OK
+W3MT-OWNER-VERDICT: FAIL (owner-thread control; two-formal (int int) entries verified at runtime)
+W3MT: calling ___cleanup
+W3MT: ___cleanup returned
+### exit=0

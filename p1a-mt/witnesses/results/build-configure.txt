@@ -1,0 +1,30 @@
+### configure invocation (cwd=/Users/sto/workspace/jolt-ffi-mt/p1a-mt/witnesses/../gambit-builds/mt, out-of-tree from /Users/sto/workspace/gambit-v4.9.8-src):
+### /Users/sto/workspace/gambit-v4.9.8-src/configure --enable-single-host --enable-multiple-threaded-vms --enable-smp --enable-max-processors=8
+### compiler:
+Apple clang version 21.0.0 (clang-2100.4.1.1)
+Target: arm64-apple-darwin25.6.0
+### make: make -j8 (Apple clang 21.0.0, macOS 26.6.2 / Darwin 25.6.0, arm64, 8 CPUs)
+### out-of-tree build fixes applied inside the build tree ONLY:
+###   1. copied gsc-boot.unix + gsc-boot.bat.windows from the source root into the build root (dummy-gsc-boot rule uses bare relative paths)
+###   2. rewrote GAMBITDIR_INCLUDE and the \/include dependency paths in generated makefiles to the build tree's include dir (configure-generated gambit.h lives there, not in the source tree)
+### generated gambit.h threading macros (build tree):
+1469:#ifndef ___SINGLE_THREADED_VMS
+1470:#ifndef ___MULTIPLE_THREADED_VMS
+1471:#define ___MULTIPLE_THREADED_VMS
+1475:#ifdef ___SINGLE_THREADED_VMS
+1476:#ifdef ___MULTIPLE_THREADED_VMS
+1477:#error "Define either ___SINGLE_THREADED_VMS or ___MULTIPLE_THREADED_VMS"
+1486:#ifndef ___MAX_PROCESSORS
+1487:#ifdef ___SINGLE_THREADED_VMS
+### installed single-threaded provisioned gambit.h (mise) for comparison:
+1469:#ifndef ___SINGLE_THREADED_VMS
+1470:#ifndef ___MULTIPLE_THREADED_VMS
+1471:#define ___SINGLE_THREADED_VMS
+1475:#ifdef ___SINGLE_THREADED_VMS
+1476:#ifdef ___MULTIPLE_THREADED_VMS
+1477:#error "Define either ___SINGLE_THREADED_VMS or ___MULTIPLE_THREADED_VMS"
+### source pin:
+2228e4d163582733a3a67a5efcb22f8ebe93c02b
+v4.9.8
+### this worktree pin:
+a6852ef8b95f7550ac53f58bf9bd3d301222ce6f

@@ -1,0 +1,29 @@
+### cmd: ./watchdog.sh 90 ./w2mt.exe -:p2,d5,min-heap=64M,max-heap=512M blocked
+=== W2MT blocking-GC witness (MT build): mode=blocked ===
+W2MT: t=1795023619.600584 start
+W2MT: vm-processor-count=2 max-processors=8 cpu-count=8 (SMP scheduler: disabled)
+W2MT-B: running t=1795023619.600714 pid=0
+W2MT-A: synchronized with B, entering blocking foreign call t=1795023619.600758 pid=0
+W2MTC: t=5858219.990916 foreign call ENTERED, blocking on handshake (deadline 6s)
+W2MTC: t=5858225.991225 foreign call RETURNING, reason=1 (C-side-deadline (B did NOT complete its rounds in time))
+W2MT-A: blocking call returned reason=1 t=1795023625.60125
+W2MT-B: observed A inside C t=1795023625.601522 pid=0
+W2MT-B: round 1 t=1795023625.60162 pid=0 updating live roots + allocating
+W2MT-B: round 1 t=1795023625.60212 calling (##gc) — REAL collection requested
+*** GC: 339us, 132K alloc, 77M heap, 87K live (0% 72672+16128)
+W2MT-B: round 1 t=1795023625.603556 done (capi-gc-return=0) pid=0
+W2MT-B: round 2 t=1795023625.603751 pid=0 updating live roots + allocating
+W2MT-B: round 2 t=1795023625.604405 calling (##gc) — REAL collection requested
+*** GC: 291us, 162K alloc, 77M heap, 95K live (0% 72736+24176)
+W2MT-B: round 2 t=1795023625.605396 done (capi-gc-return=0) pid=0
+W2MT-B: round 3 t=1795023625.605491 pid=0 updating live roots + allocating
+W2MT-B: round 3 t=1795023625.605713 calling (##gc) — REAL collection requested
+*** GC: 108us, 191K alloc, 77M heap, 102K live (0% 72736+32224)
+W2MT-B: round 3 t=1795023625.606118 done (capi-gc-return=0) pid=0
+W2MT-B: all rounds done, releasing C t=1795023625.606189
+W2MTC: t=5858225.996328 handshake released by B
+W2MT-B: handshake released t=1795023625.606224
+W2MT-A: pid after return=0
+W2MT: blocked window from t=1795023619.60071 to t=1795023625.606274
+W2MT-VERDICT: FAIL (collection did NOT complete while C was blocked: the C-side deadline fired after 6s and the RETURNING line precedes B's round-done lines — the GC barrier (setup.c:1132-1196) waits for EVERY processor of the VM, including the one parked inside the foreign call; B's allocation progress alone is not a pass; B's pids=(0 0) A's pid=0)
+### exit=0

@@ -1,0 +1,22 @@
+compiled _kernel.o
+compiled _system.o
+compiled _num.o
+compiled _std.o
+compiled _eval.o
+compiled _module.o
+compiled _io.o
+compiled _nonstd.o
+compiled _thread.o
+compiled _repl.o
+=== verify SMP symbols in local _thread.o ===
+0
+=== re-archive libgambit.a (make) ===
+	  ln -s "libgambit.a" "libgambit.a"; \
+	fi
+=== relink gsi ===
+make: *** [gsi] Error 1
+=== relink gsc ===
+make: *** [gsc] Error 1
+=== verify archive ===
+2
+done

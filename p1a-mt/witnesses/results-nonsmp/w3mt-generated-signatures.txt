@@ -1,0 +1,15 @@
+### generated C signature check (review F1 correction: two formals for (int int)):
+w3mt-server.c:188:extern int scheme_w3mt_add ___P((int ___arg1,int ___arg2),(___arg1,___arg2)
+w3mt-server.c:192:#define ___NARGS 2
+w3mt-server.c:216:#undef ___NARGS
+w3mt-server.c:219:extern int scheme_w3mt_add_alloc ___P((int ___arg1,int ___arg2),(___arg1,___arg2)
+w3mt-server.c:223:#define ___NARGS 2
+w3mt-server.c:247:#undef ___NARGS
+w3mt-server.c:253:#define ___NARGS 1
+w3mt-server.c:272:#undef ___NARGS
+w3mt-server.c:277:#define ___NARGS 0
+w3mt-server.c:291:#undef ___NARGS
+w3mt-server.c:298:#define ___NARGS 1
+w3mt-server.c:317:#undef ___NARGS
+w3mt-server.c:321:#define ___NARGS 0
+w3mt-server.c:336:#undef ___NARGS

@@ -1,0 +1,31 @@
+### cmd: ./watchdog.sh 90 ./w2mt.exe -:p2,d5,min-heap=64M,max-heap=512M blocked
+=== W2MT blocking-GC witness (MT build): mode=blocked ===
+W2MT: t=1795027884.483575 start
+W2MT: vm-processor-count=2 max-processors=8 cpu-count=8 (scheduler behavior is evidenced by the per-line pid= logs below)
+W2MT-B: running t=1795027884.4838 pid=0
+W2MT-B: spinning t=1795027884.483857 pid=0
+W2MT-B: spinning t=1795027884.4933 pid=0
+W2MT-A: synchronized with B, entering blocking foreign call t=1795027884.495018 pid=1
+W2MTC: t=5862484.823763 foreign call ENTERED, blocking on handshake (deadline 6s)
+W2MT-B: observed A inside C t=1795027884.495108 pid=0
+W2MT-B: round 1 t=1795027884.495159 pid=0 updating live roots + allocating
+W2MT-B: round 1 t=1795027884.495346 calling (##gc) — REAL collection requested
+W2MTC: t=5862490.828910 foreign call RETURNING, reason=1 (C-side-deadline (B did NOT complete its rounds in time))
+*** GC: W2MT-A: blocking call returned reason=183us, 1134K alloc,  t=77M heap, 1795027890.501085
+85K live (W2MT-A: pid after return=0% 0
+70784+16128)
+W2MT-B: round 1 t=1795027890.501379 done (capi-gc-return=0) pid=0
+W2MT-B: round 2 t=1795027890.50144 pid=0 updating live roots + allocating
+W2MT-B: round 2 t=1795027890.501697 calling (##gc) — REAL collection requested
+*** GC: 107us, 196K alloc, 77M heap, 91K live (0% 69248+24176)
+W2MT-B: round 2 t=1795027890.502183 done (capi-gc-return=0) pid=0
+W2MT-B: round 3 t=1795027890.502266 pid=0 updating live roots + allocating
+W2MT-B: round 3 t=1795027890.502472 calling (##gc) — REAL collection requested
+*** GC: 105us, 225K alloc, 77M heap, 99K live (0% 69248+32224)
+W2MT-B: round 3 t=1795027890.502812 done (capi-gc-return=0) pid=0
+W2MT-B: all rounds done, releasing C t=1795027890.502874
+W2MTC: t=5862490.831555 handshake released by B
+W2MT-B: handshake released t=1795027890.50291
+W2MT: blocked window from t=1795027884.483789 to t=1795027890.502935
+W2MT-VERDICT: FAIL (collection did NOT complete while C was blocked: the C-side deadline fired after 6s and the RETURNING line precedes B's round-done lines — the GC barrier (setup.c:1132-1196) waits for EVERY processor of the VM, including the one parked inside the foreign call; B's allocation progress alone is not a pass; B's pids=(0 0) A's pid=1)
+### exit=0

@@ -1,0 +1,12 @@
+# The out-of-tree Gambit build tree is machine-local and rebuildable from
+# BUILD-CONFIG.md + gambit-builds/build-watchdog.sh + make.log; never commit it.
+gambit-builds/mt/
+# generated C files kept by -keep-temp for the signature check (regenerable)
+witnesses/w3mt-server.c
+witnesses/w3mt-server_.c
+witnesses/w2mt.c
+witnesses/w2mt_.c
+witnesses/w0mt-config.c
+# build artifacts
+witnesses/*.exe
+witnesses/*.o

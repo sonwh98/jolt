@@ -1,0 +1,388 @@
+*** using a dummy gsc-boot
+rm -f gsc-boot gsc-boot
+cp gsc-boot.bat.windows gsc-boot
+cp gsc-boot.unix gsc-boot
+chmod +x gsc-boot
+/Applications/Xcode.app/Contents/Developer/usr/bin/make stamp
+Gambit is not being built from a Git clone. Creating empty stamp.h.
+*** making phase1
+making phase1 in lib
+making phase1 in gsc
+making phase1 in bin
+making phase1 in include
+making phase1 in gsi
+rm -f gambvcs
+make[3]: Nothing to be done for `phase1'.
+make[3]: Nothing to be done for `phase1'.
+rm -f gambuild-C
+make[3]: Nothing to be done for `phase1'.
+rm -f gambuild-js
+if test "" = ""; then \
+	  cp gambvcs.unix gambvcs; \
+	  chmod +x gambvcs; \
+	else \
+	  sed "s/\$/\r/g" gambvcs.bat.windows > gambvcs; \
+	fi
+rm -f gambuild-python
+if test "" = ""; then \
+	  cp gambuild-C.unix gambuild-C; \
+	  chmod +x gambuild-C; \
+	else \
+	  sed "s/\$/\r/g" gambuild-C.bat.windows > gambuild-C; \
+	fi
+rm -f gambuild-ruby
+if test "" = ""; then \
+	  cp gambuild-python.unix gambuild-python; \
+	  chmod +x gambuild-python; \
+	else \
+	  sed "s/\$/\r/g" gambuild-python.bat.windows > gambuild-python; \
+	fi
+if test "" = ""; then \
+	  cp gambuild-js.unix gambuild-js; \
+	  chmod +x gambuild-js; \
+	else \
+	  sed "s/\$/\r/g" gambuild-js.bat.windows > gambuild-js; \
+	fi
+rm -f gambuild-php
+rm -f gambuild-java
+if test "" = ""; then \
+	  cp gambuild-php.unix gambuild-php; \
+	  chmod +x gambuild-php; \
+	else \
+	  sed "s/\$/\r/g" gambuild-php.bat.windows > gambuild-php; \
+	fi
+if test "" = ""; then \
+	  cp gambuild-ruby.unix gambuild-ruby; \
+	  chmod +x gambuild-ruby; \
+	else \
+	  sed "s/\$/\r/g" gambuild-ruby.bat.windows > gambuild-ruby; \
+	fi
+if test "" = ""; then \
+	  cp gambuild-java.unix gambuild-java; \
+	  chmod +x gambuild-java; \
+	else \
+	  sed "s/\$/\r/g" gambuild-java.bat.windows > gambuild-java; \
+	fi
+rm -f gambuild-x86
+rm -f gambuild-x86-64
+if test "" = ""; then \
+	  cp gambuild-x86.unix gambuild-x86; \
+	  chmod +x gambuild-x86; \
+	else \
+	  sed "s/\$/\r/g" gambuild-x86.bat.windows > gambuild-x86; \
+	fi
+rm -f gambuild-arm
+if test "" = ""; then \
+	  cp gambuild-x86-64.unix gambuild-x86-64; \
+	  chmod +x gambuild-x86-64; \
+	else \
+	  sed "s/\$/\r/g" gambuild-x86-64.bat.windows > gambuild-x86-64; \
+	fi
+rm -f gambuild-riscv-32
+if test "" = ""; then \
+	  cp gambuild-arm.unix gambuild-arm; \
+	  chmod +x gambuild-arm; \
+	else \
+	  sed "s/\$/\r/g" gambuild-arm.bat.windows > gambuild-arm; \
+	fi
+rm -f gambuild-riscv-64
+rm -f gambdoc
+if test "" = ""; then \
+	  cp gambuild-riscv-32.unix gambuild-riscv-32; \
+	  chmod +x gambuild-riscv-32; \
+	else \
+	  sed "s/\$/\r/g" gambuild-riscv-32.bat.windows > gambuild-riscv-32; \
+	fi
+rm -f six six.lnk
+if test "" = ""; then \
+	  cp gambdoc.unix gambdoc; \
+	  chmod +x gambdoc; \
+	else \
+	  sed "s/\$/\r/g" gambdoc.bat.windows > gambdoc; \
+	fi
+if test "" = ""; then \
+	  cp gambuild-riscv-64.unix gambuild-riscv-64; \
+	  chmod +x gambuild-riscv-64; \
+	else \
+	  sed "s/\$/\r/g" gambuild-riscv-64.bat.windows > gambuild-riscv-64; \
+	fi
+rm -f gsi-script gsi-script.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi six; \
+	else \
+	  echo "@%~dp0gsi %*" > six; \
+	fi
+rm -f gsc-script gsc-script.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi gsi-script; \
+	else \
+	  echo "@%~dp0gsi %*" > gsi-script; \
+	fi
+rm -f six-script six-script.lnk
+if test "" = ""; then \
+	  ln -s ../gsc/gsc gsc-script; \
+	else \
+	  echo "@%~dp0gsc %*" > gsc-script; \
+	fi
+rm -f scheme-srfi-0 scheme-srfi-0.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi six-script; \
+	else \
+	  echo "@%~dp0gsi %*" > six-script; \
+	fi
+rm -f scheme-r5rs scheme-r5rs.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi scheme-srfi-0; \
+	else \
+	  echo "@%~dp0gsi %*" > scheme-srfi-0; \
+	fi
+rm -f scheme-r4rs scheme-r4rs.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi scheme-r5rs; \
+	else \
+	  echo "@%~dp0gsi %*" > scheme-r5rs; \
+	fi
+rm -f scheme-ieee-1178-1990 scheme-ieee-1178-1990.lnk
+if test "" = ""; then \
+	  ln -s ../gsi/gsi scheme-r4rs; \
+	else \
+	  echo "@%~dp0gsi %*" > scheme-r4rs; \
+	fi
+if test "" = ""; then \
+	  ln -s ../gsi/gsi scheme-ieee-1178-1990; \
+	else \
+	  echo "@%~dp0gsi %*" > scheme-ieee-1178-1990; \
+	fi
+*** making phase2
+making phase2 in bin
+making phase2 in include
+making phase2 in gsi
+making phase2 in gsc
+making phase2 in lib
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+make[3]: Nothing to be done for `phase2'.
+*** making phase3
+making phase3 in bin
+making phase3 in gsc
+making phase3 in include
+making phase3 in gsi
+making phase3 in lib
+make[3]: Nothing to be done for `phase3'.
+make[3]: Nothing to be done for `phase3'.
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _io.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _io.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _num.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _num.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _std.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _std.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _repl.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _repl.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _eval.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _eval.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _nonstd.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _nonstd.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsilib.o -I. -DHAVE_CONFIG_H _gsilib.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-univ-2.o -I. -DHAVE_CONFIG_H _t-univ-2.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gambitgsi.o -I. -DHAVE_CONFIG_H _gambitgsi.c -D___LIBRARY
+rm -f "libgambitgsi.a" "libgambitgsi.a" "libgambitgsi.a"
+ar rc libgambitgsi.a  _gsilib.o _gambitgsi.o && ranlib libgambitgsi.a
+if test "" != ""; then \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	  ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	fi
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _kernel.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _kernel.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-univ-3.o -I. -DHAVE_CONFIG_H _t-univ-3.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-univ-1.o -I. -DHAVE_CONFIG_H _t-univ-1.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _thread.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _thread.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _prims.o -I. -DHAVE_CONFIG_H _prims.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-univ-4.o -I. -DHAVE_CONFIG_H _t-univ-4.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _system.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _system.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-c-2.o -I. -DHAVE_CONFIG_H _t-c-2.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _module.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _module.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _front.o -I. -DHAVE_CONFIG_H _front.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o main.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL main.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_tty.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_tty.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o c_intf.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL c_intf.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o actlog.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL actlog.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_io.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_io.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o setup.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL setup.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o mem.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL mem.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_files.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_files.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_setup.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_setup.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_base.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_base.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _ptree1.o -I. -DHAVE_CONFIG_H _ptree1.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_thread.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_thread.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_time.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_time.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_shell.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_shell.c -D___LIBRARY
+gcc -O3 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o os_dyn.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL os_dyn.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gambit.o -I. -DHAVE_CONFIG_H -D___GAMBITDIR="\"/usr/local/Gambit\"" -D___GAMBITDIR_USERLIB="\"\176/.gambit_userlib\"" -D___GAMBITDIR_INSTLIB="\"\176\176userlib\"" -D___SYS_TYPE_CPU="\"aarch64\"" -D___SYS_TYPE_VENDOR="\"apple\"" -D___SYS_TYPE_OS="\"darwin25.6.0\"" -D___CONFIGURE_COMMAND="\"./configure '--enable-single-host' 'CC=gcc'"\" -D___OBJ_EXTENSION="\".o\"" -D___EXE_EXTENSION="\"\"" -D___BAT_EXTENSION="\"\"" -D___PRIMAL _gambit.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _ptree2.o -I. -DHAVE_CONFIG_H _ptree2.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gvm.o -I. -DHAVE_CONFIG_H _gvm.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-c-1.o -I. -DHAVE_CONFIG_H _t-c-1.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _x86.o -I. -DHAVE_CONFIG_H _x86.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-abstract-machine.o -I. -DHAVE_CONFIG_H _t-cpu-abstract-machine.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-backend-x86.o -I. -DHAVE_CONFIG_H _t-cpu-backend-x86.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-backend-arm.o -I. -DHAVE_CONFIG_H _t-cpu-backend-arm.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-backend-riscv.o -I. -DHAVE_CONFIG_H _t-cpu-backend-riscv.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _arm.o -I. -DHAVE_CONFIG_H _arm.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _source.o -I. -DHAVE_CONFIG_H _source.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-primitives.o -I. -DHAVE_CONFIG_H _t-cpu-primitives.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _riscv.o -I. -DHAVE_CONFIG_H _riscv.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _utils.o -I. -DHAVE_CONFIG_H _utils.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _asm.o -I. -DHAVE_CONFIG_H _asm.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsclib.o -I. -DHAVE_CONFIG_H _gsclib.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _parms.o -I. -DHAVE_CONFIG_H _parms.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-c-3.o -I. -DHAVE_CONFIG_H _t-c-3.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _codegen.o -I. -DHAVE_CONFIG_H _codegen.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _back.o -I. -DHAVE_CONFIG_H _back.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _env.o -I. -DHAVE_CONFIG_H _env.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _host.o -I. -DHAVE_CONFIG_H _host.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-object-desc.o -I. -DHAVE_CONFIG_H _t-cpu-object-desc.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu.o -I. -DHAVE_CONFIG_H _t-cpu.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _t-cpu-utils.o -I. -DHAVE_CONFIG_H _t-cpu-utils.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _assert.o -I. -DHAVE_CONFIG_H _assert.c -D___LIBRARY
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gambitgsc.o -I. -DHAVE_CONFIG_H _gambitgsc.c -D___LIBRARY
+rm -f "libgambitgsc.a" "libgambitgsc.a" "libgambitgsc.a"
+ar rc libgambitgsc.a  _host.o _utils.o _source.o _parms.o _env.o _ptree1.o _ptree2.o _gvm.o _back.o _front.o _prims.o _assert.o _asm.o _x86.o _arm.o _riscv.o _codegen.o _t-univ-1.o _t-univ-2.o _t-univ-3.o _t-univ-4.o _t-cpu-abstract-machine.o _t-cpu-primitives.o _t-cpu-object-desc.o _t-cpu-utils.o _t-cpu-backend-x86.o _t-cpu-backend-arm.o _t-cpu-backend-riscv.o _t-cpu.o _t-c-1.o _t-c-2.o _t-c-3.o _gsclib.o _gambitgsc.o && ranlib libgambitgsc.a
+if test "" != ""; then \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	  ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	fi
+rm -f "libgambit.a" "libgambit.a" "libgambit.a"
+ar rc libgambit.a main.o setup.o mem.o c_intf.o actlog.o os_setup.o os_base.o os_thread.o os_time.o os_shell.o os_files.o os_dyn.o os_tty.o os_io.o _kernel.o _system.o _num.o _std.o _eval.o _module.o _io.o _nonstd.o _thread.o _repl.o _gambit.o && ranlib libgambit.a
+if test "" != ""; then \
+	  ln -s "libgambit.a" "libgambit.a"; \
+	  ln -s "libgambit.a" "libgambit.a"; \
+	fi
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _kernel.c _system.c _num.c _std.c _eval.c _module.c _io.c _nonstd.c _thread.c _repl.c _gambit.c; fi
+*** making phase4
+making phase4 in gsc
+making phase4 in gsi
+making phase4 in bin
+making phase4 in include
+making phase4 in lib
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsi.o -I. -DHAVE_CONFIG_H _gsi.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsi_.o -I. -DHAVE_CONFIG_H _gsi_.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsc.o -I. -DHAVE_CONFIG_H _gsc.c
+gcc -O1 -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common    -I"../include" -c -o _gsc_.o -I. -DHAVE_CONFIG_H _gsc_.c
+make[3]: Nothing to be done for `phase4'.
+make[3]: Nothing to be done for `phase4'.
+make[3]: Nothing to be done for `phase4'.
+gcc -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -I"../include"  -o gsi    _gsi.o _gsi_.o "../lib/libgambit.a"  libgambitgsi.a
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _gsilib.c _gsi.c _gambitgsi.c _gsi_.c; fi
+gcc -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -no-cpp-precomp -Wno-unused -Wno-write-strings -Wdisabled-optimization -fwrapv -fno-strict-aliasing -fno-trapping-math -fno-math-errno -fPIC -fno-common     -I"../include"  -o gsc    _gsc.o _gsc_.o "../lib/libgambit.a"  libgambitgsc.a
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c _gsc.c _gambitgsc.c _gsc_.c; fi
+making core in include
+making core in bin
+making core in lib
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _kernel.c _system.c _num.c _std.c _eval.c _module.c _io.c _nonstd.c _thread.c _repl.c _gambit.c; fi
+making core in gsi
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _gsilib.c _gsi.c _gambitgsi.c _gsi_.c; fi
+making core in gsc
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c _gsc.c _gambitgsc.c _gsc_.c; fi
+making core in misc
+making core in doc
+making core in tests
+making core in examples
+making core in distr-comp
+making core in pi
+making core in ring
+making core in web-repl
+making core in web-server
+making core in tcltk
+making core in Xlib-simple
+making core in pthread
+making core in misc
+making core in contrib
+making core in GambitREPL
+making core in try
+making core in xactlog
+making core in prebuilt
+making core in macosx
+making core in windows
+making core in bench
+making core in githooks
+*** to compile the builtin modules you should: make modules
+making bootstrap in include
+making bootstrap in bin
+making bootstrap in lib
+making bootstrap in _define-library
+making bootstrap in _irregex
+making bootstrap in _base64
+making bootstrap in _csv
+making bootstrap in _digest
+making bootstrap in _geiser
+making bootstrap in _git
+making bootstrap in _hamt
+making bootstrap in _http
+making bootstrap in _json
+making bootstrap in _match
+making bootstrap in _pkg
+making bootstrap in _six
+making bootstrap in _tar
+making bootstrap in _test
+making bootstrap in _uri
+making bootstrap in _zlib
+making bootstrap in gambit
+making bootstrap in scheme
+making bootstrap in termite
+making bootstrap in srfi
+if test "no" = "yes"; then \
+	  cp libgambit.a ../libgambit.a; \
+	  if test "" != ""; then \
+	    cd ..; \
+	    ln -s "libgambit.a" "libgambit.a"; \
+	    ln -s "libgambit.a" "libgambit.a"; \
+	  fi \
+	fi
+making bootstrap in gsi
+if test "no" = "yes"; then \
+	  cp libgambitgsi.a ../libgambitgsi.a; \
+	  if test "" != ""; then \
+	    cd ..; \
+	    ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	    ln -s "libgambitgsi.a" "libgambitgsi.a"; \
+	  fi \
+	fi
+making bootstrap in gsc
+rm -f ../gsc-boot ../gsc-boot ../gsc-boot
+cp gsc ../gsc-boot
+if test "" != ""; then \
+	  cp gsc ../gsc-boot; \
+	fi
+if test "no" = "yes"; then \
+	  cp libgambitgsc.a ../libgambitgsc.a; \
+	  if test "" != ""; then \
+	    cd ..; \
+	    ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	    ln -s "libgambitgsc.a" "libgambitgsc.a"; \
+	  fi \
+	fi
+making bootstrap in misc
+making bootstrap in doc
+making bootstrap in tests
+making bootstrap in examples
+making bootstrap in distr-comp
+making bootstrap in pi
+making bootstrap in ring
+making bootstrap in web-repl
+making bootstrap in web-server
+making bootstrap in tcltk
+making bootstrap in Xlib-simple
+making bootstrap in pthread
+making bootstrap in misc
+making bootstrap in contrib
+making bootstrap in GambitREPL
+making bootstrap in try
+making bootstrap in xactlog
+making bootstrap in prebuilt
+making bootstrap in macosx
+making bootstrap in windows
+making bootstrap in bench
+making bootstrap in githooks
+real 384.47
+user 1877.48
+sys 27.25

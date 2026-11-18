@@ -1,0 +1,6 @@
+### cmd: ./watchdog.sh 60 ./w3mt.exe p2
+W3MT: calling ___setup from the primordial thread (parallelism_level=2, debug_settings=85)
+W3MT: ___setup returned; runtime live (___VERSION=409008, processor_count=2, max=8)
+W3MT-P2: owner runs scheme_w3mt_spin (allocates in Scheme ~3s) while a raw pthread enters Scheme concurrently
+./watchdog.sh: line 21: 73637 Segmentation fault: 11  "$@"
+### exit=139

@@ -1,0 +1,22 @@
+### cmd: ./watchdog.sh 60 ./w0mt.exe -:p2,d5,min-heap=64M,max-heap=512M
+=== W0MT build-configuration witness (MT build) ===
+___VERSION=409008
+___SINGLE_VM=defined
+___SINGLE_THREADED_VMS=UNDEFINED
+___MULTIPLE_THREADED_VMS=defined
+___MAX_PROCESSORS=8
+___USE_POSIX_THREAD_SYSTEM=defined
+___SINGLE_HOST=defined (-D by gambuild-C)
+___SINGLE_HOST_LIMIT=30000
+pstate-TLS-mode=direct ___tls_ptr (thread-local storage class)
+min-heap-bytes=67108864
+max-heap-bytes=536870912
+live-percent=50
+parallelism-level=2
+smp-feature=disabled
+##cpu-count=8
+##core-count=8
+##current-vm-processor-count=2
+primordial ##current-processor-id=0
+W0MT-VERDICT: PASS (MT configuration recorded; no vm-resize used)
+### exit=0

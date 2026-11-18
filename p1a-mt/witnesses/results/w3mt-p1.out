@@ -1,0 +1,7 @@
+### cmd: ./watchdog.sh 60 ./w3mt.exe p1
+W3MT: calling ___setup from the primordial thread (parallelism_level=2, debug_settings=85)
+W3MT: ___setup returned; runtime live (___VERSION=409008, processor_count=2, max=8)
+W3MT-P1: owner parks in pthread_join; raw pthread enters Scheme (serialized naive entry)
+W3MT-WORKER: raw pthread calling scheme_w3mt_add(20,22) — first foreign Scheme entry
+./watchdog.sh: line 21: 73618 Segmentation fault: 11  "$@"
+### exit=139

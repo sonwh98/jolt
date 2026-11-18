@@ -1,0 +1,35 @@
+fixed: PRELUDE=$(grep -m1 '^PRELUDE_OPT' makefile | sed 's/^PRELUDE_OPT = -prelude "//; s/"$//' | sed 's/\\#/#/g; s/\\"/"/g' | sed "s|\$(srcdirpfx)|/Users/sto/workspace/gambit-v4.9.8-src/lib/|")
+
+=== install boot compiler as mt/gsc-boot ===
+v4.9.8 20260809131432 aarch64-apple-darwin25.6.0 "./configure '--enable-single-host' 'CC=gcc'"
+=== re-apply out-of-tree makefile patches ===
+patched
+=== verify source tree still clean ===
+       0
+=== regenerate lib .c into BUILD tree (explicit -o; NEVER next to source) ===
+PRELUDE=(define-cond-expand-feature|enable-type-checking|)(define-cond-expand-feature|disable-auto-forcing|)...
+regenerated _kernel.c
+regenerated _system.c
+regenerated _num.c
+regenerated _std.c
+regenerated _eval.c
+regenerated _module.c
+regenerated _io.c
+regenerated _nonstd.c
+regenerated _thread.c
+regenerated _repl.c
+=== verify SMP scheduler in regenerated _thread.c ===
+91
+=== recompile lib + archive (make -j8 all) ===
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _kernel.c _system.c _num.c _std.c _eval.c _module.c _io.c _nonstd.c _thread.c _repl.c _gambit.c; fi
+real 314.05
+user 861.34
+sys 16.48
+=== relink gsi ===
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _gsilib.c _gsi.c _gambitgsi.c _gsi_.c; fi
+=== relink gsc ===
+/Applications/Xcode.app/Contents/Developer/usr/bin/make deselect-gen-for-commit-post-nonrec
+if [ -e ../.git ]; then git update-index --skip-worktree _host.c _utils.c _source.c _parms.c _env.c _ptree1.c _ptree2.c _gvm.c _back.c _front.c _prims.c _assert.c _asm.c _x86.c _arm.c _riscv.c _codegen.c _t-univ-1.c _t-univ-2.c _t-univ-3.c _t-univ-4.c _t-cpu-abstract-machine.c _t-cpu-primitives.c _t-cpu-object-desc.c _t-cpu-utils.c _t-cpu-backend-x86.c _t-cpu-backend-arm.c _t-cpu-backend-riscv.c _t-cpu.c _t-c-1.c _t-c-2.c _t-c-3.c _gsclib.c _gsc.c _gambitgsc.c _gsc_.c; fi
+=== done ===

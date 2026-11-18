@@ -1,0 +1,22 @@
+### cmd: ./watchdog.sh 90 ./w2mt.exe -:p2,d5,min-heap=64M,max-heap=512M control
+=== W2MT blocking-GC witness (MT build): mode=control ===
+W2MT: t=1795023618.655812 start
+W2MT: vm-processor-count=2 max-processors=8 cpu-count=8 (SMP scheduler: disabled)
+W2MT-A: non-blocking foreign call 1 t=1795023618.656005 pid=0
+W2MT-B: round 1 t=1795023618.656048 pid=0 updating live roots + allocating
+W2MT-B: round 1 t=1795023618.656236 calling (##gc) — REAL collection requested
+*** GC: 87us, 116K alloc, 77M heap, 87K live (0% 72672+16128)
+W2MT-B: round 1 t=1795023618.656603 done (capi-gc-return=0) pid=0
+W2MT-B: round 2 t=1795023618.656666 pid=0 updating live roots + allocating
+W2MT-B: round 2 t=1795023618.656832 calling (##gc) — REAL collection requested
+*** GC: 88us, 145K alloc, 77M heap, 95K live (0% 72672+24176)
+W2MT-B: round 2 t=1795023618.657133 done (capi-gc-return=0) pid=0
+W2MT-B: round 3 t=1795023618.657191 pid=0 updating live roots + allocating
+W2MT-B: round 3 t=1795023618.657281 calling (##gc) — REAL collection requested
+*** GC: 98us, 175K alloc, 77M heap, 102K live (0% 72672+32224)
+W2MT-B: round 3 t=1795023618.657578 done (capi-gc-return=0) pid=0
+W2MT-A: non-blocking foreign call 2 t=1795023618.96112 pid=0
+W2MT-A: non-blocking foreign call 3 t=1795023619.266342 pid=0
+W2MT-A: all non-blocking calls returned
+W2MT-VERDICT: PASS (control: 3 real collections completed with another thread making foreign calls; live rooted objects intact; the *** GC: report lines above are the runtime's own collection evidence)
+### exit=0

@@ -1,0 +1,519 @@
+;; p1b-inv/shim-registry.edn — initial typed-shim registry (P1b-prep static slice)
+;;
+;; Fork: jolt gambit-ffi-inv @ a6852ef8. Companion artifacts:
+;;   ffi-call-sites.md  (every construction site, file:line)
+;;   CONSUMERS.md       (native consumers' binding surfaces, one row per binding)
+;;
+;; Design ruling implemented (astra §2): "use typed, generated C shims per call
+;; shape, shared across symbols with identical ABI shapes. Each accepts the
+;; resolved function address. Signature identity includes argument/result types,
+;; calling convention, variadic boundary, and relevant ABI layout. ... a finite
+;; precompiled registry cannot claim arbitrary runtime-signature support.
+;; Unregistered shapes must raise. Generate the initial registry from the native
+;; consumer inventory and test fixtures."
+;;
+;; SHAPE IDENTITY = {:args [jolt-type ...] :ret jolt-type
+;;                   :blocking bool :capture-native-error bool
+;;                   :variadic nil | {:fixed-count n :tail [jolt-type ...]}
+;;                   :kind :procedure | :callable | :pointer-call
+;;                   :entry-convention :normal | :collect-safe   (callables)}
+;; Two bindings share a shim iff their shape identity is equal.
+;;
+;; :disposition values
+;;   :shim        a generated C shim is owed by the P2/P3 slice; argument is the
+;;                resolved function address; errno variants save errno inside the
+;;                shim (astra §2 wrapper sequence) before any conversion/cleanup.
+;;   :shim+p2     shape belongs to a named native consumer (jolt-crypto /
+;;                jolt-file / jolt-parser); required for the P2/P3 gates.
+;;   :platform    fork-stdlib shape the Gambit io/socket lanes need (not part of
+;;                the P2/P3 consumer triad but produced by real sites in this fork).
+;;   :fixture     produced only by test/chez fixtures today; registration keeps
+;;                the refusal data honest, the P1b designer decides whether the
+;;                shape ships.
+;;   :raise       a site produces it but the Gambit path must DELIBERATELY raise
+;;                (message-carrying) per astra's P1 boundary: unqualified
+;;                blocking/callable modes, dynamic signature compilation.
+;;
+;; Type vocabulary = jolt.ffi keyword names (stdlib/jolt/ffi.clj docstring,
+;; lines 17-20), marshaled per jolt-core/jolt/backend_scheme/ffi.clj ffi-types
+;; (16-31) and host/chez/java/ffi.ss ffi-type->chez (685-716). :bool is the
+;; ONE-BYTE C99 _Bool (unsigned-8 on the wire, converted at the boundary).
+
+{:p1b-inv/shim-registry
+ {:schema-version 1
+  :fork-sha "a6852ef8"
+  :branch "gambit-ffi-inv"
+  :generated-by "p1b-prep static analysis (no builds, no runs)"
+  :sources
+  {:consumers ["datomworld:src/jolt/dao/host/hash.jolt"
+               "datomworld:src/jolt/dao/host/sign.jolt"
+               "datomworld:src/jolt/dao/posix/random.jolt"
+               "datomworld:src/jolt/dao/stream/ws/crypto.jolt"
+               "datomworld:src/jolt/dao/posix/file.jolt"
+               "datomworld:src/jolt/yang/antlr/cst.jolt"
+               "fork:stdlib/jolt/ffi.clj"
+               "fork:stdlib/jolt/io_poller.clj"
+               "fork:stdlib/jolt/socket/native.clj"
+               "fork:stdlib/jolt/mvn_http.clj"
+               "fork:stdlib/jolt/winsock.clj"]
+   :fixtures ["test/chez/ffi-widths-test.ss" "test/chez/ffi-binding-test.ss"
+              "test/chez/ffi-native-error-test.ss/.clj" "test/chez/ffi-aggregate-test.ss/.clj"
+              "test/chez/jolt-ffi-callback-by-value-test.clj" "test/chez/jolt-ffi-pointer-call-test.clj"
+              "test/chez/jolt-ffi-scoped-test.clj" "test/chez/jolt-ffi-string-arg-test.clj"
+              "test/chez/jolt-ffi-string-null-test.clj" "test/chez/ffi-gc-stall-test.clj"
+              "test/chez/ffi-foreign-thread-test.clj" "test/chez/jolt-ffi-callback-preempt-test.clj"
+              "test/chez/ffi-stack-args-test.ss" "test/chez/jolt-ffi-layout-test.clj"
+              "test/chez/jolt-ffi-typed-array-test.clj" "test/chez/ffi-layout-test.ss"]}
+
+  ;; -------------------------------------------------------------------------
+  ;; Shapes produced by the three native consumers (the P2/P3 seed).
+  ;; One entry per distinct ABI shape; every producing symbol is referenced.
+  ;; -------------------------------------------------------------------------
+  :consumer-shapes
+  [;; S-01 — no-argument scalar probes (layout/version/errno-code gates)
+   {:id :shape/s01-noarg-int
+    :args [] :ret :int
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_layout_version" :at "src/jolt/dao/host/hash.jolt:69"}
+     {:sym "jolt_parser_export_layout_version" :at "src/jolt/yang/antlr/cst.jolt:67"}]}
+   {:id :shape/s01b-noarg-int32
+    :args [] :ret :int32
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_layout_version" :at "src/jolt/dao/posix/file.jolt:67"}
+     {:sym "jolt_file_eintr" :at "src/jolt/dao/posix/file.jolt:81"}
+     {:sym "jolt_file_eexist" :at "src/jolt/dao/posix/file.jolt:105"}]}
+
+   ;; S-02 — (ptr, size) -> int, ordinary (provenance string builder)
+   {:id :shape/s02-ptr-size-int
+    :args [:pointer :size_t] :ret :int
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_provenance" :at "src/jolt/dao/host/hash.jolt:70"}]}
+
+   ;; S-03 — (ptr, size) -> void, ordinary (zeroize; must not allocate: sign.jolt:25)
+   {:id :shape/s03-ptr-size-void
+    :args [:pointer :size_t] :ret :void
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_cleanse" :at "src/jolt/dao/posix/random.jolt:29"}
+     {:sym "jolt_crypto_cleanse" :at "src/jolt/dao/host/sign.jolt:56"}]}
+
+   ;; S-04 — (ptr, size) -> int, BLOCKING (CSPRNG draw; GC must progress: J2)
+   {:id :shape/s04-ptr-size-int-blocking
+    :args [:pointer :size_t] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_random" :at "src/jolt/dao/posix/random.jolt:25"}
+     {:sym "jolt_crypto_random" :at "src/jolt/dao/stream/ws/crypto.jolt:56"}]}
+
+   ;; S-05 — digest triple (in, len, out32/20) -> int, BLOCKING
+   ;; (blake3/sha256/sha1; blocking per hash.jolt:11-12, GC-during-hash gate)
+   {:id :shape/s05-digest-blocking
+    :args [:pointer :size_t :pointer] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_blake3" :at "src/jolt/dao/host/hash.jolt:73"}
+     {:sym "jolt_crypto_sha256" :at "src/jolt/dao/host/hash.jolt:77"}
+     {:sym "jolt_crypto_sha1" :at "src/jolt/dao/stream/ws/crypto.jolt:52"}]}
+
+   ;; S-06 — Ed25519 public-key derivation, blocking
+   {:id :shape/s06-ptr-ptr-int-blocking
+    :args [:pointer :pointer] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_ed25519_public" :at "src/jolt/dao/host/sign.jolt:50"}]}
+
+   ;; S-07 — Ed25519 sign/verify, blocking
+   {:id :shape/s07-sign-blocking
+    :args [:pointer :pointer :size_t :pointer] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_crypto_ed25519_sign" :at "src/jolt/dao/host/sign.jolt:52"}
+     {:sym "jolt_crypto_ed25519_verify" :at "src/jolt/dao/host/sign.jolt:54"}]}
+
+   ;; ---- jolt-file (J4a-J4d POSIX wrapper; handles are :int64) ---------------
+   ;; S-08 — (path-ptr, int64) -> int64, blocking (open family + sync_dir +
+   ;; make_parents; J4a short/EINTR/error transfers live above these)
+   {:id :shape/s08-path-open-blocking
+    :args [:pointer :int64] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_make_parents" :at "src/jolt/dao/posix/file.jolt:82"}
+     {:sym "jolt_file_open" :at "src/jolt/dao/posix/file.jolt:84"}
+     {:sym "jolt_file_open_excl" :at "src/jolt/dao/posix/file.jolt:101"}
+     {:sym "jolt_file_open_read" :at "src/jolt/dao/posix/file.jolt:102"}
+     {:sym "jolt_file_open_private" :at "src/jolt/dao/posix/file.jolt:104"}
+     {:sym "jolt_file_sync_dir" :at "src/jolt/dao/posix/file.jolt:111"}]}
+
+   ;; S-09 — (handle) -> int64, blocking (length/fclassify/sync/close/lock;
+   ;; close-on-exec + poison/recovery semantics ride on close/lock)
+   {:id :shape/s09-handle-blocking
+    :args [:int64] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_length" :at "src/jolt/dao/posix/file.jolt:85"}
+     {:sym "jolt_file_fclassify" :at "src/jolt/dao/posix/file.jolt:99"}
+     {:sym "jolt_file_sync" :at "src/jolt/dao/posix/file.jolt:91"}
+     {:sym "jolt_file_close" :at "src/jolt/dao/posix/file.jolt:92"}
+     {:sym "jolt_file_lock" :at "src/jolt/dao/posix/file.jolt:106"}]}
+
+   ;; S-10 — positional read/write, blocking (J4a frame movers)
+   {:id :shape/s10-pread-pwrite-blocking
+    :args [:int64 :int64 :pointer :int64 :int64] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_pread" :at "src/jolt/dao/posix/file.jolt:86"}
+     {:sym "jolt_file_pwrite" :at "src/jolt/dao/posix/file.jolt:88"}]}
+
+   ;; S-11 — (handle, int64) -> int64, blocking (truncate)
+   {:id :shape/s11-truncate-blocking
+    :args [:int64 :int64] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_truncate" :at "src/jolt/dao/posix/file.jolt:90"}]}
+
+   ;; S-12 — big-endian field accessors, ordinary (metadata, never blocks)
+   {:id :shape/s12-s32be-get
+    :args [:pointer :int64] :ret :int32
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_s32be_get" :at "src/jolt/dao/posix/file.jolt:93"}]}
+   {:id :shape/s12b-s32be-put
+    :args [:pointer :int64 :int32] :ret :void
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_s32be_put" :at "src/jolt/dao/posix/file.jolt:94"}]}
+
+   ;; S-13 — error-text writer, ordinary
+   {:id :shape/s13-strerror
+    :args [:int64 :pointer :int64] :ret :int64
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_strerror" :at "src/jolt/dao/posix/file.jolt:95"}]}
+
+   ;; S-14 — classify (J4b): (path, len, flags) -> int64, blocking
+   {:id :shape/s14-classify-blocking
+    :args [:pointer :int64 :int32] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_classify" :at "src/jolt/dao/posix/file.jolt:97"}]}
+
+   ;; S-15 — (handle, ptr) -> int64, blocking (fidentity)
+   {:id :shape/s15-fidentity-blocking
+    :args [:int64 :pointer] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_fidentity" :at "src/jolt/dao/posix/file.jolt:100"}]}
+
+   ;; S-16 — two-path (realpath / rename), blocking (J4d)
+   {:id :shape/s16-two-path-blocking
+    :args [:pointer :int64 :pointer :int64] :ret :int64
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_file_realpath" :at "src/jolt/dao/posix/file.jolt:107"}
+     {:sym "jolt_file_rename" :at "src/jolt/dao/posix/file.jolt:109"}]}
+
+   ;; ---- jolt-parser (ANTLRA C ABI; dedicated parse thread inside the library)
+   ;; S-17 — parse entry, blocking (worker, src, len, out, out_len)
+   {:id :shape/s17-parser-export-blocking
+    :args [:pointer :pointer :size_t :pointer :pointer] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_parser_export" :at "src/jolt/yang/antlr/cst.jolt:60"}]}
+
+   ;; S-18 — (ptr) -> void, ordinary. OPEN QUESTION rides on the second
+   ;; producer: jolt_parser_worker_free dispatches destruction to a fresh
+   ;; parse thread and pthread_joins it (native/jolt-parser/jolt_parser.cpp
+   ;; 1176-1183, on_parse_thread 769-780) — an unmarked blocking wait. Its
+   ;; binding is NOT :blocking (cst.jolt:66). The shim shape stays ordinary
+   ;; ONLY until the P1b designer rules; if ruled blocking it migrates to
+   ;; an S-09-style blocking variant (same signature, :blocking true).
+   {:id :shape/s18-ptr-free-ordinary
+    :args [:pointer] :ret :void
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :open-question :worker-free-blocking-mark
+    :produced-by
+    [{:sym "jolt_parser_free" :at "src/jolt/yang/antlr/cst.jolt:64"}
+     {:sym "jolt_parser_worker_free" :at "src/jolt/yang/antlr/cst.jolt:66"}]}
+
+   ;; S-19 — () -> pointer, ordinary (worker_new)
+   {:id :shape/s19-noarg-ptr
+    :args [] :ret :pointer
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :shim+p2
+    :produced-by
+    [{:sym "jolt_parser_worker_new" :at "src/jolt/yang/antlr/cst.jolt:65"}]}]
+
+  ;; ---------------------------------------------------------------------
+  ;; Shapes produced by the fork's own stdlib (the io/socket lanes the
+  ;; Gambit target runs with or refuses); includes the errno accessors
+  ;; jolt.ffi itself is built on.
+  ;; ---------------------------------------------------------------------
+  :platform-shapes
+  [;; S-20 — errno accessors: () -> pointer (jolt.ffi/errno foundation)
+   {:id :shape/s20-errno-accessor
+    :args [] :ret :pointer
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "__errno_location" :at "stdlib/jolt/ffi.clj:1950"}
+     {:sym "__error" :at "stdlib/jolt/ffi.clj:1951"}
+     {:sym "_errno" :at "stdlib/jolt/ffi.clj:1952"}
+     {:sym "__errno" :at "stdlib/jolt/ffi.clj:1953"}]}
+
+   ;; S-21 — (:int) -> :string (strerror; a STRING RESULT — null-able return)
+   {:id :shape/s21-int-string
+    :args [:int] :ret :string
+    :blocking false :capture-native-error false :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "strerror" :at "stdlib/jolt/ffi.clj:1954"}]}
+
+   ;; S-22 — declared-tail varargs (fcntl): the ONE variadic boundary shape a
+   ;; static registry may claim; (__varargs_after 2) convention required on
+   ;; Apple arm64 (ffi.clj:372-384, io_poller.clj:90)
+   {:id :shape/s22-varargs-fcntl
+    :args [:int :int :int] :ret :int
+    :variadic {:marker :varargs :marker-index 2 :tail [:int]}
+    :blocking false :capture-native-error false :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "fcntl" :at "stdlib/jolt/io_poller.clj:90"}]}
+   {:id :shape/s22b-varargs-fcntl-capture
+    :args [:int :int :int] :ret :int
+    :variadic {:marker :varargs :marker-index 2 :tail [:int]}
+    :blocking false :capture-native-error true :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "fcntl" :at "stdlib/jolt/socket/native.clj:284"}]}
+   {:id :shape/s22c-varargs-ioctl-capture
+    :args [:int :ulong :pointer] :ret :int
+    :variadic {:marker :varargs :marker-index 2 :tail [:pointer]}
+    :blocking false :capture-native-error true :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "ioctl" :at "stdlib/jolt/socket/native.clj:283"}]}
+
+   ;; S-23 — capture-native-error, ordinary (answers [result errno] via the
+   ;; call-boundary capture, stdlib/jolt/socket/native.clj:8-13 rationale)
+   {:id :shape/s23-capture-ordinary
+    :args [:int :int :int :pointer :pointer] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "kevent (change arm)" :at "stdlib/jolt/io_poller.clj:100"}
+     {:sym "getsockopt" :at "stdlib/jolt/io_poller.clj:93"}]}
+
+   ;; S-24 — blocking, no capture (kqueue/epoll_wait wait arms)
+   {:id :shape/s24-wait-blocking
+    :args [:int :pointer :int :pointer :int :pointer] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "kevent" :at "stdlib/jolt/io_poller.clj:97"}]}
+   {:id :shape/s24b-epoll-wait-blocking
+    :args [:int :pointer :int :int] :ret :int
+    :blocking true :capture-native-error false :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "epoll_wait" :at "stdlib/jolt/io_poller.clj:105"}]}
+
+   ;; S-25 — BLOCKING + capture-native-error combined (connect; the
+   ;; combination astra §2 names explicitly: "native-error ... including
+   ;; combinations with supported conventions"). Shim saves errno BEFORE
+   ;; reclaiming runtime ownership (astra §2 native-error wrapper).
+   {:id :shape/s25-connect-blocking-capture
+    :args [:int :pointer :int] :ret :int
+    :blocking true :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "connect" :at "stdlib/jolt/socket/native.clj:219"}]}
+   {:id :shape/s25b-recv-blocking-capture
+    :args [:int :pointer :size_t :int] :ret :ssize_t
+    :blocking true :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "recv (posix arm)" :at "stdlib/jolt/socket/native.clj:262"}]}
+
+   ;; S-26 — small-arg capture family (socket/bind/listen/shutdown/setsockopt/
+   ;; getsockname/getpeername/ioctlsocket — distinct tuples consolidated to
+   ;; their distinct signatures; all ordinary capture)
+   {:id :shape/s26-socket-capture
+    :args [:int :int :int] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "socket" :at "stdlib/jolt/socket/native.clj:216"}]}
+   {:id :shape/s26b-bind-capture
+    :args [:int :pointer :int] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "bind" :at "stdlib/jolt/socket/native.clj:217"}]}
+   {:id :shape/s26c-listen-shutdown-capture
+    :args [:int :int] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "listen" :at "stdlib/jolt/socket/native.clj:218"}
+     {:sym "shutdown" :at "stdlib/jolt/socket/native.clj:221"}]}
+   {:id :shape/s26d-setsockopt-capture
+    :args [:int :int :int :pointer :int] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "setsockopt" :at "stdlib/jolt/socket/native.clj:222"}]}
+   {:id :shape/s26e-getsockname-capture
+    :args [:int :pointer :pointer] :ret :int
+    :blocking false :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "getsockname" :at "stdlib/jolt/socket/native.clj:226"}
+     {:sym "getpeername" :at "stdlib/jolt/socket/native.clj:228"}]}
+   {:id :shape/s26f-poll-capture-blocking
+    :args [:pointer :uint :int] :ret :int
+    :blocking true :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "poll (posix)" :at "stdlib/jolt/socket/native.clj:277"}
+     {:sym "WSAPoll (win)" :at "stdlib/jolt/socket/native.clj:256"}]}
+   {:id :shape/s26g-accept-capture-blocking
+    :args [:int :pointer :pointer] :ret :int
+    :blocking true :capture-native-error true :variadic nil :kind :procedure
+    :disposition :platform
+    :produced-by
+    [{:sym "accept/accept4" :at "stdlib/jolt/socket/native.clj:271-276"}
+     {:sym "send (posix arm)" :at "stdlib/jolt/socket/native.clj:264-265"
+      :note "[:int :pointer :size_t :int] -> :ssize_t; same flag tuple, wider arg list — fold into this family or split when the generator is written"}]}]
+
+  ;; ---------------------------------------------------------------------
+  ;; Shapes produced only by test/chez fixtures — registered so the refusal
+  ;; data stays honest; the P1b designer decides which ship.
+  ;; ---------------------------------------------------------------------
+  :fixture-shapes
+  [;; S-27 — same-thread callable, scalar signature (C calls jolt). Ships as a
+   ;; c-define trampoline + rooted handle (astra §2 Callbacks) once qualified.
+   {:id :shape/s27-callable-scalar
+    :args [:pointer] :ret :int
+    :kind :callable :entry-convention :normal
+    :blocking false :capture-native-error false
+    :disposition :fixture
+    :produced-by
+    [{:sym "ffi/foreign-callable handle" :at "test/chez/ffi-gc-stall-test.clj:65"}
+     {:sym "ffi/foreign-callable handle" :at "test/chez/ffi-foreign-thread-test.clj:47"}
+     {:sym "qsort comparator" :at "test/chez/jolt-ffi-callback-preempt-test.clj:35"}
+     {:sym "callable identity" :at "test/chez/jolt-ffi-aggregate-test.clj:146"}]}
+
+   ;; S-28 — pointer-call (function-pointer first argument), scalar signature
+   {:id :shape/s28-pointer-call
+    :args [:pointer :pointer] :ret :int32
+    :kind :pointer-call
+    :blocking false :capture-native-error false
+    :disposition :fixture
+    :produced-by
+    [{:sym "paste entry" :at "test/chez/jolt-ffi-pointer-call-test.clj"
+      :note "signature set exercised by ffi-pointer-call-helper.c"}]}
+
+   ;; S-29 — collect-safe callable (callback may arrive on a foreign thread or
+   ;; a thread parked in a :blocking call). Refused on gambit until the
+   ;; foreign-thread entry protocol is qualified (astra ruling).
+   {:id :shape/s29-callable-collect-safe
+    :args [:pointer] :ret :int
+    :kind :callable :entry-convention :collect-safe
+    :blocking false :capture-native-error false
+    :disposition :raise
+    :produced-by
+    [{:sym "svc callback" :at "test/chez/ffi-gc-stall-test.clj:65"}
+     {:sym "svc callback" :at "test/chez/ffi-foreign-thread-test.clj:47"}]}
+
+   ;; S-30 — by-value aggregate argument ([:by-value [:struct ...]] positions).
+   ;; Emitted with define-ftype + (& ftype) marshaling (ffi.clj:526-608);
+   ;; refused on gambit for callables (ffi.clj:763-771), unguarded for named
+   ;; fns (gap G-2). Fixture-only on this fork.
+   {:id :shape/s30-aggregate-by-value
+    :args [[:by-value [:struct [[:a :int64] [:b :int64] [:c :int64]]]]] :ret :int64
+    :kind :procedure
+    :blocking false :capture-native-error false
+    :disposition :raise
+    :produced-by
+    [{:sym "jolt_agg_date_score" :at "test/chez/jolt-ffi-aggregate-test.clj:22-25"}
+     {:sym "jolt_agg_packet_score" :at "test/chez/jolt-ffi-aggregate-test.clj:47"}]}
+
+   ;; S-31 — bare varargs (tail inferred per call): the shape space is
+   ;; OPEN-ENDED by construction (carriers integer-64/double/u8* per position,
+   ;; host/chez/java/ffi.ss:1292-1311); each new shape compiles a
+   ;; foreign-procedure via eval at run time (ffi.ss:1373-1386). A finite
+   ;; registry cannot claim it — raise.
+   {:id :shape/s31-bare-varargs
+    :args [:int] :ret :int64
+    :variadic {:marker :& :bare true :tail :inferred-per-call}
+    :kind :procedure
+    :blocking false :capture-native-error false
+    :disposition :raise
+    :produced-by
+    [{:sym "jolt_agg_sum_varargs" :at "test/chez/jolt-ffi-aggregate-test.clj:42-44"}]}
+
+   ;; S-32 — declared-tail varargs with capture and pointer-call variants
+   ;; produced only by fixtures (curl_easy_setopt case, ffi.clj:455-462).
+   {:id :shape/s32-varargs-scoped
+    :args [:pointer :int :pointer] :ret :int
+    :variadic {:marker :varargs :tail :declared}
+    :kind :procedure
+    :blocking false :capture-native-error false
+    :disposition :fixture
+    :produced-by
+    [{:sym "curl_easy_setopt shape" :at "jolt-core/jolt/backend_scheme/ffi.clj:455-462 (comment)"}]}]
+
+  ;; ---------------------------------------------------------------------
+  ;; Classes NO current site or fixture produces → NOT registered as shapes;
+  ;; any attempt raises by design (astra: "Unregistered shapes must raise").
+  ;; Enumerated so the refusal messages can name them.
+  ;; ---------------------------------------------------------------------
+  :unregistered-classes
+  [{:class :aggregate-variadic
+    :why "compile-time refusal already (ffi.clj:439-441)"}
+   {:class :blocking-varargs
+    :why "compile-time refusal already (ffi.clj:411-413)"}
+   {:class :blocking-string-arg
+    :why "compile-time refusal already (ffi.clj:424-435)"}
+   {:class :capture-void
+    :why "analyzer refusal (analyzer/ffi.clj:205-207)"}
+   {:class :capture-by-value-return
+    :why "analyzer refusal (analyzer/ffi.clj:208-209)"}
+   {:class :union-by-value
+    :why "analyzer refusal (analyzer/ffi.clj:141-146)"}
+   {:class :two-convention-kernel-ops
+    :why "(__atomic __alloc) scheme-object pairs are Chez-kernel symbols — rt.ss:1358-1371; no consumer site, Gambit refuses"}
+   {:class :chez-internal-(cs)-entries
+    :why "adapter file's own entries (scheme-adapter-runtime.ss:2070-2079) — Gambit adapter refuses"}
+   {:class :runtime-signature-eval
+    :why "ffi-varargs-compile (host/chez/java/ffi.ss:1373-1386) and sa-foreign-procedure-runtime (scheme-adapter-runtime.ss:977-980) construct procedures for shapes discovered at run time — outside any finite registry"}]
+
+  ;; The registry's own honesty rule, restated for reviewers:
+  :unregistered-shapes-raise
+  "Any call whose shape identity matches no entry above raises a
+   message-carrying unsupported error on the gambit target before any address
+   is dereferenced — it never reaches an unbound Chez identifier (gap G-3 in
+   ffi-call-sites.md §4 tracks the one path that does not yet honor this)."}}

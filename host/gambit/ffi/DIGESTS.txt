@@ -12,3 +12,4 @@ a43734c2b9d56c6e7e480fb4e763f6c8709f7e4fb6ed9406aee4457680c7eb93  host/gambit/ff
 79571c9bba32ec87a7771581190943a302a931bf77f845de3163563781cad8ac  host/gambit/ffi/verify-digests.sh
 87515bf9a4d944ea4275dd243d507c2210a1a5342997387aa42caea1b53d458a  host/gambit/ffi/make-digests.sh
 dc217585350f8a17a9b2e2ddd4e3180fc97824dfa46800d05f5c43d269cbfaf3  host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+5f7c15b4f66f79d812193051fc94eac79ccfcf01971cd22cd7030e8f50d4e67d  host/gambit/ffi/TOOLCHAIN.linux-x86_64.sha256

@@ -38,6 +38,11 @@ jobs:
       - name: Set up Chez, Gambit and the certify oracle
         uses: ./.github/actions/setup-chez
 
+      # Each runner records its own fresh or cached installation. Verification
+      # checks it remains current; reviewed bridge source pins stay committed.
+      - name: Record Gambit FFI toolchain provenance
+        run: sh host/gambit/ffi/watchdog.sh 60 sh host/gambit/ffi/record-toolchain.sh /opt/gambit
+
       - name: Gate (shard ${{ matrix.shard }}/4)
         # `make test` = the self-host byte-fixpoint (the rebuilt seed must equal
         # the checked-in seed byte-for-byte — holds cross-platform on the pinned

@@ -177,6 +177,8 @@
                   "sa-foreign-procedure" "sa-foreign-procedure-blocking"
                   "sa-foreign-callable" "sa-foreign-callable-collect-safe"
                   "jolt-ffi-native-error-procedure" "call-with-values"
+                  ;; Gambit stage-1 public wrappers emitted by gambit-procedure-expr.
+                  "joltffi-public-procedure" "joltffi-public-blocking-raise"
                   ;; the pointer-fn entry check (ffi-pointer-procedure-expr).
                   "jolt-ffi-function-pointer"
                   ;; bare :& lowering (emit-ffi-bare-varargs-fn): the dispatcher

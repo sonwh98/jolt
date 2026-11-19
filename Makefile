@@ -1941,7 +1941,9 @@ gambitseedcheck:
 	    rm -rf "$$out"; exit 1; \
 	  fi
 
-gambitcheck: gambitffi-bridge
+# Skip before building the native bridge when Gambit is absent. Explicit
+# gambitffi* targets still require an installation and local provenance.
+gambitcheck: $(if $(wildcard $(GAMBIT_GSI)),gambitffi-bridge)
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
 		sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/gambitcheck.ss && \
 		sh host/gambit/ffi/watchdog.sh 180 "$(GAMBIT_GSI)" host/gambit/ffi/gambitffi-public.ss; \
@@ -2186,8 +2188,9 @@ gambitffi-load-failure-smoke: gambitffi-bridge
 		echo "$@: required Gambit runtime is absent" >&2; exit 1; \
 	fi
 
-# the aggregate: all three, fail-closed (each script exits nonzero on failure)
-gambitffi: gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke
+# The aggregate includes emitted-name hygiene and all three native gate scripts.
+# Each prerequisite exits nonzero on failure.
+gambitffi: emittedheads gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke
 	@echo "gambitffi: PASS — all stage-1 qualified-tier gates green"
 
 # The browser bundle: the whole stack (kernel + seed + compiler + a queue-polling

@@ -9,6 +9,7 @@ Run from the checkout root:
 
 ```sh
 GAMBIT_PREFIX=/Users/sto/.local/share/mise/installs/gambit/4.9.8
+sh host/gambit/ffi/record-toolchain.sh "$GAMBIT_PREFIX"
 make gambitffi gambitcheck gambitkernel gambiteval GAMBIT_PREFIX="$GAMBIT_PREFIX"
 make gambitseedcheck CHEZ=/Users/sto/.local/share/mise/installs/chezscheme/10.4.1/bin/scheme
 ```
@@ -17,7 +18,8 @@ All new FFI gates fail if their toolchain or bridge is absent. `gambitcheck`
 requires the bridge and runs both its adapter checks and the public-source
 witness. The ABI target also runs that public witness. Every native artifact
 is rebuilt on each make invocation, after input and toolchain digest checks.
-A timed-out gate kills its process group and returns 124.
+A timed-out gate kills its process group and returns 124. `gambitffi` also
+requires `emittedheads`, which checks emitted names against user-local shadowing.
 
 ## Build and ABI identity
 
@@ -42,56 +44,59 @@ python3 host/gambit/ffi/generate-shims.py
 sh host/gambit/ffi/make-digests.sh
 ```
 
-`DIGESTS.txt` pins source/generated inputs, the provenance helper scripts, and
-every platform manifest in deterministic C-locale filename order.
-`TOOLCHAIN.<platform>.sha256` pins the provisioned gsi/gsc, C build driver,
-header, and three runtime/compiler libraries for one platform. The key comes
-from `uname` via Python's `os.uname()`: lowercase OS and architecture, with
-`amd64` normalized to `x86_64` and `aarch64` to `arm64`. There is no platform
-override or fallback to another platform's manifest. Each manifest starts with
-a format/version line and `# platform: <platform>`, followed by exactly seven
-SHA256 rows in fixed order. A missing file, wrong platform header, incomplete
-input set, changed input, or stale source/manifest catalog fails closed.
+The committed `DIGESTS.txt` pins the bridge sources, generated inputs and
+provenance helper scripts. Verification always checks those digests and the
+generated-shim consistency first, even if toolchain provenance is missing.
 
-Both `make gambitffi-verify-digests` and
-`sh host/gambit/ffi/verify-digests.sh "$GAMBIT_PREFIX"` print the computed
-platform and selected manifest, then check that platform's installed inputs
-and the complete source/manifest catalog. Other platforms' installed binaries
-are not compared with the running platform. Verification never records pins.
+Toolchain provenance belongs to the current checkout's installation:
+`build/gambit-ffi/provenance/TOOLCHAIN.<platform>.json` (ignored by Git).
+It records the platform, resolved installation path, full `gsi -v` string,
+configure-summary SHA256, and SHA256 of gsi/gsc, gambuild-C, gambit.h and the
+three runtime/compiler libraries. The configure summary is the final quoted
+`./configure ...` field reported by Gambit 4.9.8's `gsi -v`, hashed as UTF-8
+without its surrounding double quotes or a final newline. Unsupported version
+or summary formats refuse. JSON keys are sorted; no recording timestamp is
+added. Re-recording an unchanged install produces identical bytes.
 
-To intentionally record a new platform/build, run the recorder on that host.
-It hashes all seven files before atomically writing the manifest, and refreshes
-`DIGESTS.txt` to pin it. Output contains no timestamps or installation paths;
-recording the same bytes again produces identical files. Review and commit
-the manifest and digest-index diff, then run that platform's gates. Explicit
-recording can replace existing pins; do not use it to hide a failed check.
+The key is lowercase OS/architecture from `os.uname()`, with `aarch64` mapped
+to `arm64` and `amd64` to `x86_64`. Darwin/Linux on arm64/x86_64 are accepted;
+other OS/architectures refuse explicitly. Android/bionic's Linux/aarch64 uname
+selects `linux-arm64`; it needs its own local installation record, without a
+precommitted platform file. This selector support does not qualify Android
+native execution. The current Termux CI job installs Chez only and retains
+the adapter gates' no-Gambit skips.
 
-For the orchestrator's Linux x86_64 clone, the exact commands are:
+After provisioning or intentionally replacing an installation, record it once
+from the checkout root:
 
 ```sh
-cd "$HOME/ci/jolt-ffi-linux"
-sh host/gambit/ffi/record-toolchain.sh "$HOME/.local/share/mise/installs/gambit/4.9.8"
-make gambitffi-verify-digests GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8"
+sh host/gambit/ffi/watchdog.sh 60 sh host/gambit/ffi/record-toolchain.sh "$GAMBIT_PREFIX"
+make gambitffi-verify-digests GAMBIT_PREFIX="$GAMBIT_PREFIX"
 ```
 
-The record command must print:
+For the orchestrator's Linux clone, set
+`GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8"` first.
+The recorder prints, for example:
 
 ```text
-gambitffi: platform=linux-x86_64 manifest=host/gambit/ffi/TOOLCHAIN.linux-x86_64.sha256
-gambitffi: recorded 7 toolchain inputs
-gambitffi: refreshed host/gambit/ffi/DIGESTS.txt
+gambitffi: platform=linux-x86_64 manifest=<checkout>/build/gambit-ffi/provenance/TOOLCHAIN.linux-x86_64.json
+gambitffi: recorded local toolchain provenance (7 inputs); source digests unchanged
 ```
 
-Verification must select that same manifest, print `OK` for all seven inputs,
-and finish the toolchain portion with `gambitffi: toolchain verified (7 inputs)`.
-No Linux manifest is supplied from macOS: until it is recorded on Linux,
-Linux verification intentionally fails for the missing platform file.
+Verification prints the computed platform and same manifest, then
+`gambitffi: local toolchain provenance verified (7 inputs)`.
+Missing, malformed or stale records refuse with the exact record command.
+Verification never records or refreshes provenance, and recording never
+rewrites the committed source digest index. Binary hashes are compared only
+with that install's local record, allowing independently built CI installs.
+The tests workflow records its own fresh/cached /opt/gambit install immediately
+after setup, before the gates. Keep local records and build outputs uncommitted.
+
 Recording provenance does not qualify Linux execution, ABI or consumer parity.
-The native gates still need their independent Linux leg. All four fixture
-link commands select `-dynamiclib` on Darwin and `-shared -fPIC` on Linux;
-other host OS names raise an explicit fixture-link error. The existing `.dylib`
-fixture filenames are retained on both hosts. Linux link-plan checks on macOS
-are not execution or ABI qualification on Linux.
+All four fixture link commands select `-dynamiclib` on Darwin and
+`-shared -fPIC` on Linux; other OS names refuse. The existing `.dylib` fixture
+filenames are retained on both hosts. Linux link-plan checks on macOS are not
+execution or ABI qualification on Linux.
 
 The ABI gate gets its errno-accessor name from that same Makefile OS selector:
 `__error` on Darwin and `__errno_location` on glibc Linux. Both functions return

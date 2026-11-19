@@ -10,15 +10,14 @@ digests() {
     host/gambit/ffi/joltffi-fixture2.c host/gambit/ffi/joltffi-dep.c \
     host/gambit/ffi/joltffi-unloadable.c host/gambit/ffi/toolchain.py \
     host/gambit/ffi/record-toolchain.sh host/gambit/ffi/verify-toolchain.sh \
-    host/gambit/ffi/verify-digests.sh host/gambit/ffi/make-digests.sh \
-    host/gambit/ffi/TOOLCHAIN.*.sha256
+    host/gambit/ffi/verify-digests.sh host/gambit/ffi/make-digests.sh
 }
 case ${1:-} in
   "") digests > host/gambit/ffi/DIGESTS.txt ;;
   --check)
     shasum -a 256 -c host/gambit/ffi/DIGESTS.txt
     if [ "$(digests)" != "$(cat host/gambit/ffi/DIGESTS.txt)" ]; then
-      echo "gambitffi: pinned source/manifest catalog is stale; explicitly record/update the digests" >&2
+      echo "gambitffi: pinned source catalog is stale; explicitly update the source digests" >&2
       exit 1
     fi
     ;;

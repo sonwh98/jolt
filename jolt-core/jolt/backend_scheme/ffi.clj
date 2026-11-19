@@ -643,7 +643,7 @@
       ;; the registry below.
       (and (= :gambit (target)) vi (= vi (dec (count at))))
         (str "(throw-jvm 'UnsupportedOperationException "
-             (chez-str-lit "jolt.ffi/foreign-fn: bare :& varargs are unsupported on the gambit target (per-call tail shapes compile at run time, outside the stage-1 registry)")
+             (chez-str-lit "jolt.ffi/foreign-fn: bare :& varargs are unsupported on the gambit target; per-call tail shapes compile at run time, outside the stage-1 registry")
              ")")
       (and vi (= vi (dec (count at)))) (emit-ffi-bare-varargs-fn node vi)
       :else (emit-ffi-fixed-fn node vi))))
@@ -781,7 +781,7 @@
     ;; at namespace load; refuse in words, at the form, instead.
     :ffi-layout (if (= :gambit (target))
                   (str "(throw-jvm 'UnsupportedOperationException "
-                       (chez-str-lit "jolt.ffi/layout: ffi-layout (ftype aggregates) are unsupported on the gambit target")
+                       (chez-str-lit "jolt.ffi/layout: ffi-layout aggregates using ftype are unsupported on the gambit target")
                        ")")
                   (emit-ffi-layout node))
     :ffi-fn (emit-ffi-fn node)

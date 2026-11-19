@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Record or verify the running platform's explicit Gambit provenance pins."""
+"""Record and verify this checkout's Gambit installation, never global pins."""
 import hashlib
+import json
 import os
 from pathlib import Path
-import re
+import shlex
 import subprocess
 import sys
 import tempfile
 
-MANIFEST_DIR = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[3]
+RECORD_DIR = ROOT / "build/gambit-ffi/provenance"
 PATHS = (
     "bin/gsi", "bin/gsc", "bin/gambuild-C", "include/gambit.h",
     "lib/libgambit.a", "lib/libgambitgsi.a", "lib/libgambitgsc.a",
 )
-FORMAT = "# joltffi toolchain manifest v1"
+FORMAT = "joltffi toolchain provenance v2"
 
 
 def platform_key():
@@ -21,17 +23,12 @@ def platform_key():
     system, machine = host.sysname.lower(), host.machine.lower()
     machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
     key = system + "-" + machine
-    if not re.fullmatch(r"[a-z0-9_-]+", key):
-        raise ValueError("invalid uname platform key: " + repr(key))
+    # Android/bionic reports Linux/aarch64. Each install records its own
+    # configuration and bytes under linux-arm64; no glibc binary pins are used.
+    if system not in ("darwin", "linux") or machine not in ("arm64", "x86_64"):
+        raise ValueError("unsupported uname platform: " + repr(key) +
+                         "; expected Darwin/Linux on arm64/x86_64")
     return key
-
-
-def selected_manifest():
-    key = platform_key()
-    path = MANIFEST_DIR / ("TOOLCHAIN." + key + ".sha256")
-    print("gambitffi: platform=" + key + " manifest=host/gambit/ffi/" + path.name,
-          flush=True)
-    return key, path
 
 
 def digest(path):
@@ -42,24 +39,26 @@ def digest(path):
     return result.hexdigest()
 
 
-def render_manifest(prefix, key):
-    # Hash everything before writing: a missing input cannot leave partial pins.
-    rows = [digest(prefix / name) + "  " + name for name in PATHS]
-    return "\n".join([FORMAT, "# platform: " + key] + rows) + "\n"
+def current_record(prefix, key):
+    inputs = {name: digest(prefix / name) for name in PATHS}
+    version = subprocess.run([str(prefix / "bin/gsi"), "-v"], check=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, timeout=15).stdout.strip()
+    # Gambit -v: version, build stamp, target triplet, quoted configure command.
+    # Hash the configure summary without surrounding double quotes/newline.
+    parts = version.split(None, 3)
+    if (len(parts) != 4 or parts[0] != "v4.9.8"
+            or not parts[3].startswith('"./configure') or not parts[3].endswith('"')
+            or "\n" in version):
+        raise ValueError("unsupported Gambit version/configure summary: " + repr(version))
+    return {"format": FORMAT, "platform": key, "install_path": str(prefix),
+            "gambit_version_string": version,
+            "configure_summary_sha256": hashlib.sha256(parts[3][1:-1].encode("utf-8")).hexdigest(),
+            "inputs_sha256": inputs}
 
 
-def read_manifest(path, key):
-    if not path.is_file():
-        raise ValueError("missing toolchain manifest: " + str(path) +
-                         "; record this platform explicitly with record-toolchain.sh")
-    lines = path.read_text(encoding="ascii").splitlines()
-    if lines[:2] != [FORMAT, "# platform: " + key]:
-        raise ValueError("toolchain manifest format/platform header mismatch: " + str(path))
-    rows = [re.fullmatch(r"([0-9a-f]{64})  (.+)", line) for line in lines[2:]]
-    if (len(rows) != len(PATHS) or any(row is None for row in rows)
-            or tuple(row.group(2) for row in rows) != PATHS):
-        raise ValueError("toolchain manifest must pin exactly the seven ordered inputs: " + str(path))
-    return [(row.group(1), row.group(2)) for row in rows]
+def render(record):
+    return json.dumps(record, sort_keys=True, indent=2) + "\n"
 
 
 def main(argv=None):
@@ -68,40 +67,35 @@ def main(argv=None):
         print("usage: toolchain.py record|verify GAMBIT_PREFIX", file=sys.stderr)
         return 2
     try:
-        key, path = selected_manifest()
+        key = platform_key()
+        path = RECORD_DIR / ("TOOLCHAIN." + key + ".json")
         prefix = Path(argv[1]).resolve()
+        command = "sh host/gambit/ffi/record-toolchain.sh " + shlex.quote(str(prefix))
+        print("gambitffi: platform=" + key + " manifest=" + str(path), flush=True)
+        if argv[0] == "verify" and not path.is_file():
+            raise ValueError("missing local toolchain provenance; record with: " + command)
+        record = current_record(prefix, key)
         if argv[0] == "record":
-            content = render_manifest(prefix, key)
+            path.parent.mkdir(parents=True, exist_ok=True)
             temporary = None
             try:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="ascii",
-                                                 dir=MANIFEST_DIR,
-                                                 prefix="." + path.name + ".",
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                                 dir=path.parent, prefix=".TOOLCHAIN.",
                                                  delete=False) as stream:
                     temporary = Path(stream.name)
-                    stream.write(content)
+                    stream.write(render(record))
                 os.replace(temporary, path)
             finally:
                 if temporary is not None and temporary.exists():
                     temporary.unlink()
-            # Explicit recording also pins the new manifest in the source index.
-            # Verification never calls this recording/update path.
-            subprocess.run(["sh", str(MANIFEST_DIR / "make-digests.sh")], check=True)
-            print("gambitffi: recorded 7 toolchain inputs")
-            print("gambitffi: refreshed host/gambit/ffi/DIGESTS.txt")
+            print("gambitffi: recorded local toolchain provenance (7 inputs); source digests unchanged")
         else:
-            failures = []
-            for expected, name in read_manifest(path, key):
-                if digest(prefix / name) == expected:
-                    print(name + ": OK")
-                else:
-                    print(name + ": FAILED", file=sys.stderr)
-                    failures.append(name)
-            if failures:
-                raise ValueError("toolchain digest mismatch (" + str(len(failures)) + " inputs)")
-            print("gambitffi: toolchain verified (7 inputs)")
+            if path.read_text(encoding="utf-8") != render(record):
+                raise ValueError("stale local toolchain provenance (platform/version/configure/"
+                                 "install path/input mismatch); record with: " + command)
+            print("gambitffi: local toolchain provenance verified (7 inputs)")
         return 0
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         print("gambitffi: " + str(error), file=sys.stderr)
         return 1
 

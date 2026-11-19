@@ -1,0 +1,3 @@
+gen-boot: wrote host/gambit/boot-full.ss (profile full, 0 file(s) excluded, 0 name(s) degraded)
+gambitboot: full-profile boot OK on gsi
+WATCHDOG: TIMEOUT after 360.0s: make gambitunbound GAMBIT_PREFIX=/Users/sto/.local/share/mise/installs/gambit/4.9.8 CHEZ=/Users/sto/.local/share/mise/installs/chezscheme/10.4.1/bin/scheme

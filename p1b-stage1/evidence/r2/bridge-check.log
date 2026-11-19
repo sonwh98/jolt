@@ -1,0 +1,3 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AssertionError: ([], ['joltffi-bytes-from-bv!', 'joltffi-bytes-to-bv!', 'joltffi-dlerror', 'joltffi-dlopen', 'joltffi-dlsym', 'joltffi-dlsym-global', 'joltffi-free', 'joltffi-malloc', 'joltffi-platform-key', 'joltffi-read-i32', 'joltffi-ref-f32', 'joltffi-ref-f64', 'joltffi-ref-i16', 'joltffi-ref-i32', 'joltffi-ref-i64', 'joltffi-ref-i8', 'joltffi-ref-u16', 'joltffi-ref-u32', 'joltffi-ref-u64', 'joltffi-ref-u8', 'joltffi-set-f32!', 'joltffi-set-f64!', 'joltffi-set-i16!', 'joltffi-set-i32!', 'joltffi-set-i64!', 'joltffi-set-i8!', 'joltffi-set-u16!', 'joltffi-set-u32!', 'joltffi-set-u64!', 'joltffi-set-u8!', 'joltffi-shim-lookup', 'joltffi-zero'])

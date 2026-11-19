@@ -174,4 +174,97 @@ compiler identity and hashes are retained in `evidence/`. See
 stage-1 implementation commit to roll back; delete build/gambit-ffi outputs.
 No installed runtime state needs restoration.
 
+## R2 — Argon review fixes
+
+Completed-GMT: 2026-11-19 09:51:41 GMT
+Completed-Local: 2026-11-19 16:51:41 ICT (+07)
+Coding-Agent: Codex
+Session-ID: 01a1f1f9-2d2b-71a2-b88a-1675b81dd975 (resumed implementation)
+Review: `1795062317148-reviewer-p1b-stage1-argon.gemini-4-argon.findings.md`.
+Starting commit: 8f9047aaedf9a9d50893404170488a35b63e6ec9.
+Fix commit: e91f26de (`p1b-stage1-r2: fix byte fallback and apply Argon review items`).
+
+| Review item | Result | Evidence |
+|---|---|---|
+| F1 (P2) | Fixed the unbound Latin-1 fallback with `u8vector->list` | host/gambit/host-ffi.ss:220; public 0xff regression at host/gambit/ffi/gambitffi-public.ss:46 |
+| F2 (P3) | Added Chez-compatible nil guards for foreign types, bytes values, library candidates/names, symbol names and failure-note candidates | host/gambit/host-ffi.ss:31; ten public exact-message checks plus preserved nil-as-absence checks |
+| F3 (P3) | Classified host-ffi.ss in the core profile and all 32 runtime-loaded bridge exports in the linker allowlist | host/gambit/profiles.ss:49; host/gambit/unbound-allowlist.txt:65 |
+| F4 (P3) | Corrected unloadable-fixture dependencies and rejected a null global dlsym address even without dlerror | Makefile:2127; host/gambit/scheme-adapter-runtime.ss:460 |
+
+The new public witness writes 255 into a one-byte native allocation, calls
+`jolt.ffi/read-bytes`, and compares its result with `(str (char 255))` before
+freeing in `finally`. It therefore enters and verifies the previously broken
+non-UTF-8 path. Nil tests catch IllegalArgumentException and compare the exact
+message; an unrelated failure cannot satisfy them. `load-library nil` and
+`load-failure-note nil` retain their documented absence meaning.
+
+Full requested gate matrix: exit 0 under the external 600-second process-group
+watchdog with JOLT_REQUIRE_GAMBIT=1, using the same pinned absolute Gambit and
+Chez paths as stage 1:
+
+```sh
+make gambitffi gambitcheck gambitkernel gambiteval gambitseedcheck gambitgencheck gambittwins adaptercheck gambitvars gambitstatics GAMBIT_PREFIX=/Users/sto/.local/share/mise/installs/gambit/4.9.8 CHEZ=/Users/sto/.local/share/mise/installs/chezscheme/10.4.1/bin/scheme
+```
+
+```text
+gambitffi-abi: 78 check(s), 0 failure(s)
+gambitffi-public: 44 check(s), 0 failure(s)
+gambitffi-errno-check: 9 check(s), 0 failure(s)
+gambitffi-load-failure-smoke: 14 check(s), 0 failure(s)
+gambitffi: PASS — all stage-1 qualified-tier gates green
+gambitcheck: 0 failure(s)
+kernel-test: 0 failure(s)
+eval-test: 0 failure(s)
+gambitseedcheck: gambit seed is current with the sources
+gambitgencheck: records-gambit.ss is current with the records files
+gambit eval twins: 13 call-position macro(s), every one twinned in eval-fns.ss
+adaptercheck: 149 contract names checked against the combined env
+adaptercheck: chez adapter contract satisfied
+gambit vars: 3625 var cell(s) after boot, 4 unbound
+gambit vars: passed (4 allowlisted)
+gambit statics: the seed emits 19 static(s) and 30 constructor(s); 11 unresolved
+gambit statics: passed (11 allowlisted)
+```
+
+Verbatim output is retained in `evidence/r2/gates.log`; profile and additional
+static-link validation records are alongside it. The generated kernel profile
+has no active host-ffi.ss or host-vars.ss include. Its commented exclusion
+records are retained by the generator and are not active imports.
+
+The targeted static bridge check compiles `evidence/r2/bridge-symbols.ss` with
+the pinned gsc C backend, links with `-warnings`, rejects any compiler ERROR,
+and compares every unresolved `joltffi-*` name with the explicit allowlist.
+The two sets are identical, with exactly 32 names:
+
+```text
+bridge symbols: PASS — 32 C-linker-reported native exports exactly match the allowlist
+```
+
+This small unit intentionally omits the kernel, so unrelated kernel globals in
+its raw linker report are expected; its verdict covers bridge exports only.
+The compile and link use external 120s/60s watchdogs and the set comparison a
+15s watchdog. Raw C-link output and the verdict are in `bridge-c-link.log` and
+`bridge-c-check.log`. The full generated profile was restored after the kernel
+exclusion check (`boot-active.ss` includes `boot-full.ss`).
+
+The optional full JS `gambitunbound` audit is **not claimed green**. Its first
+attempt reached the external 360s compilation deadline. A small JS link probe
+then established that this pinned installation has `_gambit.c` but no JS base
+link metadata, reporting:
+
+```text
+*** ERROR -- missing or invalid linking information for module "/Users/sto/.local/share/mise/installs/gambit/4.9.8/lib/_gambit"
+```
+
+The redundant 900s full-JS compile retry was terminated once that prerequisite
+failure was confirmed, and the supported C backend was used for the exact
+bridge-export check above. The JS diagnostics and both full-audit attempts are
+retained, including the failed JS classification assertion; none counts as a
+pass or JS qualification. Provisioning a JS base library is outside this fix
+round. The requested native gate matrix is entirely green.
+
+Compiler sources, seeds, bridge code, shape registry and pinned inputs did not
+change, so no seed remint or digest refresh was needed; the gate verified their
+consistency. All stage-1 refusal and platform limits remain unchanged. No push.
+
 DONE

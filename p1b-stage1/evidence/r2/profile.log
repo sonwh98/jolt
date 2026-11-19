@@ -1,0 +1,2 @@
+gen-boot: wrote host/gambit/boot-kernel.ss (profile kernel, 9 file(s) excluded, 96 name(s) degraded)
+kernel profile: PASS — host-ffi.ss and host-vars.ss active includes excluded

@@ -1,0 +1,144 @@
+*** WARNING -- "##bytes-allocated" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "##version-string" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "def-var!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "java-int-parse" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jfloat-fl" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jfloat?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jnum->exact" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-ex-info" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-error-set!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-k" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-k-set!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-next" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-next-set!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-result-set!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-state" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-state-set!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-fiber-thunk" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-get-dispatch" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-hash-map" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-host-throwable" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-lazyseq?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-map?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-nil" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-nil?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-pr-str" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-seq" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-seq?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-str-render-one" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-throw" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "jolt-vector" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-bytes-from-bv!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-bytes-to-bv!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-dlerror" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-dlopen" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-dlsym" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-dlsym-global" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-free" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-malloc" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-platform-key" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-read-i32" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-f32" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-f64" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-i16" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-i32" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-i64" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-i8" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-u16" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-u32" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-u64" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-ref-u8" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-f32!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-f64!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-i16!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-i32!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-i64!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-i8!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-u16!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-u32!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-u64!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-set-u8!" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-shim-lookup" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "joltffi-zero" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "keyword" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "keyword-t-name" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "keyword-t?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "make-jfloat" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "make-jolt-fiber" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "make-pvec" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "pvec?" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "repl-environment" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "seq->list" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")
+*** WARNING -- "throw-jvm" is not defined,
+***            referenced in: ("build/p1b-stage1-r2/bridge-symbols.c")

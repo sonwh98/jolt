@@ -42,13 +42,64 @@ python3 host/gambit/ffi/generate-shims.py
 sh host/gambit/ffi/make-digests.sh
 ```
 
-`DIGESTS.txt` pins source/generated inputs. `TOOLCHAIN.sha256` pins the
-provisioned gsi/gsc, C build driver, header, and runtime/compiler libraries.
-It intentionally rejects another runtime/configuration: a new platform leg
-must establish a new qualification record. `build/gambit-ffi/` contains output
-SHA256 records, compiler version, runtime hashes and retained generated C.
-Binary digests are recorded, not claimed identical across machines/linkers.
-No runtime sources or dependencies are modified or downloaded.
+`DIGESTS.txt` pins source/generated inputs, the provenance helper scripts, and
+every platform manifest in deterministic C-locale filename order.
+`TOOLCHAIN.<platform>.sha256` pins the provisioned gsi/gsc, C build driver,
+header, and three runtime/compiler libraries for one platform. The key comes
+from `uname` via Python's `os.uname()`: lowercase OS and architecture, with
+`amd64` normalized to `x86_64` and `aarch64` to `arm64`. There is no platform
+override or fallback to another platform's manifest. Each manifest starts with
+a format/version line and `# platform: <platform>`, followed by exactly seven
+SHA256 rows in fixed order. A missing file, wrong platform header, incomplete
+input set, changed input, or stale source/manifest catalog fails closed.
+
+Both `make gambitffi-verify-digests` and
+`sh host/gambit/ffi/verify-digests.sh "$GAMBIT_PREFIX"` print the computed
+platform and selected manifest, then check that platform's installed inputs
+and the complete source/manifest catalog. Other platforms' installed binaries
+are not compared with the running platform. Verification never records pins.
+
+To intentionally record a new platform/build, run the recorder on that host.
+It hashes all seven files before atomically writing the manifest, and refreshes
+`DIGESTS.txt` to pin it. Output contains no timestamps or installation paths;
+recording the same bytes again produces identical files. Review and commit
+the manifest and digest-index diff, then run that platform's gates. Explicit
+recording can replace existing pins; do not use it to hide a failed check.
+
+For the orchestrator's Linux x86_64 clone, the exact commands are:
+
+```sh
+cd "$HOME/ci/jolt-ffi-linux"
+sh host/gambit/ffi/record-toolchain.sh "$HOME/.local/share/mise/installs/gambit/4.9.8"
+make gambitffi-verify-digests GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8"
+```
+
+The record command must print:
+
+```text
+gambitffi: platform=linux-x86_64 manifest=host/gambit/ffi/TOOLCHAIN.linux-x86_64.sha256
+gambitffi: recorded 7 toolchain inputs
+gambitffi: refreshed host/gambit/ffi/DIGESTS.txt
+```
+
+Verification must select that same manifest, print `OK` for all seven inputs,
+and finish the toolchain portion with `gambitffi: toolchain verified (7 inputs)`.
+No Linux manifest is supplied from macOS: until it is recorded on Linux,
+Linux verification intentionally fails for the missing platform file.
+Recording provenance does not qualify Linux execution, ABI or consumer parity.
+The native gates still need their independent Linux leg. In particular, the
+existing fixture recipes use Darwin `-dynamiclib` flags; this provenance-only
+change does not qualify those recipes on Linux.
+
+The helper's acceptance, deterministic-recording and negative checks can be run
+with `python3 host/gambit/ffi/test-toolchain.py` (set TMPDIR inside the checkout
+to retain the task's scratch-file boundary). Its Linux metadata/files are
+synthetic fixtures, not execution on a Linux host.
+
+`build/gambit-ffi/` contains output SHA256 records, compiler version, runtime
+hashes and retained generated C. Binary digests are recorded, not claimed
+identical across machines/linkers. No runtime sources or dependencies are
+modified or downloaded.
 
 ## Public path and limits
 

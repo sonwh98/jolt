@@ -1,3 +1,5 @@
+# joltffi toolchain manifest v1
+# platform: darwin-arm64
 83aed98b27c4574b767d2e47c7062f40375ea5365333abee2364fade6713f015  bin/gsi
 dc42d20172a613f65ad5736f8f7838746f04c00c3a6edace0cd0f3cd1374ab9b  bin/gsc
 c08a98167e924d6c183f6a2e7ef45ea78e89ad13fb41ba4883904cc1c5430659  bin/gambuild-C

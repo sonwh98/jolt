@@ -1,0 +1,295 @@
+gambitffi: platform=darwin-arm64 manifest=host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+gambitffi: toolchain verified (7 inputs)
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/toolchain.py: OK
+host/gambit/ffi/record-toolchain.sh: OK
+host/gambit/ffi/verify-toolchain.sh: OK
+host/gambit/ffi/verify-digests.sh: OK
+host/gambit/ffi/make-digests.sh: OK
+host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256: OK
+gambitffi: platform=darwin-arm64 manifest=host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+gambitffi: toolchain verified (7 inputs)
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/toolchain.py: OK
+host/gambit/ffi/record-toolchain.sh: OK
+host/gambit/ffi/verify-toolchain.sh: OK
+host/gambit/ffi/verify-digests.sh: OK
+host/gambit/ffi/make-digests.sh: OK
+host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256: OK
+cp host/gambit/ffi/joltffi-bridge.scm host/gambit/ffi/generated-shims.scm build/gambit-ffi/
+cd build/gambit-ffi && sh ../../host/gambit/ffi/watchdog.sh 120 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc -dynamic -keep-temp joltffi-bridge.scm
+gambitffi: platform=darwin-arm64 manifest=host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+gambitffi: toolchain verified (7 inputs)
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/toolchain.py: OK
+host/gambit/ffi/record-toolchain.sh: OK
+host/gambit/ffi/verify-toolchain.sh: OK
+host/gambit/ffi/verify-digests.sh: OK
+host/gambit/ffi/make-digests.sh: OK
+host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-fixture.dylib \
+	  host/gambit/ffi/joltffi-fixture.c
+gambitffi: platform=darwin-arm64 manifest=host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+gambitffi: toolchain verified (7 inputs)
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/toolchain.py: OK
+host/gambit/ffi/record-toolchain.sh: OK
+host/gambit/ffi/verify-toolchain.sh: OK
+host/gambit/ffi/verify-digests.sh: OK
+host/gambit/ffi/make-digests.sh: OK
+host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-fixture2.dylib \
+	  host/gambit/ffi/joltffi-fixture2.c
+gambitffi: platform=darwin-arm64 manifest=host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+gambitffi: toolchain verified (7 inputs)
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/toolchain.py: OK
+host/gambit/ffi/record-toolchain.sh: OK
+host/gambit/ffi/verify-toolchain.sh: OK
+host/gambit/ffi/verify-digests.sh: OK
+host/gambit/ffi/make-digests.sh: OK
+host/gambit/ffi/TOOLCHAIN.darwin-arm64.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-dep.dylib host/gambit/ffi/joltffi-dep.c
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-unloadable.dylib \
+	  host/gambit/ffi/joltffi-unloadable.c build/gambit-ffi/libjoltffi-dep.dylib
+rm build/gambit-ffi/libjoltffi-dep.dylib
+  ok     fixture library loaded through the adapter loader
+== scalar widths (exact, LP64 legs) ==
+  ok     sizeof int
+  ok     sizeof unsigned-int
+  ok     sizeof integer-8
+  ok     sizeof unsigned-8
+  ok     sizeof integer-16
+  ok     sizeof unsigned-16
+  ok     sizeof integer-32
+  ok     sizeof unsigned-32
+  ok     sizeof integer-64
+  ok     sizeof unsigned-64
+  ok     sizeof size_t
+  ok     sizeof ssize_t
+  ok     sizeof long
+  ok     sizeof unsigned-long
+  ok     sizeof iptr
+  ok     sizeof uptr
+  ok     sizeof double
+  ok     sizeof float
+  ok     sizeof void*
+  ok     sizeof unknown type refuses -> jolt.ffi: no size for foreign type jolt-agg on the gambit target
+== pointers + bulk byte copies ==
+  ok     alloc answers a nonzero address
+  ok     zero! + bytes-ref! all-zero
+  ok     bytes-set!/ref! round-trip (NUL + 0xff)
+  ok     typed set!/ref! unaligned i32
+  ok     typed set!/ref! u64 max
+  ok     typed set!/ref! i64 past double range
+  ok     typed set!/ref! double
+  ok     typed set!/ref! float (single precision)
+  ok     typed set!/ref! i8
+  ok     typed set!/ref! u16
+  ok     bytes-ref! past the bytevector refuses -> jolt.ffi: bulk copy count exceeds the bytevector
+== registered signatures (fixture targets through the tier) ==
+  ok     scoped resolution finds the fixture symbol
+  ok     s01 () -> int
+  ok     s01b () -> int32 matches its own probe
+  ok     s02 null buffer refusal
+  ok     s02 provenance text
+  ok     s03 cleanse zeroed the range
+  ok     s12b/s12 BE round-trip
+  ok     s13 error-text writer
+  ok     s19 answers a nonzero pointer
+  ok     s18 target records exactly one deallocation
+  ok     s20 errno-location answers a nonzero pointer
+  ok     s21 string result
+  ok     s21 NULL string result
+  ok     s22 varargs (2 fixed + 1 tail)
+  ok     by-name process-global resolution (strerror, s21)
+  ok     by-name errno accessor (__error, s20)
+  ok     sa-foreign-entry? fixture symbol
+  ok     sa-foreign-entry? libc symbol
+  ok     sa-foreign-entry? unknown symbol answers #f
+  ok     sa-foreign-entry-address matches the scoped resolution
+  ok     sa-foreign-entry-address raises for unknown
+  ok     s32 scoped variadic pointer tail
+== scalar argument/result conversions ==
+  ok     scalar integer-8
+  ok     scalar unsigned-8
+  ok     scalar integer-16
+  ok     scalar unsigned-16
+  ok     scalar integer-32
+  ok     scalar unsigned-32
+  ok     scalar integer-64
+  ok     scalar unsigned-64
+  ok     scalar size_t
+  ok     scalar ssize_t
+  ok     scalar float
+  ok     scalar double
+  ok     scalar void*
+  ok     production bridge has no errno instrumentation
+== generated capture shapes ==
+  ok     fixed capture (distinct from variadic s22b)
+  ok     s26b
+  ok     s26c
+  ok     s26d
+  ok     s26e
+  ok     s23
+  ok     s22b variadic tail
+  ok     s22c variadic pointer tail
+  ok     unregistered signature names its shape -> jolt.ffi: no gambit shim for signature (void* int) -> void* — unregistered shape on the gambit target (the stage-1 registry covers the non-blocking p1b-inv shapes only; see p1b-inv/shim-registry.edn)
+  ok     wrong variadic boundary refuses before dereference -> jolt.ffi: no gambit shim for signature (int int int) -> int — unregistered shape on the gambit target (the stage-1 registry covers the non-blocking p1b-inv shapes only; see p1b-inv/shim-registry.edn)
+  ok     string arguments refuse -> jolt.ffi: :string arguments are unsupported on the gambit target — no immobile allocation behind the stage-1 bridge (signature: u8* argument)
+
+gambitffi-abi: 78 check(s), 0 failure(s)
+gambitffi-abi: PASS
+boot: backend target -> :gambit
+  ok     (jolt.backend-scheme.session/target) => :gambit
+  ok     (:path (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-fixture.dylib")) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int)) => 42
+  ok     ((jolt.ffi/__cfn "joltffi_fx_eintr" [] :int32)) => 4
+  ok     (let [p (jolt.ffi/alloc 16)] (try (jolt.ffi/write p :uint64 18446744073709551615 1) (jolt.ffi/read p :uint64 1) (finally (jolt.ffi/free p)))) => 18446744073709551615N
+  ok     (let [p (jolt.ffi/string->ptr "é")] (try (jolt.ffi/ptr->string p) (finally (jolt.ffi/free p)))) => "é"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 1) => "joltffi-error-one"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 0) => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vfcntl" [:int :int :varargs :int] :int) 10 3 100) => 113
+  ok     (let [f (jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:capture-native-error true}) e (jolt.ffi/__cfn "joltffi_fx_eacces" [] :int)] (= (f -1 0 0) [-1 (e)])) => true
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_10" [:float] :float) (float 0.25)) => 0.25
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_1" [:bool] :bool) false) => false
+  ok     (try (jolt.ffi/__layout [:struct [[:x :int]]]) (catch UnsupportedOperationException e :layout-refused)) => :layout-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int :blocking)) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:blocking true :capture-native-error true}) -1 0 0) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try (jolt.ffi/__ccallable (fn [] 1) [] :int) (catch UnsupportedOperationException e :callable-refused)) => :callable-refused
+  ok     (try (jolt.ffi/__cfn "f" [[:by-value [:struct [[:x :int]]]]] :int) (catch UnsupportedOperationException e :aggregate-refused)) => :aggregate-refused
+  ok     (try (jolt.ffi/__cfn "f" [:int :&] :int) (catch UnsupportedOperationException e :runtime-tail-refused)) => :runtime-tail-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [:pointer :int] :pointer) 0 0) (catch Throwable e (boolean (re-find #"unregistered shape" (ex-message e))))) => true
+  ok     (let [p (jolt.ffi/alloc 8)] (try (jolt.ffi/write-bytes p "abc") (jolt.ffi/read-bytes p 3) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (:path (jolt.ffi/load-library {:darwin "build/gambit-ffi/libjoltffi-fixture.dylib"})) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     (try (jolt.ffi/load-library "/nonexistent/libjoltffi-missing.dylib") (catch Throwable e (boolean (re-find #"cannot load" (ex-message e))))) => true
+  ok     (try (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-unloadable.dylib") (catch Throwable e (boolean (re-find #"is there but did not load.*libjoltffi-dep" (ex-message e))))) => true
+  ok     (boolean (jolt.ffi/find-symbol "joltffi_fx_layout_version")) => true
+  ok     (jolt.ffi/find-symbol "joltffi_absent") => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vsetopt" [:pointer :int :varargs :pointer] :int) 0 7 0) => 7
+  ok     (= ((jolt.ffi/__cfn "joltffi_fx_success_errno" [:int :int :int] :int {:capture-native-error true}) 1 2 3) [6 7777]) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_absent" [] :int)) (catch Throwable e (boolean (re-find #"no entry" (ex-message e))))) => true
+  ok     (jolt.ffi/string->ptr nil) => 0
+  ok     (let [p (jolt.ffi/string->ptr "abc")] (try (jolt.ffi/ptr->string p 4) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (let [p (jolt.ffi/alloc 8)] (jolt.ffi/free p) (jolt.ffi/__size p)) => 0
+  ok     (let [p (jolt.ffi/alloc 1)] (try (jolt.ffi/write p :uint8 255) (= (jolt.ffi/read-bytes p 1) (str (char 255))) (finally (jolt.ffi/free p)))) => true
+  ok     (try (jolt.ffi/sizeof nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: foreign type must be a string, got nil"
+  ok     (try (jolt.ffi/write-bytes 0 nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: write-bytes value must be a string, got nil"
+  ok     (try (jolt.ffi/load-library [nil]) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: library candidate must be a string, got nil"
+  ok     (try (jolt.ffi/load-system-library nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: load-system-library name must be a string, got nil"
+  ok     (try (jolt.ffi/system-library-candidates nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: system-library-candidates name must be a string, got nil"
+  ok     (try (jolt.ffi/loaded? nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: loaded? name must be a string, got nil"
+  ok     (try (jolt.ffi/find-symbol nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: symbol must be a string, got nil"
+  ok     (try (jolt.ffi/find-symbol (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-fixture.dylib") nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: symbol must be a string, got nil"
+  ok     (try (jolt.ffi/defining-libraries nil) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: symbol must be a string, got nil"
+  ok     (try (jolt.ffi/load-failure-note [nil]) (catch IllegalArgumentException e (ex-message e))) => "jolt.ffi: load-failure-note candidate must be a string, got nil"
+  ok     (jolt.ffi/load-library nil) => nil
+  ok     (jolt.ffi/load-failure-note nil) => nil
+gambitffi-public: 44 check(s), 0 failure(s)
+gambitffi-public: PASS — :gambit compiler + native gsi
+cp host/gambit/ffi/joltffi-bridge.scm host/gambit/ffi/generated-shims.scm build/gambit-ffi/capture-test/
+cd build/gambit-ffi/capture-test && sh ../../../host/gambit/ffi/watchdog.sh 120 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc -dynamic -keep-temp -cc-options -DJOLTFFI_CAPTURE_TEST joltffi-bridge.scm
+  ok     post-capture clobber instrumentation enabled
+  ok     wrong-order control result
+  ok     wrong-order control sees intervening clobber
+  ok     real generated capture survives identical intervening clobber
+  ok     preserving success returns result
+  ok     preserving success captures preset errno unnormalized
+  ok     post-capture foreign clobber cannot change returned pair
+  ok     generated successful capture keeps target errno, without normalization
+  ok     1000 alternating invocation-local capture pairs
+
+gambitffi-errno-check: 9 check(s), 0 failure(s)
+gambitffi-errno-check: PASS
+== missing vs unloadable, reason preserved ==
+  ok     missing candidate raises
+  ok     unloadable candidate raises
+  ok     missing reason preserved (no such file)
+  ok     unloadable reason preserved (names the missing dependency)
+  ok     the two failures are distinguishable
+== scoped-before-global isolation ==
+  ok     fixture not loaded yet: scoped probe answers #f
+  ok     after a scoped load, the scoped probe answers
+  ok     a scoped library stays invisible to global resolution
+  ok     sa-foreign-entry? answers for the loaded fixture
+== repeat load is a no-op with the same handle ==
+  ok     repeat load registered exactly one handle
+== duplicate definers: two addresses, first declared resolves ==
+  ok     two distinct addresses across two declared libraries
+  ok     the addresses differ
+  ok     the first declared library wins resolution
+  ok     first-declared symbol behaves like fixture 1
+
+gambitffi-load-failure-smoke: 14 check(s), 0 failure(s)
+gambitffi-load-failure-smoke: PASS
+gambitffi: PASS — all stage-1 qualified-tier gates green

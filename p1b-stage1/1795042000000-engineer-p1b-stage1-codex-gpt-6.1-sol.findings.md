@@ -267,4 +267,12 @@ Compiler sources, seeds, bridge code, shape registry and pinned inputs did not
 change, so no seed remint or digest refresh was needed; the gate verified their
 consistency. All stage-1 refusal and platform limits remain unchanged. No push.
 
+## Platform-qualified provenance follow-up
+
+The P1b-linux provenance fix replaces the globally scoped toolchain manifest
+with host-selected `TOOLCHAIN.<platform>.sha256` files, preserving all seven
+Darwin pins. See `P1b-linux-provenance.findings.md` for the deterministic Linux
+record command, strict fail-closed checks, macOS regression and pending Linux
+qualification. Recording pins does not establish Linux ABI/consumer parity.
+
 DONE

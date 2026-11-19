@@ -2084,8 +2084,7 @@ GAMBIT-FFI-BUILD := build/gambit-ffi
 
 # the pinned inputs must match the recorded digests BEFORE anything compiles
 gambitffi-verify-digests:
-	@sh $(GAMBIT-FFI-DIR)/verify-toolchain.sh "$(GAMBIT_PREFIX)"
-	@sh $(GAMBIT-FFI-DIR)/verify-digests.sh
+	@sh $(GAMBIT-FFI-DIR)/verify-digests.sh "$(GAMBIT_PREFIX)"
 
 $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1: gambitffi-force $(GAMBIT-FFI-DIR)/joltffi-bridge.scm \
 		$(GAMBIT-FFI-DIR)/DIGESTS.txt $(GAMBIT-FFI-DIR)/generated-shims.scm

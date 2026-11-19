@@ -424,7 +424,9 @@
   (check "sa-frame-source-pair -> #f" (sa-frame-source-pair #f) #f)
   (check "sa-code-name -> #f" (sa-code-name #f) #f)
   (check "sa-thread-cpu-nanos -> 0" (sa-thread-cpu-nanos) 0)
-  (check "sa-baked-global -> #f always" (sa-baked-global 'jolt-baked-version-early) #f)
+  (check "sa-baked-global absent" (sa-baked-global 'jolt-baked-version-early) #f)
+  (check-true "sa-baked-global resolves a running global"
+              (eq? (sa-baked-global 'string-length) string-length))
   (check "sa-gc-collect executes real collector" (sa-gc-collect) 'ok)
   (let ((weak (let ((t (make-weak-eq-hashtable)))
                 (hashtable-set! t (vector 'garbage) 'value)

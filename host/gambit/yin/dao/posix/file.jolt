@@ -1,0 +1,25 @@
+(ns dao.posix.file
+  "Deferred capability refusal for durable storage in the local Gambit
+   profile. The in-memory store shares callers with the durable store."
+  (:require [jolt.scheme :as scheme]))
+
+(def ^:private refuse-blocking (scheme/proc "joltffi-public-blocking-raise"))
+
+(defn open [_path] (refuse-blocking))
+(defn length [_file] (refuse-blocking))
+(defn read-s32be [_file _offset] (refuse-blocking))
+(defn read-bytes [_file _offset _size] (refuse-blocking))
+(defn truncate! [_file _size] (refuse-blocking))
+(defn append-frame! [_file _frame] (refuse-blocking))
+(defn sync! [_file] (refuse-blocking))
+(defn close! [_file] (refuse-blocking))
+(defn classify [_path _follow?] (refuse-blocking))
+(defn fidentity [_fd] (refuse-blocking))
+(defn lock-file! [_path] (refuse-blocking))
+(defn realpath [_path] (refuse-blocking))
+(defn read-bounded [_path _limit] (refuse-blocking))
+(defn read-all [_path] (refuse-blocking))
+(defn write-new-synced! [_path _bytes] (refuse-blocking))
+(defn write-new-private! [_path _bytes] (refuse-blocking))
+(defn rename! [_from _to] (refuse-blocking))
+(defn sync-dir! [_path] (refuse-blocking))

@@ -63,13 +63,8 @@
 ;; a target that has no files.
 
 (define (gambit-read-all port)
-  (call-with-output-string
-    (lambda (out)
-      (let loop ()
-        (let ((c (read-char port)))
-          (unless (eof-object? c)
-            (write-char c out)
-            (loop)))))))
+  (let ((content (read-line port #f)))
+    (if (eof-object? content) "" content)))
 
 (def-var! "clojure.core" "slurp"
   (lambda (src . opts)
@@ -300,19 +295,35 @@
     (and (<= 0 i) (< i (u8vector-length a)) i)))
 
 (register-count-arm! u8vector? u8vector-length)
+(register-count-arm! jolt-obj-array? (lambda (a) (vector-length (jolt-obj-array-vec a))))
+
 (let ((previous-nth jolt-nth))
   (set! jolt-nth
     (case-lambda
       ((a i)
-       (if (u8vector? a)
-           (let ((at (gambit-byte-index a i)))
-             (if at (gambit-byte-ref a at) (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil)))
-           (previous-nth a i)))
+       (cond
+         ((u8vector? a)
+          (let ((at (gambit-byte-index a i)))
+            (if at (gambit-byte-ref a at) (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil))))
+         ((jolt-obj-array? a)
+          (let ((vec (jolt-obj-array-vec a))
+                (idx (jolt-int-cast i)))
+            (if (and (<= 0 idx) (< idx (vector-length vec)))
+                (vector-ref vec idx)
+                (throw-jvm 'ArrayIndexOutOfBoundsException (number->string idx)))))
+         (else (previous-nth a i))))
       ((a i default)
-       (if (u8vector? a)
-           (let ((at (gambit-byte-index a i)))
-             (if at (gambit-byte-ref a at) default))
-           (previous-nth a i default))))))
+       (cond
+         ((u8vector? a)
+          (let ((at (gambit-byte-index a i)))
+            (if at (gambit-byte-ref a at) default)))
+         ((jolt-obj-array? a)
+          (let ((vec (jolt-obj-array-vec a))
+                (idx (jolt-int-cast i)))
+            (if (and (<= 0 idx) (< idx (vector-length vec)))
+                (vector-ref vec idx)
+                default)))
+         (else (previous-nth a i default)))))))
 (def-var! "clojure.core" "nth" jolt-nth)
 
 (define (gambit-byte-seq a i)
@@ -332,26 +343,75 @@
               ((= i end) acc)
               (else (loop (+ i 1) (jolt-invoke2 f acc (gambit-byte-ref a i)))))))))
 (register-seq-arm! u8vector? (lambda (a) (gambit-byte-seq a 0)))
+(register-seq-arm! jolt-obj-array?
+  (lambda (a)
+    (let ((lst (vector->list (jolt-obj-array-vec a))))
+      (if (null? lst) jolt-nil (list->cseq lst)))))
 
 (define (jolt-aset3 a i v)
-  (if (u8vector? a)
-      (let ((at (gambit-byte-index a i)) (octet (gambit-byte-octet v)))
-        (unless at (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil))
-        (u8vector-set! a at octet)
-        (gambit-signed-byte octet))
-      (begin (jolt-ref-put! a i v) v)))
-;; The numeric pass also uses these two heads for inferred or hinted byte arrays.
+  (cond
+    ((u8vector? a)
+     (let ((at (gambit-byte-index a i)) (octet (gambit-byte-octet v)))
+       (unless at (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil))
+       (u8vector-set! a at octet)
+       (gambit-signed-byte octet)))
+    ((jolt-obj-array? a)
+     (let ((vec (jolt-obj-array-vec a))
+           (idx (jnum->exact i)))
+       (unless (and (<= 0 idx) (< idx (vector-length vec)))
+         (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil))
+       (vector-set! vec idx v)
+       v))
+    (else
+     (begin (jolt-ref-put! a i v) v))))
+
+;; The numeric pass also uses these heads for inferred or hinted arrays.
 (define (jolt-vaget a i) (jolt-nth a i))
+(define (jolt-vaset a i v) (jolt-aset3 a i v))
 (define (jolt-baset a i v) (jolt-aset3 a i v))
 (def-var! "jolt.host" "ref-put!"
   (lambda (a i v)
-    (if (u8vector? a)
+    (if (jolt-array? a)
         (begin (jolt-aset3 a i v) a)
         (jolt-ref-put! a i v))))
 
+(define (gambit-alength a)
+  (cond
+    ((jolt-nil? a) (throw-jvm 'NullPointerException "null"))
+    ((jolt-obj-array? a) (vector-length (jolt-obj-array-vec a)))
+    ((u8vector? a) (u8vector-length a))
+    (else (jolt-count a))))
+(set! jolt-alength gambit-alength)
+(set! jolt-valength gambit-alength)
+(def-var! "clojure.core" "alength" jolt-alength)
+
+(define (gambit-object-array size-or-items)
+  (cond
+    ((or (number? size-or-items) (jfloat? size-or-items))
+     (let ((size (jolt-int-cast size-or-items)))
+       (when (< size 0) (throw-jvm 'NegativeArraySizeException (number->string size)))
+       (make-jolt-obj-array (make-vector size jolt-nil))))
+    ((jolt-obj-array? size-or-items)
+     (make-jolt-obj-array (vector-copy (jolt-obj-array-vec size-or-items))))
+    (else
+     (make-jolt-obj-array (list->vector (seq->list (jolt-seq size-or-items)))))))
+
+(define (gambit-aclone a)
+  (cond
+    ((jolt-obj-array? a) (make-jolt-obj-array (vector-copy (jolt-obj-array-vec a))))
+    ((u8vector? a) (u8vector-copy a))
+    (else (throw-jvm 'IllegalArgumentException "aclone: not an array"))))
+
+(def-var! "clojure.core" "object-array" gambit-object-array)
+(def-var! "clojure.core" "aclone" gambit-aclone)
+(def-var! "clojure.core" "to-array"
+  (lambda (coll) (gambit-object-array (jolt-seq coll))))
 (def-var! "clojure.core" "byte-array" gambit-byte-array)
 (def-var! "clojure.core" "bytes" (lambda (x) (if (u8vector? x) x (gambit-byte-array x))))
 (def-var! "clojure.core" "bytes?" u8vector?)
+(set! jolt-array? (lambda (x) (or (u8vector? x) (jolt-obj-array? x))))
+(set! jolt-array-kind
+  (lambda (x) (cond ((u8vector? x) 'byte) ((jolt-obj-array? x) 'object) (else #f))))
 (def-var! "clojure.core" "array?" jolt-array?)
 
 ;; ---- queries answer, they do not raise -------------------------------------
@@ -429,9 +489,9 @@
 ;; its own (import …) forms intern class tokens through class-model.ss.)
 (define (reader-jhost? x) #f)
 ;; jhost-seqable-shim? is java/jutil-colls.ss's, which this boot includes.
-;; No array can be built here (every constructor is degraded below), so nothing
-;; is one; the host callables are multimethods, since no promise exists either.
-(def-var! "jolt.host" "array-value?" (lambda (x) jolt-nil))
+;; The compiler uses this predicate when dispatching array operations.
+(def-var! "jolt.host" "array-value?"
+  (lambda (x) (if (jolt-array? x) #t jolt-nil)))
 ;; concurrency.ss is not in this boot, so there are no agent threads to mark
 (def-var! "jolt.host" "agent-threads-daemon!" (lambda () jolt-nil))
 (def-var! "jolt.host" "callable-host?"
@@ -503,10 +563,10 @@
 (def-var! "jolt.host" "fn-form-parse"
   (gambit-unsupported-fn "fn-form-parse" "there is no fn-form registry on this target"))
 
-(degrade-core-vars! '("aclone" "into-array" "to-array" "make-array" "object-array" "int-array"
+(degrade-core-vars! '("into-array" "make-array" "int-array"
                       "long-array" "double-array" "float-array" "boolean-array"
                       "char-array" "short-array")
-                    "arrays are not wired up on this target (java/natives-array.ss)")
+                    "typed and multidimensional arrays are not wired up on this target (java/natives-array.ss)")
 
 (degrade-core-vars! '("future-call" "future-cancel" "send-via" "agent-errors"
                       "clear-agent-errors" "await-for" "error-handler" "error-mode"

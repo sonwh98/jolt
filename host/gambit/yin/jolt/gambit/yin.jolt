@@ -1,0 +1,41 @@
+(ns jolt.gambit.yin
+  "The local-memory composition for the Gambit terminal."
+  (:require [dao.jing :as jing]
+            [jolt.ffi :as ffi]
+            [yin.repl.main :as main]
+            [yin.repl.store :as store]
+            [yin.vm :as vm]
+            [yin.vm.module :as module]))
+
+(defn- activate-ffi [registry]
+  (module/register-host-module
+    registry 'jolt.ffi
+    {'sizeof ffi/sizeof}
+    {'sizeof (vm/primitive-profile 'sizeof :pure [1] #{} :none)}))
+
+(defn- materialize-sha256 [value]
+  (jing/materialize! (store/open :mem) value {:algorithm :sha256}))
+
+(defn- activate-store [registry]
+  (module/register-host-module
+    registry 'dao.jing.mem
+    {'materialize-sha256 materialize-sha256}
+    {'materialize-sha256
+     (vm/primitive-profile 'materialize-sha256 :pure [1] #{} :none)}))
+
+(defn- open-memory [spec _opts]
+  {:index-store (store/open spec)
+   :engine-inputs {:host-modules {'jolt.ffi activate-ffi
+                                  'dao.jing.mem activate-store}}})
+
+(defn- parse-store [arg]
+  (let [spec (store/parse-arg arg)]
+    (when-not (= spec :mem)
+      (throw (ex-info "The local Gambit session supports only --index-store mem"
+                      {:store spec})))
+    spec))
+
+(defn -main [& args]
+  (main/main! args {:composition-spec? #{:mem}
+                    :parse-store-arg parse-store
+                    :open open-memory}))

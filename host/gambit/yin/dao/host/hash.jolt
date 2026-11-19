@@ -1,0 +1,23 @@
+(ns dao.host.hash
+  "Gambit supplies BLAKE3 in process for Yin's content addresses.
+   SHA-256 still uses the blocking FFI boundary."
+  (:require [dao.host.bytes :as bytes]
+            [jolt.scheme :as scheme]))
+
+(def ^:private refuse-blocking (scheme/proc "joltffi-public-blocking-raise"))
+
+(def ^:private blake3 (scheme/proc "gambit-yin-blake3"))
+
+(defn- check-bytes! [entry bs]
+  (when-not (bytes/bytes? bs)
+    (throw (ex-info (str "dao.host refused: " entry " unsupported-value (expected host bytes)")
+                    {:dao.host/refusal :unsupported-value
+                     :dao.host/entry entry}))))
+
+(defn blake3-bytes [bs]
+  (check-bytes! 'blake3-bytes bs)
+  (blake3 bs))
+
+(defn sha256-bytes [bs]
+  (check-bytes! 'sha256-bytes bs)
+  (refuse-blocking))

@@ -1,0 +1,18 @@
+(ns dao.stream.waitset.driver
+  "The local Gambit owner waits on the Scheme input port or its cadence timer."
+  (:require [jolt.scheme :as scheme]))
+
+(def ^:private wait-input (scheme/proc "gambit-yin-wait-input!"))
+
+(def make-wake (scheme/proc "gambit-yin-wake"))
+(def close! (scheme/proc "gambit-yin-close-wake!"))
+(defn nudge! [_wake] nil)
+
+(defn sleep! [wake ms]
+  (wait-input wake ms nil))
+
+(defn sleep-fds! [wake ms _pump on-line]
+  (wait-input wake ms on-line))
+
+(defn sleep-input! [wake ms on-line]
+  (sleep-fds! wake ms nil on-line))

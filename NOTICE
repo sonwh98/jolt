@@ -162,3 +162,12 @@ Racket treelist
   Copyright (c) PLT Design Inc. and contributors
   MIT License: licenses/MIT-racket.txt
   The RRB vector in host/chez/collections.ss.
+
+
+Additional data in the Gambit runtime
+-------------------------------------
+
+Unicode 16.0.0 canonical normalization data
+  https://www.unicode.org/versions/Unicode16.0.0/
+  Generated from Python's Unicode Character Database.
+  Unicode License V3: licenses/Unicode-3.0.txt

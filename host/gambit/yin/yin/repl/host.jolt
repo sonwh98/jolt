@@ -1,0 +1,14 @@
+(ns yin.repl.host
+  "Host adapter for a local Gambit terminal session.")
+
+(defn- unavailable [& _]
+  (throw (ex-info "WebSocket transport is unavailable in the local Gambit session"
+                  {:kind :unsupported-host})))
+
+(defn websocket
+  ([] (websocket nil))
+  ([_opts]
+   {:connect! unavailable
+    :bind! unavailable
+    :unbind! unavailable
+    :close-host! (fn [] nil)}))

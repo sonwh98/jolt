@@ -29,15 +29,7 @@
 
 (define allowlist-path "host/gambit/unbound-vars-allowlist.txt")
 
-(define (unbound-var-names)
-  (let loop ((cells (vector->list (var-table-cells))) (acc '()))
-    (if (null? cells)
-        (list-sort string<? acc)
-        (let ((c (car cells)))
-          (loop (cdr cells)
-                (if (jolt-var-unbound? (var-cell-root c))
-                    (cons (string-append (var-cell-ns c) "/" (var-cell-name c)) acc)
-                    acc))))))
+(##include "unbound-vars-lib.ss")
 
 (define (read-lines path)
   (if (file-exists? path)

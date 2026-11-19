@@ -845,9 +845,20 @@
 ;; jolt-compile-eval-form) whose values are never #f, so #f is a safe absent
 ;; sentinel. Contract: reflect on the running top level by symbol. Degradation:
 ;; #f always — the gambit target has no baked-image globals; all three callers
-;; tolerate absent (documented degradation).
+;; tolerate absent. jolt.scheme/proc also uses this hook for loaded source.
 (define (sa-baked-global sym)
-  #f)
+  (and (##global-var? sym)
+       (let ((value (##global-var-ref (##make-global-var sym))))
+         (and (not (##unbound? value)) value))))
+
+(define logand bitwise-and)
+(define logor bitwise-ior)
+(define logxor bitwise-xor)
+(define ash arithmetic-shift)
+(define bitwise-length integer-length)
+(define scheme-version system-version-string)
+
+(##include "unicode-nfc.ss")
 
 ;; (sa-compile-file src so profile) -> void
 ;; Compile the Scheme source file SRC to the native object SO under PROFILE.
@@ -1105,14 +1116,32 @@
 ;; (sa-endian: little on every supported platform). Nothing on this target
 ;; calls them yet (typed arrays and the ffi tier are Chez-only); they keep the
 ;; contract whole for the day something does.
-(define (sa-g-bv-uint bv at width)
-  (let loop ((k (- width 1)) (acc 0))
-    (if (< k 0) acc (loop (- k 1) (+ (* acc 256) (u8vector-ref bv (+ at k)))))))
-(define (sa-g-bv-uint-set! bv at width n)
-  (let loop ((k 0) (n n))
-    (when (< k width)
-      (u8vector-set! bv (+ at k) (bitwise-and n 255))
-      (loop (+ k 1) (arithmetic-shift n -8)))))
+(define (sa-g-bv-uint bv at width . order)
+  (let ((big? (equal? order '(big))))
+    (let loop ((k 0) (acc 0))
+      (if (= k width)
+          acc
+          (let ((i (if big? k (- width k 1))))
+            (loop (+ k 1) (+ (* acc 256) (u8vector-ref bv (+ at i)))))))))
+(define (sa-g-bv-uint-set! bv at width n . order)
+  (let ((big? (equal? order '(big))))
+    (let loop ((k 0) (n n))
+      (when (< k width)
+        (let ((i (if big? (- width k 1) k)))
+          (u8vector-set! bv (+ at i) (bitwise-and n 255))
+          (loop (+ k 1) (arithmetic-shift n -8)))))))
+
+;; Raw Scheme escape-hatch clients pass the R6RS explicit byte order.
+(define (bytevector-ieee-double-set! bv at x order)
+  (sa-g-bv-uint-set! bv at 8 (##flonum->ieee754-64 x) order))
+(define (bytevector-ieee-double-ref bv at order)
+  (##ieee754-64->flonum (sa-g-bv-uint bv at 8 order)))
+(define (bytevector-u64-ref bv at order)
+  (sa-g-bv-uint bv at 8 order))
+(define (bytevector-u32-set! bv at n order)
+  (unless (and (exact-integer? n) (<= 0 n #xffffffff))
+    (error "bytevector-u32-set!: value outside unsigned 32-bit range" n))
+  (sa-g-bv-uint-set! bv at 4 n order))
 (define-syntax sa-uflvector-ref (syntax-rules () ((_ v i) (f64vector-ref v i))))
 (define-syntax sa-uflvector-set! (syntax-rules () ((_ v i x) (f64vector-set! v i x))))
 (define-syntax sa-ubytevector-ieee-single-native-ref

@@ -1,0 +1,18 @@
+(ns yang.antlr.cst
+  "The C++ parser requires a blocking foreign call on Jolt. The standard
+   frontend catalog leaves that parser out of a Gambit session.")
+
+(defn available? [] false)
+
+(defn- unavailable []
+  (throw (ex-info "unavailable-parser: Gambit has no qualified blocking FFI"
+                  {:diagnostic :unavailable-parser})))
+
+(defn rule-names [] (unavailable))
+(defn export-records [_worker _source] (unavailable))
+(defn make-worker [_profile] (unavailable))
+(defn close-worker [_worker] (unavailable))
+(defn first-failure [_worker _source] (unavailable))
+(defn parse-transform [_worker] (unavailable))
+(defn parse-unit [_worker _unit _source] (unavailable))
+(defn utf8-bytes [_s] (unavailable))

@@ -4,6 +4,54 @@
 (##include "boot.ss")
 (##include "host-apply.ss")
 (##include "source-loader.ss")
+(##include "unbound-vars-lib.ss")
+(##include "yin/blake3.ss")
+
+(define (gambit-yin-random-bytes size)
+  (let* ((n (jnum->exact size))
+         (out (make-u8vector n)))
+    (call-with-input-file "/dev/urandom"
+      (lambda (port)
+        (unless (= (read-subu8vector out 0 n port) n)
+          (error "Gambit could not read OS entropy"))))
+    out))
+
+;; A single outstanding request keeps the input reader from filling the
+;; mailbox. Only Yin's owner interprets submitted lines.
+(define (gambit-yin-wake)
+  (vector
+    (thread-start!
+      (make-thread
+        (lambda ()
+          (let loop ()
+            (let* ((owner (thread-receive))
+                   (line (read-line)))
+              (thread-send owner (if (eof-object? line) jolt-nil line))
+              (unless (eof-object? line) (loop)))))))
+    #f))
+
+(define (gambit-yin-close-wake! wake)
+  (thread-terminate! (vector-ref wake 0))
+  jolt-nil)
+
+(define (gambit-yin-wait-input! wake ms on-line)
+  (let ((seconds (/ ms 1000.0)))
+    (if (jolt-nil? on-line)
+        (thread-sleep! seconds)
+        (begin
+          (unless (vector-ref wake 1)
+            (thread-send (vector-ref wake 0) (current-thread))
+            (vector-set! wake 1 #t))
+          (let ((line (thread-receive seconds #f)))
+            (when line
+              (vector-set! wake 1 #f)
+              (jolt-invoke on-line line))))))
+  jolt-nil)
+
+(set! jolt-random-bytes gambit-yin-random-bytes)
+(register-class-statics! "System"
+  (list (cons "currentTimeMillis" gambit-epoch-ms)
+        (cons "exit" (lambda (status) (exit (jnum->exact status))))))
 
 (let ((args (cdr (command-line))))
   (unless (pair? args)
@@ -27,15 +75,29 @@
         (joltffi-ensure-bridge! 'yin.repl)
         (let ((load-ns
                 (gambit-install-source-loader!
-                  (list (list (path-expand "src/jolt" root) ".jolt" ".cljc" ".clj")
+                  (list (list (path-expand "host/gambit/yin" jolt-root) ".jolt")
+                        (list (path-expand "src/jolt" root) ".jolt" ".cljc" ".clj")
                         (list (path-expand "src/cljc" root) ".cljc" ".clj")
                         (list (path-expand "src/clj" root) ".clj")
                         (list (path-expand "stdlib" jolt-root) ".jolt" ".cljc" ".clj")
                         (list (path-expand "jolt-core" jolt-root) ".cljc" ".clj"))
-                  '("clojure.core"))))
+                  '("clojure.core" "jolt.ffi"))))
           (parameterize ((current-directory root))
-            (load-ns "yin.repl.main" #f)
-            (let ((main (var-deref "yin.repl.main" "-main")))
+            (let* ((audit? (getenv "JOLT_YIN_AUDIT" #f))
+                   (before (and audit? (unbound-var-names))))
+              (dynamic-wind
+                (lambda () #f)
+                (lambda () (load-ns "jolt.gambit.yin" #f))
+                (lambda ()
+                  (when audit?
+                    (let ((added (filter (lambda (name) (not (member name before)))
+                                         (unbound-var-names))))
+                      (fprintf (current-error-port) "yin source var audit: ~a newly unbound\n"
+                               (length added))
+                      (for-each (lambda (name) (fprintf (current-error-port) "  ~a\n" name))
+                                added))))))
+            (def-var! "yin.repl" "host-text" (string-append "Host: jolt / Gambit " (system-version-string)))
+            (let ((main (var-deref "jolt.gambit.yin" "-main")))
               (unless (procedure? main)
-                (error "yin.repl.main/-main did not load"))
+                (error "jolt.gambit.yin/-main did not load"))
               (apply jolt-invoke main (cdr args)))))))))

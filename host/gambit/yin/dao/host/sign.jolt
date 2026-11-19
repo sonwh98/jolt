@@ -1,0 +1,8 @@
+(ns dao.host.sign
+  (:require [jolt.scheme :as scheme]))
+
+(def ^:private refuse-blocking (scheme/proc "joltffi-public-blocking-raise"))
+
+(defn keypair-from-seed [_seed] (refuse-blocking))
+(defn sign [_seed _message] (refuse-blocking))
+(defn verify [_key _message _signature] (refuse-blocking))

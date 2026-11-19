@@ -1,0 +1,4 @@
+(ns dao.posix.random
+  (:require [jolt.scheme :as scheme]))
+
+(def rand-bytes (scheme/proc "gambit-yin-random-bytes"))

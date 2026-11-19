@@ -15,4 +15,216 @@
   :label "overlap copies as memmove and refusal leaves the target intact"
   :expr "(let [b (dao.host.bytes/from-vector [0 1 128 255]) snapshot #(dao.host.bytes/to-vector b)] [(dao.host.bytes/copy! b 0 b 1 3) (snapshot) (try (dao.host.bytes/copy! b 0 b 2 3) (catch Exception e (:dao.host/refusal (ex-data e)))) (try (dao.host.bytes/set! b 0 256) (catch Exception e (:dao.host/refusal (ex-data e)))) (snapshot) (dao.host.bytes/copy! b 1 b 0 3) (snapshot)])"
   :expected "[nil [0 0 1 128] :out-of-range :out-of-range [0 0 1 128] nil [0 1 128 128]]"}
+ {:suite :core-arrays
+  :label "object-array, aclone, and aset/aget vector support"
+  :expr "(let [a (object-array 3)] (aset a 0 \"x\") (aset a 1 42) (let [c (aclone a)] (aset c 1 99) [(alength a) (aget a 0) (aget a 1) (aget a 2) (alength c) (aget c 1) (vec (seq a))]))"
+  :expected "[3 \"x\" 42 nil 3 99 [\"x\" 42 nil]]"}
+ {:suite :core-prims
+  :label "string-length"
+  :expr "(jolt.scheme/call \"string-length\" \"a😀\")"
+  :expected "2"}
+ {:suite :core-prims
+  :label "string-ref"
+  :expr "(jolt.scheme/call \"string-ref\" \"a😀\" 1)"
+  :expected "\\😀"}
+ {:suite :core-prims
+  :label "char->integer"
+  :expr "(jolt.scheme/call \"char->integer\" \\A)"
+  :expected "65"}
+ {:suite :core-prims
+  :label "integer->char"
+  :expr "(jolt.scheme/call \"integer->char\" 65)"
+  :expected "\\A"}
+ {:suite :core-prims
+  :label "string->utf8"
+  :expr "(mapv #(bit-and % 255) (jolt.scheme/call \"string->utf8\" \"é😀\"))"
+  :expected "[195 169 240 159 152 128]"}
+ {:suite :core-prims
+  :label "bytevector-length"
+  :expr "(jolt.scheme/call \"bytevector-length\" (byte-array 6))"
+  :expected "6"}
+ {:suite :core-prims
+  :label "bytevector-u8-ref"
+  :expr "(jolt.scheme/call \"bytevector-u8-ref\" (byte-array [255]) 0)"
+  :expected "255"}
+ {:suite :core-prims
+  :label "string-normalize-nfc"
+  :expr "(jolt.scheme/call \"string-normalize-nfc\" \"Café 각 Å̧ ①\")"
+  :expected "\"Café 각 Å̧ ①\""}
+ {:suite :core-prims
+  :label "/"
+  :expr "(jolt.scheme/call \"/\" 3 4)"
+  :expected "3/4"}
+ {:suite :core-prims
+  :label "numerator"
+  :expr "(jolt.scheme/call \"numerator\" 3/4)"
+  :expected "3"}
+ {:suite :core-prims
+  :label "denominator"
+  :expr "(jolt.scheme/call \"denominator\" 3/4)"
+  :expected "4"}
+ {:suite :core-prims
+  :label "number?"
+  :expr "(jolt.scheme/call \"number?\" 3/4)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "exact?"
+  :expr "(jolt.scheme/call \"exact?\" 3/4)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "integer?"
+  :expr "(jolt.scheme/call \"integer?\" 3/4)"
+  :expected "false"}
+ {:suite :core-prims
+  :label "flonum?"
+  :expr "(jolt.scheme/call \"flonum?\" 1.5)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "inexact"
+  :expr "(jolt.scheme/call \"inexact\" 3/4)"
+  :expected "0.75"}
+ {:suite :core-prims
+  :label "exact"
+  :expr "(jolt.scheme/call \"exact\" 1.5)"
+  :expected "3/2"}
+ {:suite :core-prims
+  :label "flnan?"
+  :expr "(jolt.scheme/call \"flnan?\" ##NaN)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "flinfinite?"
+  :expr "(jolt.scheme/call \"flinfinite?\" ##Inf)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "flfinite?"
+  :expr "(jolt.scheme/call \"flfinite?\" ##Inf)"
+  :expected "false"}
+ {:suite :core-prims
+  :label "flinteger?"
+  :expr "(jolt.scheme/call \"flinteger?\" -12.0)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "fltruncate"
+  :expr "(jolt.scheme/call \"fltruncate\" -2.9)"
+  :expected "-2.0"}
+ {:suite :core-prims
+  :label "+"
+  :expr "(jolt.scheme/call \"+\" 10 3)"
+  :expected "13"}
+ {:suite :core-prims
+  :label "-"
+  :expr "(jolt.scheme/call \"-\" 10 3)"
+  :expected "7"}
+ {:suite :core-prims
+  :label "*"
+  :expr "(jolt.scheme/call \"*\" 10 3)"
+  :expected "30"}
+ {:suite :core-prims
+  :label "<"
+  :expr "(jolt.scheme/call \"<\" 10 3)"
+  :expected "false"}
+ {:suite :core-prims
+  :label "<="
+  :expr "(jolt.scheme/call \"<=\" 3 3)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "="
+  :expr "(jolt.scheme/call \"=\" 3 3)"
+  :expected "true"}
+ {:suite :core-prims
+  :label "quotient"
+  :expr "(jolt.scheme/call \"quotient\" -17 5)"
+  :expected "-3"}
+ {:suite :core-prims
+  :label "remainder"
+  :expr "(jolt.scheme/call \"remainder\" -17 5)"
+  :expected "-2"}
+ {:suite :core-prims
+  :label "abs"
+  :expr "(jolt.scheme/call \"abs\" -7)"
+  :expected "7"}
+ {:suite :core-prims
+  :label "logand"
+  :expr "(jolt.scheme/call \"logand\" 15 6)"
+  :expected "6"}
+ {:suite :core-prims
+  :label "logor"
+  :expr "(jolt.scheme/call \"logor\" 8 3)"
+  :expected "11"}
+ {:suite :core-prims
+  :label "logxor"
+  :expr "(jolt.scheme/call \"logxor\" -1 255)"
+  :expected "-256"}
+ {:suite :core-prims
+  :label "ash"
+  :expr "(jolt.scheme/call \"ash\" -17 -2)"
+  :expected "-5"}
+ {:suite :core-prims
+  :label "bitwise-length"
+  :expr "(jolt.scheme/call \"bitwise-length\" -256)"
+  :expected "8"}
+ {:suite :core-prims
+  :label "number->string"
+  :expr "(jolt.scheme/call \"number->string\" 255 16)"
+  :expected "\"ff\""}
+ {:suite :core-prims
+  :label "string->number"
+  :expr "(jolt.scheme/call \"string->number\" \"ff\" 16)"
+  :expected "255"}
+ {:suite :core-prims
+  :label "string-downcase"
+  :expr "(jolt.scheme/call \"string-downcase\" \"ÄPFEL\")"
+  :expected "\"äpfel\""}
+ {:suite :core-prims
+  :label "gcd"
+  :expr "(jolt.scheme/call \"gcd\" 54 24)"
+  :expected "6"}
+ {:suite :core-prims
+  :label "scheme-version"
+  :expr "(boolean (re-find #\"^v[0-9]\" (jolt.scheme/call \"scheme-version\")))"
+  :expected "true"}
+ {:suite :core-prims
+  :label "unknown top-level Scheme binding"
+  :expr "(try (jolt.scheme/proc \"p1c-missing-global\") (catch Exception e (ex-message e)))"
+  :expected "\"no top-level Scheme binding: p1c-missing-global\""}
+ {:suite :core-prims
+  :label "Scheme eval with bracket bindings and big-endian double writer and u64 reader"
+  :expr "(jolt.scheme/eval-string \"(let ([bv (make-bytevector 8)]) (bytevector-ieee-double-set! bv 0 -1.5 (endianness big)) (bytevector-u64-ref bv 0 (endianness big)))\")"
+  :expected "13832806255468478464N"}
+ {:suite :core-prims
+  :label "Scheme eval with big-endian u32 writer and double reader"
+  :expr "(jolt.scheme/eval-string \"(let ([bv (make-bytevector 8)]) (bytevector-u32-set! bv 0 #xbff80000 (endianness big)) (bytevector-u32-set! bv 4 0 (endianness big)) (bytevector-ieee-double-ref bv 0 (endianness big)))\")"
+  :expected "-1.5"}
+ {:suite :core-arrays
+  :label "System.arraycopy preserves overlapping values"
+  :expr "(let [a (to-array [:a :b :c :d])] [(System/arraycopy a 0 a 1 3) (vec a)])"
+  :expected "[nil [:a :a :b :c]]"}
+ {:suite :core-arrays
+  :label "Arrays.sort is a stable in-place sort"
+  :expr "(let [a (object-array [[2 :a] [1 :b] [2 :c] [1 :d]])] [(java.util.Arrays/sort a (fn [x y] (compare (first x) (first y)))) (vec a)])"
+  :expected "[nil [[1 :b] [1 :d] [2 :a] [2 :c]]]"}
+ {:suite :yin-blake3
+  :label "BLAKE3 known answer for 0 bytes"
+  :expr "(let [b (byte-array (map #(unchecked-byte (mod % 251)) (range 0)))] (apply str (map (fn [x] (let [v (bit-and x 255) h \"0123456789abcdef\"] (str (nth h (quot v 16)) (nth h (mod v 16))))) (jolt.scheme/call \"gambit-yin-blake3\" b))))"
+  :expected "\"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\""}
+ {:suite :yin-blake3
+  :label "BLAKE3 known answer for 64 bytes"
+  :expr "(let [b (byte-array (map #(unchecked-byte (mod % 251)) (range 64)))] (apply str (map (fn [x] (let [v (bit-and x 255) h \"0123456789abcdef\"] (str (nth h (quot v 16)) (nth h (mod v 16))))) (jolt.scheme/call \"gambit-yin-blake3\" b))))"
+  :expected "\"4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98\""}
+ {:suite :yin-blake3
+  :label "BLAKE3 known answer for 1024 bytes"
+  :expr "(let [b (byte-array (map #(unchecked-byte (mod % 251)) (range 1024)))] (apply str (map (fn [x] (let [v (bit-and x 255) h \"0123456789abcdef\"] (str (nth h (quot v 16)) (nth h (mod v 16))))) (jolt.scheme/call \"gambit-yin-blake3\" b))))"
+  :expected "\"42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7\""}
+ {:suite :yin-blake3
+  :label "BLAKE3 known answer for 1025 bytes"
+  :expr "(let [b (byte-array (map #(unchecked-byte (mod % 251)) (range 1025)))] (apply str (map (fn [x] (let [v (bit-and x 255) h \"0123456789abcdef\"] (str (nth h (quot v 16)) (nth h (mod v 16))))) (jolt.scheme/call \"gambit-yin-blake3\" b))))"
+  :expected "\"d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444\""}
+ {:suite :yin-blake3
+  :label "BLAKE3 known answer for 16384 bytes"
+  :expr "(let [b (byte-array (map #(unchecked-byte (mod % 251)) (range 16384)))] (apply str (map (fn [x] (let [v (bit-and x 255) h \"0123456789abcdef\"] (str (nth h (quot v 16)) (nth h (mod v 16))))) (jolt.scheme/call \"gambit-yin-blake3\" b))))"
+  :expected "\"f875d6646de28985646f34ee13be9a576fd515f76b5b0a26bb324735041ddde4\""}
+ {:suite :dao-host-hash
+  :label "SHA-256 refuses only on invocation and the next expression runs"
+  :expr "(let [refused (try (dao.host.hash/sha256-bytes (byte-array [1 2 3])) (catch Throwable e (boolean (re-find #\"blocking ffi is unsupported on the gambit target\" (ex-message e)))))] [refused (+ 21 22)])"
+  :expected "[true 43]"}
 ]

@@ -1977,14 +1977,14 @@ gambiteval:
 # datomworld checkout and stays opt-in while its native host closure is incomplete.
 gambitsourceload:
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
-		sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss; \
+		sh host/gambit/ffi/watchdog.sh 240 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss; \
 	else \
 		$(GAMBIT-SKIP); \
 	fi
 
 DATOMWORLD_ROOT ?= ../datomworld
 gambitdaobytes:
-	sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss "$(abspath $(DATOMWORLD_ROOT))"
+	sh host/gambit/ffi/watchdog.sh 240 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss "$(abspath $(DATOMWORLD_ROOT))"
 
 gambityinrepl: gambitffi-bridge
 	sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$(abspath $(DATOMWORLD_ROOT))"

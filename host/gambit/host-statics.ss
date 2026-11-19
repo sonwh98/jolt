@@ -24,6 +24,7 @@
 ;; mutable state. A Class object is a jhost tagged "class" (class-model.ss), a
 ;; StringBuilder one tagged "string-builder" (string-builder.ss).
 (define-record-type jhost (fields tag (mutable state)) (nongenerative gambit-jhost-v1))
+(define-record-type (jolt-obj-array make-jolt-obj-array jolt-obj-array?) (fields vec))
 
 ;; A question a host object's tag alone answers, remembered by the tag object —
 ;; the same helper as host/chez/java/host-static.ss (which explains it); the
@@ -262,4 +263,39 @@
           ((string=? k "java.io.tmpdir") (or (getenv "TMPDIR" #f) "/tmp"))
           ((pair? dflt) (car dflt))
           (else jolt-nil))))
-(register-class-statics! "System" (list (cons "getProperty" gambit-get-property)))
+(define (gambit-arraycopy src src-pos dst dst-pos len)
+  (define (check-bounds from-size to-size sp dp n)
+    (unless (and (<= 0 sp (+ sp n) from-size) (<= 0 dp (+ dp n) to-size))
+      (throw-jvm 'ArrayIndexOutOfBoundsException "arraycopy: range outside array")))
+  (when (or (jolt-nil? src) (jolt-nil? dst))
+    (throw-jvm 'NullPointerException "arraycopy: null array"))
+  (let ((sp (jolt-int-cast src-pos))
+        (dp (jolt-int-cast dst-pos))
+        (n (jolt-int-cast len)))
+    (cond
+      ((and (jolt-obj-array? src) (jolt-obj-array? dst))
+       (let ((from (jolt-obj-array-vec src)) (to (jolt-obj-array-vec dst)))
+         (check-bounds (vector-length from) (vector-length to) sp dp n)
+         (subvector-move! from sp (+ sp n) to dp)))
+      ((and (u8vector? src) (u8vector? dst))
+       (check-bounds (u8vector-length src) (u8vector-length dst) sp dp n)
+       (subu8vector-move! src sp (+ sp n) dst dp))
+      (else
+       (throw-jvm 'ArrayStoreException "arraycopy: mismatched or unsupported array types")))
+    jolt-nil))
+
+(define (gambit-arrays-sort arr . rest)
+  (unless (jolt-obj-array? arr)
+    (throw-jvm 'IllegalArgumentException "Arrays/sort: unsupported array"))
+  (let* ((v (jolt-obj-array-vec arr))
+         (compare (if (pair? rest) (car rest) jolt-compare))
+         (sorted (list-sort (lambda (a b) (< (jnum->exact (jolt-invoke2 compare a b)) 0))
+                            (vector->list v))))
+    (vector-copy! v 0 (list->vector sorted))
+    jolt-nil))
+
+(register-class-statics! "System"
+  (list (cons "getProperty" gambit-get-property)
+        (cons "arraycopy" gambit-arraycopy)))
+(register-class-statics! "java.util.Arrays"
+  (list (cons "sort" gambit-arrays-sort)))

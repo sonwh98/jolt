@@ -58,3 +58,85 @@ The unchanged qualified FFI tier is exercised by the Stage‑1 public gate.
 Local receipts are under `build/p1c-r2/`.
 
 DONE
+
+## Round 3
+
+- Created-GMT: 2026-11-19 17:51:19 GMT
+- Coding-Agent: Codex
+- Base: `gambit-ffi-p1c` at `b77eea9a`
+- Datomworld source: `ff274a4eb56340110f0e338ed237ffcd1aad5656`
+
+### F-A — Loaded-source binding audit
+
+`clojure -M test/gambit/yin-source-closure.clj ../datomworld` selects :jolt
+and :clj reader branches and uses the launcher's stock source-root order.
+It found 164 source namespaces reachable from `yin.repl.main`, with
+`clojure.core` supplied by the boot. The `--gambit` pass found 154 source
+namespaces for the local composition, with core and the stage-1
+`jolt.ffi` supplied by the boot. These are static namespace-declaration
+closures. `JOLT_YIN_AUDIT=1` runs the shared `gambitvars` var-cell scan
+before and after the actual Gambit load and reports the delta. It also
+reports the partial delta when a load throws.
+
+The stock closure contained the following 41 distinct literal
+`jolt.scheme/proc` and `jolt.scheme/call` names. All failed through the
+old always-absent lookup. The first four groups already exist in native
+Gambit. There are unit rows for each name in `test/gambit/unit.edn`.
+
+| Binding names | Provider |
+| --- | --- |
+| `string-length`, `string-ref`, `char->integer`, `integer->char`, `string->utf8`, `bytevector-length`, `bytevector-u8-ref` | Native Gambit procedures, surfaced by `sa-baked-global`. The Dao text layer converts scalar indexing to JVM UTF-16 units. |
+| `number?`, `exact?`, `integer?`, `flonum?`, `inexact`, `exact`, `flnan?`, `flinfinite?`, `flfinite?`, `flinteger?`, `fltruncate` | Native Gambit procedures, surfaced by `sa-baked-global`. |
+| `+`, `-`, `*`, `/`, `<`, `<=`, `=`, `quotient`, `remainder`, `abs`, `numerator`, `denominator`, `gcd` | Native Gambit procedures, surfaced by `sa-baked-global`. |
+| `number->string`, `string->number`, `string-downcase` | Native Gambit procedures, surfaced by `sa-baked-global`. |
+| `logand`, `logor`, `logxor`, `ash`, `bitwise-length`, `scheme-version` | Aliases in `host/gambit/scheme-adapter-runtime.ss` for Gambit's bitwise operators, arithmetic shift, integer length and system version. |
+| `string-normalize-nfc` | `host/gambit/unicode-nfc.ss`, using Unicode 16.0.0 canonical data and algorithmic Hangul composition. [Unicode 16.0.0](https://www.unicode.org/versions/Unicode16.0.0/) |
+
+The two literal `jolt.scheme/eval-string` sites in `dao.host.float` also
+need `bytevector-ieee-double-set!`, `bytevector-ieee-double-ref`,
+`bytevector-u64-ref`, `bytevector-u32-set!` and `endianness`. The bytevector
+operations are in `scheme-adapter-runtime.ss`. The source loader handles
+R6RS brackets and endianness syntax before Gambit evaluates the text.
+`make-bytevector` already exists. Both IEEE directions have unit rows
+using the same forms as Dao, with negative values and the high bit set.
+
+The next exposed top-level load failure was the B-tree's `object-array`.
+`host-vars.ss` supplies object arrays, clones and `to-array`, and connects
+object storage to count, nth, seq, aget, aset and alength. `host-statics.ss`
+supplies overlapping `System/arraycopy` and stable `Arrays/sort` for the
+Dao array boundary. The independent normalization comparison matched
+33,163 Unicode 16 cases.
+
+### F-B — Local memory store
+
+The local profile opens the ordinary `yin.repl.store/open :mem` store.
+Yin computes BLAKE3 addresses eagerly for its primitive profiles and during
+ordinary indexing. `host/gambit/yin/blake3.ss` computes those addresses in
+Scheme and matched the ten unkeyed known answers in Datomworld's
+`blake3-vectors.edn`. The SHA-256 host operation still reaches the C4
+refusal when invoked. The acceptance corpus requires the
+`dao.jing.mem` host module, calls `dao.jing/materialize!` with SHA-256 and
+expects a refusal followed by successful arithmetic in the same session.
+The local composition also admits the stage-1 `jolt.ffi/sizeof` export
+through Yin's module registry. [BLAKE3 specification](https://c2sp.org/BLAKE3)
+
+The launcher reads Datomworld from the companion checkout and supplies
+Gambit adapters for local terminal input, entropy, unavailable network and
+native parser operations, and file and signing boundaries. The companion
+checkout is read in place.
+
+### Verification
+
+Native macOS arm64 and Gambit 4.9.8. The Stage 1 matrix passed
+`gambitffi`, `gambitcheck`, `gambitkernel`, `gambiteval`,
+`gambitseedcheck`, `gambitgencheck`, `gambitvars`, `emittedheads`,
+and `deadhost`. Receipts and the source-load transcripts are in
+`build/p1c-r3/`.
+
+The 57 binding and Dao rows passed. The SHA-256 row verifies the documented
+C4 message and successful arithmetic immediately after the caught refusal.
+The terminal adapter also passed its separate native two-line and EOF probe.
+
+The end-to-end Yin corpus remains under verification. The standard
+`gambityinrepl` run has loaded DaoJing and entered the B-tree dependency
+under `yin.vm`. A `yin>` reply has yet to be observed.

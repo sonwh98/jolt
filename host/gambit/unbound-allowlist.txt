@@ -23,6 +23,12 @@
 equal?-hash
 repl-environment
 #
+# Native collector entry used by sa-gc-collect. Gambit's JS runtime relies on
+# the JavaScript collector and does not export ##gc. The stage-1 native gsi
+# path executes the real primitive (gambitcheck's collection/weak-key witness);
+# this static JS-link audit does not qualify explicit collection on JS.
+##gc
+#
 # compile-eval.ss's source-annotated eval (jolt-eval-with-source): Chez's
 # annotation APIs behind (jolt-ce-trace-frames?), which no hook sets here —
 # tracing is the excluded source-registry.ss's, and the plain eval path runs.

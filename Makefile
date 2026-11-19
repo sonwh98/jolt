@@ -1978,8 +1978,8 @@ gambiteval:
 # evals at runtime, against host/gambit/unbound-allowlist.txt (untaken paths;
 # a stale line fails). The boot splices most of host/chez, so a Chez-side name
 # reaching a shared file is otherwise an unbound global no Chez gate can see;
-# mirrordrift only compares names defined on BOTH hosts. ~75s: it compiles the
-# seed to js (text only, no C compiler, no node). Detection-gated. Ordered
+# mirrordrift only compares names defined on BOTH hosts. It compiles the seed
+# to JS text; time varies by compiler build. Detection-gated. Ordered
 # after gambitboot: both regenerate boot-full.ss, and under -j a reader must
 # not open the file mid-rewrite.
 gambitunbound: gambitboot
@@ -2188,9 +2188,9 @@ gambitffi-load-failure-smoke: gambitffi-bridge
 		echo "$@: required Gambit runtime is absent" >&2; exit 1; \
 	fi
 
-# The aggregate includes emitted-name hygiene and all three native gate scripts.
+# The aggregate includes host/name hygiene and all three native gate scripts.
 # Each prerequisite exits nonzero on failure.
-gambitffi: emittedheads gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke
+gambitffi: emittedheads deadhost gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke
 	@echo "gambitffi: PASS — all stage-1 qualified-tier gates green"
 
 # The browser bundle: the whole stack (kernel + seed + compiler + a queue-polling

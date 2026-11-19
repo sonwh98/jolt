@@ -12,8 +12,8 @@
 #   --list    print every unbound name and its classification
 #
 # Compile only, no C compiler and no node: `gsc -c` writes JavaScript text and
-# `-link` the link file. About 75s on the full boot — the seed is what takes
-# the time.
+# `-link` the link file. Full-seed compile time varies strongly by compiler
+# build; the caller supplies the external watchdog.
 #
 # Resolution mirrors the other gambit gates: JOLT_GSC (the Makefile hands down
 # $(GAMBIT_GSC)), else brew's gambit-scheme. NEVER bare gsc, which is
@@ -43,7 +43,8 @@ if [ -z "${JOLT_CHEZ:-}" ]; then
   fi
 fi
 
-tmp="$(mktemp -d)" || exit 1
+# An explicit template honors TMPDIR on macOS as well as Linux.
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/jolt-gambit-unbound.XXXXXX")" || exit 1
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 "$JOLT_CHEZ" --script host/gambit/gen-boot.ss full > "$tmp/gen-boot.log" 2>&1 || {

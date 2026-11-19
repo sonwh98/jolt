@@ -35,18 +35,6 @@
                (set! ffi-failures (+ ffi-failures 1))
                #f))))
 
-(define (ffi-check-raise-exact label thunk expected-msg)
-  (set! ffi-checks (+ ffi-checks 1))
-  (let ((m (guard (e (#t (condition-message e)))
-             (thunk)
-             "NO-RAISE")))
-    (if (string=? m expected-msg)
-        (begin (printf "  ok     ~a -> ~a\n" label m) #t)
-        (begin (printf "  FAIL   ~a: got ~s expected exactly ~s\n"
-                       label m expected-msg)
-               (set! ffi-failures (+ ffi-failures 1))
-               #f))))
-
 (define (string-contains s sub)
   (let ((n (string-length s)) (m (string-length sub)))
     (let loop ((i 0))

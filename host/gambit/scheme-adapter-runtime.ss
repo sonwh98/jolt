@@ -524,13 +524,6 @@
                             " gambit target — no ftype engine behind the stage-1"
                             " bridge (result: (& ...))"))))
 
-;; C -> jolt at the ADAPTER level: raw values only. The compiler's emitted
-;; wrapper applies the jolt-level conversions on top (jolt-ffi-c->string maps a
-;; NULL string's #f to jolt-nil; jolt-ffi-c->bool folds the one-byte pattern;
-;; make-jfloat boxes a :float). No jolt-nil dependency here — this tier also
-;; loads under gambitcheck, where the kernel (values.ss) is not booted.
-(define (joltffi-convert-ret res v) v)
-
 ;; (joltffi-foreign-procedure argtypes res name) -> procedure
 ;; ARGTYPES/RES: the Chez foreign-type tokens the compiler emits (symbols).
 ;; NAME: a string (by-name, resolved lazily on first call through the process's

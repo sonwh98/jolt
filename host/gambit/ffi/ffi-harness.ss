@@ -58,6 +58,15 @@
 (define ffi-fixture-path "build/gambit-ffi/libjoltffi-fixture.dylib")
 (define ffi-fixture2-path "build/gambit-ffi/libjoltffi-fixture2.dylib")
 
+;; Selected by the same Makefile OS branch as the fixture link flags. Keep the
+;; two supported names explicit; do not guess an accessor on another host.
+(define (ffi-errno-accessor-name)
+  (let ((name (getenv "JOLT_FFI_ERRNO_ACCESSOR")))
+    (if (and name (or (string=? name "__error")
+                      (string=? name "__errno_location")))
+        name
+        (error 'gambitffi-abi "missing/unsupported errno accessor selection; run make gambitffi-abi"))))
+
 ;; every gate starts here: the qualified tier is the adapter + the bridge, so
 ;; the bridge MUST load (fail-closed when absent — that IS the assertion)
 (define (ffi-load-fixture!)

@@ -31,7 +31,7 @@
 (public-check "(try (jolt.ffi/__cfn \"f\" [:int :&] :int) (catch UnsupportedOperationException e :runtime-tail-refused))" ":runtime-tail-refused")
 (public-check "(try ((jolt.ffi/__cfn \"joltffi_fx_layout_version\" [:pointer :int] :pointer) 0 0) (catch Throwable e (boolean (re-find #\"unregistered shape\" (ex-message e)))))" "true")
 (public-check "(let [p (jolt.ffi/alloc 8)] (try (jolt.ffi/write-bytes p \"abc\") (jolt.ffi/read-bytes p 3) (finally (jolt.ffi/free p))))" "\"abc\"")
-(public-check "(:path (jolt.ffi/load-library {:darwin \"build/gambit-ffi/libjoltffi-fixture.dylib\"}))" "\"build/gambit-ffi/libjoltffi-fixture.dylib\"")
+(public-check "(:path (jolt.ffi/load-library {:darwin \"build/gambit-ffi/libjoltffi-fixture.dylib\" :linux \"build/gambit-ffi/libjoltffi-fixture.dylib\"}))" "\"build/gambit-ffi/libjoltffi-fixture.dylib\"")
 (public-check "(try (jolt.ffi/load-library \"/nonexistent/libjoltffi-missing.dylib\") (catch Throwable e (boolean (re-find #\"cannot load\" (ex-message e)))))" "true")
 (public-check "(try (jolt.ffi/load-library \"build/gambit-ffi/libjoltffi-unloadable.dylib\") (catch Throwable e (boolean (re-find #\"is there but did not load.*libjoltffi-dep\" (ex-message e)))))" "true")
 (public-check "(boolean (jolt.ffi/find-symbol \"joltffi_fx_layout_version\"))" "true")

@@ -93,6 +93,16 @@ other host OS names raise an explicit fixture-link error. The existing `.dylib`
 fixture filenames are retained on both hosts. Linux link-plan checks on macOS
 are not execution or ABI qualification on Linux.
 
+The ABI gate gets its errno-accessor name from that same Makefile OS selector:
+`__error` on Darwin and `__errno_location` on glibc Linux. Both functions return
+`int *`; both require one int dereference. See the
+[Apple header](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/errno.h)
+and [glibc header](https://github.com/bminor/glibc/blob/master/stdlib/errno.h).
+The fixture verifies the selected address equals `&errno`, sets errno to 7777,
+and reads the int immediately in one C invocation, avoiding ambient changes
+between Scheme calls. Invoke the ABI gate through `make gambitffi-abi`, which
+supplies `JOLT_FFI_ERRNO_ACCESSOR`; missing/unsupported selections refuse.
+
 The helper's acceptance, deterministic-recording and negative checks can be run
 with `python3 host/gambit/ffi/test-toolchain.py` (set TMPDIR inside the checkout
 to retain the task's scratch-file boundary). Its Linux metadata/files are

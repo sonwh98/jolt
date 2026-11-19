@@ -22,7 +22,7 @@
   (ffi-check-true "unloadable candidate raises" (not (string=? unloadable "NO-RAISE")))
   ;; the loader's own reason rides the message
   (ffi-check-true "missing reason preserved (no such file)"
-                  (string-contains missing "no such file"))
+                  (string-contains (string-downcase missing) "no such file"))
   (ffi-check-true "unloadable reason preserved (names the missing dependency)"
                   (string-contains unloadable "libjoltffi-dep.dylib"))
   (ffi-check-true "the two failures are distinguishable"

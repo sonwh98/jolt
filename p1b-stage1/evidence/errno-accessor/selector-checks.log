@@ -1,0 +1,2 @@
+Darwin selector: PASS — __error; all four Darwin fixture link commands remain byte-identical
+Linux selector plan: PASS — __errno_location (no Linux execution)

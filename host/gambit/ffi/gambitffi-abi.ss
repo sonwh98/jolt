@@ -162,13 +162,21 @@
     (let ((f (sa-foreign-procedure (__varargs_after 2) a (int int int) int)))
       (ffi-check "s22 varargs (2 fixed + 1 tail)" (f 10 3 100) 113)))
   ;; by-name construction against PROCESS-GLOBAL symbols (libc): strerror
-  ;; through the registered s21 shape and __error through s20 — the stdlib's
-  ;; own errno-accessor spellings. RTLD_LOCAL scoped libs stay invisible to
+  ;; through s21 and the host-selected errno accessor through s20. Both libc
+  ;; accessors return int*, so the value needs exactly one int dereference.
+  ;; RTLD_LOCAL scoped libs stay invisible to
   ;; this path by design (tested in the load-failure gate).
   (let ((f (sa-foreign-procedure "strerror" (int) string)))
     (ffi-check-true "by-name process-global resolution (strerror, s21)" (string? (f 1)))
-    (ffi-check-true "by-name errno accessor (__error, s20)"
-                    (> ((sa-foreign-procedure "__error" () void*)) 0)))
+    (let* ((name (ffi-errno-accessor-name))
+           (location ((sa-foreign-procedure name () void*)))
+           (read (sa-foreign-procedure "joltffi_fx_errno_deref" (void* size_t) int)))
+      (ffi-check-true (string-append "by-name errno accessor (" name ", s20)")
+                      (and (exact-integer? location) (> location 0)))
+      ;; The fixture validates location == &errno, sets errno, and reads that
+      ;; int immediately in one C invocation, avoiding intervening Scheme work.
+      (ffi-check (string-append "by-name errno accessor " name " int* dereference")
+                 (read location 7777) 7777)))
   ;; symbol parity
   (ffi-check-true "sa-foreign-entry? fixture symbol" (sa-foreign-entry? "joltffi_fx_layout_version"))
   (ffi-check-true "sa-foreign-entry? libc symbol" (sa-foreign-entry? "malloc"))

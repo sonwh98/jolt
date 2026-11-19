@@ -165,4 +165,96 @@ re-record pins merely to pass a mismatch. Linux execution/ABI qualification is
 still the orchestrator's independent leg; only the macOS regression and Linux
 link-plan selection were verified here. No push.
 
+## Linux r3 — platform errno accessor and fixture portability
+
+Completed-GMT: 2026-11-19 10:48:09 GMT
+Completed-Local: 2026-11-19 17:48:09 ICT (+07)
+Coding-Agent: Codex
+Session-ID: 01a1f1f9-2d2b-71a2-b88a-1675b81dd975
+Created-GMT: 2026-11-19 10:42:35 GMT
+Base: 434dc2f9 (includes shiva's f5920f1f Linux provenance pins).
+
+Verified dereference semantics from primary sources:
+
+- [Apple's XNU errno header](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/errno.h)
+  declares `extern int * __error(void)` and defines errno by dereferencing its
+  result. The installed macOS SDK independently agrees at
+  `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/errno.h:80–81`.
+- [glibc's errno header](https://github.com/bminor/glibc/blob/master/stdlib/errno.h)
+  declares `int *__errno_location(void)` and defines errno by dereferencing its
+  result; the [implementation](https://github.com/bminor/glibc/blob/master/csu/errno-loc.c)
+  returns `&errno`. The [Linux errno manual](https://man7.org/linux/man-pages/man3/errno.3.html)
+  describes the slot as a thread-local modifiable int.
+
+Thus both accessors return int*, not a direct int on Darwin, and both need
+exactly one int load. The Scheme binding remains the registered `() -> void*`
+pointer shape (S20); there is no platform-specific extra pointer level.
+
+Makefile:2090/2093 selects __error for Darwin and __errno_location for Linux in
+the existing host-OS branches, passing JOLT_FFI_ERRNO_ACCESSOR to the ABI gate.
+Unsupported hosts and missing/unsupported selections refuse explicitly. The
+gate's original Darwin by-name path still selects __error with the same
+signature and nonzero-pointer assertion.
+
+The fixture's errno-location shape now returns the actual &errno. A new
+`joltffi_fx_errno_deref` witness uses the already registered S02 shape
+`(void*, size_t) -> int`: it checks location == &errno, presets errno to the
+supplied 7777, and immediately loads one int through location in the same C
+frame. Wrong addresses return -1 without dereferencing them. This prevents
+intervening Scheme allocation/conversion from corrupting a separate preset.
+No adapter, bridge, shim registry, native-error capture tier or refusal changed.
+Only the changed fixture source digest was refreshed; Darwin and Linux
+toolchain manifests and their pins remain unchanged.
+
+Exact Linux expectations:
+
+| Row | Expected |
+|---|---|
+| Selected process-global symbol | __errno_location |
+| Accessor ABI | int * function(void), carried as () -> void* by S20 |
+| Accessor result | Nonzero exact address of this native thread's errno |
+| Fixture read through that address | 7777 (one int dereference, after preset in the same C call) |
+
+Audit of the FFI directory also corrected the public per-OS library-map witness
+to contain both :darwin and :linux keys with the same existing fixture path.
+The loader's missing-file predicate compares a lowercase copy of the message
+so glibc's capitalization does not fail it; the actual diagnostic remains
+unaltered. Shared fixture `.dylib` filenames remain intentional on both hosts.
+Other uses of darwin in provenance fixtures are negative tests or explicit
+manifest metadata. Common libc symbols strerror/malloc and existing native
+loader flag selection remain unchanged.
+
+Validation (watchdogged; raw records in `evidence/errno-accessor/`):
+
+```text
+Darwin selector: PASS — __error; all four Darwin fixture link commands remain byte-identical
+Linux selector plan: PASS — __errno_location (no Linux execution)
+gambitffi-abi: 79 check(s), 0 failure(s)
+gambitffi-public: 44 check(s), 0 failure(s)
+gambitffi-errno-check: 9 check(s), 0 failure(s)
+gambitffi-load-failure-smoke: 14 check(s), 0 failure(s)
+gambitffi: PASS — all stage-1 qualified-tier gates green
+```
+
+The native macOS regression ran make gambitffi with JOLT_REQUIRE_GAMBIT=1 and
+the pinned absolute Gambit/Chez paths under a 300s process-group watchdog.
+The selector/unchanged-link-plan checker used a 90s watchdog (20s per make
+plan). Linux selection was only a make dry-run, not Linux execution.
+
+After applying this commit on shiva, keep the existing Linux pins and rerun:
+
+```sh
+cd "$HOME/ci/jolt-ffi-linux"
+mkdir -p build/p1b-linux-r3/tmp
+JOLT_REQUIRE_GAMBIT=1 sh host/gambit/ffi/watchdog.sh 600 make \
+  gambitffi gambitcheck gambitkernel gambiteval \
+  GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8" \
+  TMPDIR="$PWD/build/p1b-linux-r3/tmp"
+```
+
+Use the lane's configured Linux Chez setting if supplied. The ABI output must
+pass `by-name errno accessor (__errno_location, s20)` and
+`by-name errno accessor __errno_location int* dereference` (expected value 7777).
+No Linux execution/ABI or consumer qualification is claimed here. No push.
+
 DONE

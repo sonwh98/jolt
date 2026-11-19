@@ -2087,10 +2087,13 @@ GAMBIT-FFI-BUILD := build/gambit-ffi
 GAMBIT-FFI-HOST-OS := $(shell uname -s)
 ifeq ($(GAMBIT-FFI-HOST-OS),Darwin)
 GAMBIT-FFI-SHARED-FLAGS := -dynamiclib
+GAMBIT-FFI-ERRNO-ACCESSOR := __error
 else ifeq ($(GAMBIT-FFI-HOST-OS),Linux)
 GAMBIT-FFI-SHARED-FLAGS := -shared -fPIC
+GAMBIT-FFI-ERRNO-ACCESSOR := __errno_location
 else
 GAMBIT-FFI-SHARED-FLAGS = $(error gambitffi: unsupported fixture-link platform '$(GAMBIT-FFI-HOST-OS)' (expected Darwin or Linux))
+GAMBIT-FFI-ERRNO-ACCESSOR = $(error gambitffi: unsupported errno-accessor platform '$(GAMBIT-FFI-HOST-OS)' (expected Darwin or Linux))
 endif
 
 # the pinned inputs must match the recorded digests BEFORE anything compiles
@@ -2155,7 +2158,7 @@ gambitffi-bridge: gambitffi-verify-digests $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1
 
 gambitffi-abi: gambitffi-bridge
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
-		sh $(GAMBIT-FFI-DIR)/watchdog.sh 120 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-abi.ss && \
+		JOLT_FFI_ERRNO_ACCESSOR="$(GAMBIT-FFI-ERRNO-ACCESSOR)" sh $(GAMBIT-FFI-DIR)/watchdog.sh 120 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-abi.ss && \
 		sh $(GAMBIT-FFI-DIR)/watchdog.sh 180 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-public.ss; \
 	else \
 		echo "$@: required Gambit runtime is absent" >&2; exit 1; \

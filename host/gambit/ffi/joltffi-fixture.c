@@ -103,8 +103,18 @@ void joltffi_fx_free (void *p) { free (p); ++frees; }
 void *joltffi_fx_worker_new (void) { return malloc (64); }
 
 /* s20: () -> void* — the errno ACCESSOR shape (the ffi/errno read path) */
-static int joltffi_fx_errno_cell;
-void *joltffi_fx_errno_location (void) { return &joltffi_fx_errno_cell; }
+void *joltffi_fx_errno_location (void) { return &errno; }
+
+/* Existing s02 shape. Darwin __error and glibc __errno_location both return
+   int*. Validate the selected accessor's address, then preset/read in one C
+   frame so conversion or allocation between Scheme calls cannot change errno. */
+int joltffi_fx_errno_deref (void *location, size_t value)
+{
+  if (location != &errno)
+    return -1;
+  errno = (int) value;
+  return *(int *) location;
+}
 
 /* s21: (int) -> string — nullable char* return (NULL -> jolt nil) */
 static const char *joltffi_fx_errtext_one = "joltffi-error-one";

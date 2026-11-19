@@ -1,0 +1,1 @@
+ffi is unsupported on the gambit target: the stage-1 native bridge is not built or failed to load — run make gambitffi-bridge from the repo root (looked for build/gambit-ffi/joltffi-bridge.o1)

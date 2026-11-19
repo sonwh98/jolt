@@ -1,0 +1,2 @@
+digest-corruption negative control: PASS (rejected before compile)
+watchdog process-group deadline: PASS (exit 124)

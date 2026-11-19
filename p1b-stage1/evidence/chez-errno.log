@@ -1,0 +1,4 @@
+FAIL: socket recv keeps EAGAIN across an intervening errno clobber
+FAIL: socket accept keeps EAGAIN across an intervening errno clobber
+39/41 passed
+retained ffi-native-error artifacts: /var/folders/n0/xl3_1xkn0yd5trpq843l81840000gn/T/tmp.sLlXRTjo8P

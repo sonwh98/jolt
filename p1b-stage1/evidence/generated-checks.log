@@ -1,0 +1,3 @@
+gambitseedcheck: gambit seed is current with the sources
+gambitgencheck: records-gambit.ss is current with the records files
+gambit eval twins: 13 call-position macro(s), every one twinned in eval-fns.ss

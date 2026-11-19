@@ -1,0 +1,704 @@
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/TOOLCHAIN.sha256: OK
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/TOOLCHAIN.sha256: OK
+cp host/gambit/ffi/joltffi-bridge.scm host/gambit/ffi/generated-shims.scm build/gambit-ffi/
+cd build/gambit-ffi && sh ../../host/gambit/ffi/watchdog.sh 120 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc -dynamic -keep-temp joltffi-bridge.scm
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/TOOLCHAIN.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-fixture.dylib \
+	  host/gambit/ffi/joltffi-fixture.c
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/TOOLCHAIN.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-fixture2.dylib \
+	  host/gambit/ffi/joltffi-fixture2.c
+bin/gsi: OK
+bin/gsc: OK
+bin/gambuild-C: OK
+include/gambit.h: OK
+lib/libgambit.a: OK
+lib/libgambitgsi.a: OK
+lib/libgambitgsc.a: OK
+host/gambit/ffi/joltffi-bridge.scm: OK
+host/gambit/ffi/generated-shims.scm: OK
+host/gambit/ffi/shapes.json: OK
+host/gambit/ffi/generate-shims.py: OK
+host/gambit/ffi/joltffi-fixture.c: OK
+host/gambit/ffi/joltffi-fixture2.c: OK
+host/gambit/ffi/joltffi-dep.c: OK
+host/gambit/ffi/joltffi-unloadable.c: OK
+host/gambit/ffi/TOOLCHAIN.sha256: OK
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-dep.dylib host/gambit/ffi/joltffi-dep.c
+sh host/gambit/ffi/watchdog.sh 60 cc -O1 -dynamiclib -o build/gambit-ffi/libjoltffi-unloadable.dylib \
+	  host/gambit/ffi/joltffi-unloadable.c build/gambit-ffi/libjoltffi-dep.dylib
+rm build/gambit-ffi/libjoltffi-dep.dylib
+  ok     fixture library loaded through the adapter loader
+== scalar widths (exact, LP64 legs) ==
+  ok     sizeof int
+  ok     sizeof unsigned-int
+  ok     sizeof integer-8
+  ok     sizeof unsigned-8
+  ok     sizeof integer-16
+  ok     sizeof unsigned-16
+  ok     sizeof integer-32
+  ok     sizeof unsigned-32
+  ok     sizeof integer-64
+  ok     sizeof unsigned-64
+  ok     sizeof size_t
+  ok     sizeof ssize_t
+  ok     sizeof long
+  ok     sizeof unsigned-long
+  ok     sizeof iptr
+  ok     sizeof uptr
+  ok     sizeof double
+  ok     sizeof float
+  ok     sizeof void*
+  ok     sizeof unknown type refuses -> jolt.ffi: no size for foreign type jolt-agg on the gambit target
+== pointers + bulk byte copies ==
+  ok     alloc answers a nonzero address
+  ok     zero! + bytes-ref! all-zero
+  ok     bytes-set!/ref! round-trip (NUL + 0xff)
+  ok     typed set!/ref! unaligned i32
+  ok     typed set!/ref! u64 max
+  ok     typed set!/ref! i64 past double range
+  ok     typed set!/ref! double
+  ok     typed set!/ref! float (single precision)
+  ok     typed set!/ref! i8
+  ok     typed set!/ref! u16
+  ok     bytes-ref! past the bytevector refuses -> jolt.ffi: bulk copy count exceeds the bytevector
+== registered signatures (fixture targets through the tier) ==
+  ok     scoped resolution finds the fixture symbol
+  ok     s01 () -> int
+  ok     s01b () -> int32 matches its own probe
+  ok     s02 null buffer refusal
+  ok     s02 provenance text
+  ok     s03 cleanse zeroed the range
+  ok     s12b/s12 BE round-trip
+  ok     s13 error-text writer
+  ok     s19 answers a nonzero pointer
+  ok     s18 target records exactly one deallocation
+  ok     s20 errno-location answers a nonzero pointer
+  ok     s21 string result
+  ok     s21 NULL string result
+  ok     s22 varargs (2 fixed + 1 tail)
+  ok     by-name process-global resolution (strerror, s21)
+  ok     by-name errno accessor (__error, s20)
+  ok     sa-foreign-entry? fixture symbol
+  ok     sa-foreign-entry? libc symbol
+  ok     sa-foreign-entry? unknown symbol answers #f
+  ok     sa-foreign-entry-address matches the scoped resolution
+  ok     sa-foreign-entry-address raises for unknown
+  ok     s32 scoped variadic pointer tail
+== scalar argument/result conversions ==
+  ok     scalar integer-8
+  ok     scalar unsigned-8
+  ok     scalar integer-16
+  ok     scalar unsigned-16
+  ok     scalar integer-32
+  ok     scalar unsigned-32
+  ok     scalar integer-64
+  ok     scalar unsigned-64
+  ok     scalar size_t
+  ok     scalar ssize_t
+  ok     scalar float
+  ok     scalar double
+  ok     scalar void*
+  ok     production bridge has no errno instrumentation
+== generated capture shapes ==
+  ok     fixed capture (distinct from variadic s22b)
+  ok     s26b
+  ok     s26c
+  ok     s26d
+  ok     s26e
+  ok     s23
+  ok     s22b variadic tail
+  ok     s22c variadic pointer tail
+  ok     unregistered signature names its shape -> jolt.ffi: no gambit shim for signature (void* int) -> void* — unregistered shape on the gambit target (the stage-1 registry covers the non-blocking p1b-inv shapes only; see p1b-inv/shim-registry.edn)
+  ok     wrong variadic boundary refuses before dereference -> jolt.ffi: no gambit shim for signature (int int int) -> int — unregistered shape on the gambit target (the stage-1 registry covers the non-blocking p1b-inv shapes only; see p1b-inv/shim-registry.edn)
+  ok     string arguments refuse -> jolt.ffi: :string arguments are unsupported on the gambit target — no immobile allocation behind the stage-1 bridge (signature: u8* argument)
+
+gambitffi-abi: 78 check(s), 0 failure(s)
+gambitffi-abi: PASS
+boot: backend target -> :gambit
+  ok     (jolt.backend-scheme.session/target) => :gambit
+  ok     (:path (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-fixture.dylib")) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int)) => 42
+  ok     ((jolt.ffi/__cfn "joltffi_fx_eintr" [] :int32)) => 4
+  ok     (let [p (jolt.ffi/alloc 16)] (try (jolt.ffi/write p :uint64 18446744073709551615 1) (jolt.ffi/read p :uint64 1) (finally (jolt.ffi/free p)))) => 18446744073709551615N
+  ok     (let [p (jolt.ffi/string->ptr "é")] (try (jolt.ffi/ptr->string p) (finally (jolt.ffi/free p)))) => "é"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 1) => "joltffi-error-one"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 0) => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vfcntl" [:int :int :varargs :int] :int) 10 3 100) => 113
+  ok     (let [f (jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:capture-native-error true}) e (jolt.ffi/__cfn "joltffi_fx_eacces" [] :int)] (= (f -1 0 0) [-1 (e)])) => true
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_10" [:float] :float) (float 0.25)) => 0.25
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_1" [:bool] :bool) false) => false
+  ok     (try (jolt.ffi/__layout [:struct [[:x :int]]]) (catch UnsupportedOperationException e :layout-refused)) => :layout-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int :blocking)) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:blocking true :capture-native-error true}) -1 0 0) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try (jolt.ffi/__ccallable (fn [] 1) [] :int) (catch UnsupportedOperationException e :callable-refused)) => :callable-refused
+  ok     (try (jolt.ffi/__cfn "f" [[:by-value [:struct [[:x :int]]]]] :int) (catch UnsupportedOperationException e :aggregate-refused)) => :aggregate-refused
+  ok     (try (jolt.ffi/__cfn "f" [:int :&] :int) (catch UnsupportedOperationException e :runtime-tail-refused)) => :runtime-tail-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [:pointer :int] :pointer) 0 0) (catch Throwable e (boolean (re-find #"unregistered shape" (ex-message e))))) => true
+  ok     (let [p (jolt.ffi/alloc 8)] (try (jolt.ffi/write-bytes p "abc") (jolt.ffi/read-bytes p 3) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (:path (jolt.ffi/load-library {:darwin "build/gambit-ffi/libjoltffi-fixture.dylib"})) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     (try (jolt.ffi/load-library "/nonexistent/libjoltffi-missing.dylib") (catch Throwable e (boolean (re-find #"cannot load" (ex-message e))))) => true
+  ok     (try (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-unloadable.dylib") (catch Throwable e (boolean (re-find #"is there but did not load.*libjoltffi-dep" (ex-message e))))) => true
+  ok     (boolean (jolt.ffi/find-symbol "joltffi_fx_layout_version")) => true
+  ok     (jolt.ffi/find-symbol "joltffi_absent") => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vsetopt" [:pointer :int :varargs :pointer] :int) 0 7 0) => 7
+  ok     (= ((jolt.ffi/__cfn "joltffi_fx_success_errno" [:int :int :int] :int {:capture-native-error true}) 1 2 3) [6 7777]) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_absent" [] :int)) (catch Throwable e (boolean (re-find #"no entry" (ex-message e))))) => true
+  ok     (jolt.ffi/string->ptr nil) => 0
+  ok     (let [p (jolt.ffi/string->ptr "abc")] (try (jolt.ffi/ptr->string p 4) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (let [p (jolt.ffi/alloc 8)] (jolt.ffi/free p) (jolt.ffi/__size p)) => 0
+gambitffi-public: 31 check(s), 0 failure(s)
+gambitffi-public: PASS — :gambit compiler + native gsi
+cp host/gambit/ffi/joltffi-bridge.scm host/gambit/ffi/generated-shims.scm build/gambit-ffi/capture-test/
+cd build/gambit-ffi/capture-test && sh ../../../host/gambit/ffi/watchdog.sh 120 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc -dynamic -keep-temp -cc-options -DJOLTFFI_CAPTURE_TEST joltffi-bridge.scm
+  ok     post-capture clobber instrumentation enabled
+  ok     wrong-order control result
+  ok     wrong-order control sees intervening clobber
+  ok     real generated capture survives identical intervening clobber
+  ok     preserving success returns result
+  ok     preserving success captures preset errno unnormalized
+  ok     post-capture foreign clobber cannot change returned pair
+  ok     generated successful capture keeps target errno, without normalization
+  ok     1000 alternating invocation-local capture pairs
+
+gambitffi-errno-check: 9 check(s), 0 failure(s)
+gambitffi-errno-check: PASS
+== missing vs unloadable, reason preserved ==
+  ok     missing candidate raises
+  ok     unloadable candidate raises
+  ok     missing reason preserved (no such file)
+  ok     unloadable reason preserved (names the missing dependency)
+  ok     the two failures are distinguishable
+== scoped-before-global isolation ==
+  ok     fixture not loaded yet: scoped probe answers #f
+  ok     after a scoped load, the scoped probe answers
+  ok     a scoped library stays invisible to global resolution
+  ok     sa-foreign-entry? answers for the loaded fixture
+== repeat load is a no-op with the same handle ==
+  ok     repeat load registered exactly one handle
+== duplicate definers: two addresses, first declared resolves ==
+  ok     two distinct addresses across two declared libraries
+  ok     the addresses differ
+  ok     the first declared library wins resolution
+  ok     first-declared symbol behaves like fixture 1
+
+gambitffi-load-failure-smoke: 14 check(s), 0 failure(s)
+gambitffi-load-failure-smoke: PASS
+gambitffi: PASS — all stage-1 qualified-tier gates green
+== CONTRACT.txt names (bound or shimmed) ==
+  149 contract names checked against the combined env
+  ok     all contract names bound-or-shimmed
+== records: define-record-type round-trip incl. parent clause ==
+  ok     ctor + accessors
+  ok     predicate on child
+  ok     base predicate inclusive of child
+  ok     child predicate excludes base instance
+  ok     parent accessor on child
+  ok     mutable field set!
+  ok     immutable field has no setter (unbound)
+  ok     wrong-arity ctor raises
+== hashtable shim over tables ==
+  ok     ref after set!
+  ok     missing ref -> default
+  ok     contains? after set!
+  ok     size
+  ok     contains? after delete!
+  ok     size after delete!
+  ok     keys is a vector
+  ok     keys contents
+  ok     entries -> two parallel vectors (order-independent, aligned)
+  ok     CONTRACT misc hashtable-values
+  ok     CONTRACT misc hashtable-cells
+  ok     make-hashtable (hash+equiv dropped, equal? test)
+  ok     weak-eq set!/ref
+== fx + bitwise spelling aliases ==
+  ok     fx=? alias
+  ok     fx<? alias
+  ok     fx>? alias
+  ok     fxsll alias
+  ok     fxsra alias
+  ok     native fx+ still bound
+  ok     sa-ufx+
+  ok     sa-ufx-
+  ok     sa-ufx<?
+  ok     sa-ufx>=?
+  ok     sa-ufx=?
+  ok     sa-uvector-ref
+  ok     sa-uvector-set!
+  ok     sa-ustring-ref
+  ok     sa-uflvector-set!/-ref
+  ok     sa-ubytevector-ieee-single-native-set!
+  ok     sa-ubytevector-ieee-single-native-ref
+  ok     sa-ubytevector-ieee-double-native-set!/-ref round-trip
+  ok     sa-vector-copy-range! (R7RS shape)
+  ok     sa-string-copy-range! (R7RS shape)
+  ok     bitwise-arithmetic-shift-left (natives-num.ss spelling)
+  ok     bitwise-arithmetic-shift-right floor on negative
+== Chez condition accessors over error objects ==
+  ok     condition? on error object
+  ok     message-condition? on error object
+  ok     condition-message
+  ok     condition-irritants
+  ok     condition? on non-error
+  ok     message-condition? on non-error
+  ok     condition-message on non-error -> #f
+  ok     condition-irritants on non-error -> '()
+== thread mappings ==
+  ok     condvar wait/signal round-trip
+  ok     condition-wait timeout returns, mutex re-acquired
+  ok     with-mutex returns body value
+  ok     parameter fork-inheritance: child sees parent's current value
+  ok     virtual-register: a fresh thread starts a written slot at 0
+  ok     virtual-register: the child's write is its own
+  ok     virtual-register: the parent's slot is untouched
+  ok     get-thread-id is a number
+  ok     get-thread-id distinct per thread
+== hasheq known answers (captured from the Chez build via bin/jolt) ==
+  ok     hash 42  (Chez 1871679806)
+  ok     hash -7  (Chez -1703207563)
+  ok     hash 1000000000000  (Chez -1510912948)
+  ok     murmur3-hash-long agrees with flat on fixnum
+  ok     hash "hello"  (Chez 1715862179)
+  ok     hash long string  (Chez 237270814)
+  ok     hash longer string  (Chez 1189256432)
+  ok     hash :kw  (Chez 1158308175)
+  ok     hash :a/b  (Chez 1482224565)
+  ok     hash 'sym  (Chez 195671222)
+  ok     hash 'foo/bar  (Chez 254379989)
+  ok     hash 0.5  (Chez 1071644672)
+  ok     hash 2.5  (Chez 1074003968)
+  ok     hash 0.0  (Chez 0)
+  ok     hash -0.0  (Chez 0)
+  ok     hash 123456789012345678901234567890  (Chez 1915528825)
+  ok     hash 1/3  (Chez 2: bigint(1) ^ bigint(3))
+  ok     hash [1 2 3]  (Chez 736442005)
+  ok     hash {:a 1}  (Chez 1772842048)
+== sa-* runtime surface ==
+  ok     sa-host-tag
+  ok     sa-os-family (documented else-default)
+  ok     sa-arch (degraded)
+  ok     sa-endian
+  ok     sa-real-time-ms is an exact integer
+  ok     sa-real-time-ms advances
+  ok     sa-file-mtime-ms on an existing file
+  ok     sa-file-mtime-ms is a plausible epoch-ms (> 1e12)
+  ok     sa-introspect-enabled? fixed #f
+  ok     sa-continuation-frames -> '()
+  ok     sa-procedure-info -> #f
+  ok     sa-stats zero vector
+  ok     sa-profile-instrument! refuses on
+  ok     sa-profile-instrument! off succeeds
+  ok     sa-profile-instrumenting? fixed #f
+  ok     sa-profile-compile calls its thunk
+  ok     sa-profile-counts -> '()
+  ok     sa-profile-release! -> '()
+  ok     sa-block-profile-dump! -> 0
+  ok     sa-block-profile-load-unit! -> #f
+  ok     sa-stack-walk -> #f
+  ok     sa-frame-source-pair -> #f
+  ok     sa-code-name -> #f
+  ok     sa-thread-cpu-nanos -> 0
+  ok     sa-baked-global -> #f always
+  ok     sa-gc-collect executes real collector
+  ok     real collection clears unreachable weak key
+  ok     sa-gc-max-generation 0
+  ok     sa-foreign-alloc/ref/set!
+  ok     sa-foreign bulk copies
+  ok     sa-foreign-zero!
+  ok     sa-foreign-sizeof
+  ok     sa-foreign-procedure ordinary
+  ok     sa-foreign-procedure-native-error two values
+  ok     jolt-ffi-native-error-procedure target wrapper
+  ok     sa-foreign-entry? loaded symbol
+  ok     sa-foreign-entry? absent symbol
+  ok     sa-foreign-entry-address
+  ok     sa-foreign-procedure-blocking -> blocking ffi is unsupported on the gambit target — GC-safe blocking is unqualified on Gambit 4.9.8 (no verified release/claim transition)
+  ok     blocking + errno -> blocking ffi is unsupported on the gambit target — GC-safe blocking is unqualified on Gambit 4.9.8 (no verified release/claim transition)
+  ok     sa-foreign-callable -> foreign callables are unsupported on the gambit target — dynamic closure-backed callables are unqualified (no arm64/x86_64 trampoline generator in stock Gambit 4.9.8)
+  ok     sa-foreign-callable-collect-safe -> foreign-thread callbacks are unsupported on the gambit target — generic foreign-pthread entry is unqualified (no verified attachment/claim protocol)
+  ok     sa-lock-object -> object pinning is unsupported on the gambit target — the collector moves objects and no verified pinning mechanism exists
+  ok     sa-unlock-object -> object pinning is unsupported on the gambit target — the collector moves objects and no verified pinning mechanism exists
+  ok     runtime signature -> runtime-signature ffi construction is unsupported on the gambit target — a finite shim registry cannot claim runtime-discovered signatures
+  ok     sa-compile-file -> native compilation is unsupported on the gambit target
+  ok     sa-make-boot-file -> native compilation is unsupported on the gambit target
+  ok     sa-fasl-write -> fasl serialization is unsupported on the gambit target
+  ok     sa-fasl-read -> fasl serialization is unsupported on the gambit target
+  ok     sa-run-process -> subprocess support is unsupported on the gambit target
+== continuations: one-shot escape (call/cc + spent flag) ==
+  ok     escape returns its value
+  ok     falling through returns the body value
+  ok     escape leaves a loop from depth
+  ok     escape unwinds dynamic-wind
+  ok     second invocation refused -> escape continuation is spent
+  ok     invocation after a normal return refused -> escape continuation is spent
+  ok     a fresh capture after a spent one still escapes
+== coroutines: fiber primitive (call/cc, R1) ==
+  ok     round trip: body order
+  ok     round trip: state done
+  ok     round trip: result
+  ok     round-robin: strict rotation
+  ok     round-robin: all done
+  ok     raise: non-raising fibers ran
+  ok     raise: raising fiber dead
+  ok     raise: error recorded
+  ok     raise: scheduler reusable
+  ok     raise after park: dead
+  ok     deep yield: result
+
+gambitcheck: 0 failure(s)
+gambitcheck: PASS — gambit adapter + shims verified on native gsi
+boot: backend target -> :gambit
+  ok     (jolt.backend-scheme.session/target) => :gambit
+  ok     (:path (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-fixture.dylib")) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int)) => 42
+  ok     ((jolt.ffi/__cfn "joltffi_fx_eintr" [] :int32)) => 4
+  ok     (let [p (jolt.ffi/alloc 16)] (try (jolt.ffi/write p :uint64 18446744073709551615 1) (jolt.ffi/read p :uint64 1) (finally (jolt.ffi/free p)))) => 18446744073709551615N
+  ok     (let [p (jolt.ffi/string->ptr "é")] (try (jolt.ffi/ptr->string p) (finally (jolt.ffi/free p)))) => "é"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 1) => "joltffi-error-one"
+  ok     ((jolt.ffi/__cfn "joltffi_fx_errtext" [:int] :string) 0) => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vfcntl" [:int :int :varargs :int] :int) 10 3 100) => 113
+  ok     (let [f (jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:capture-native-error true}) e (jolt.ffi/__cfn "joltffi_fx_eacces" [] :int)] (= (f -1 0 0) [-1 (e)])) => true
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_10" [:float] :float) (float 0.25)) => 0.25
+  ok     ((jolt.ffi/__cfn "joltffi_fx_scalar_1" [:bool] :bool) false) => false
+  ok     (try (jolt.ffi/__layout [:struct [[:x :int]]]) (catch UnsupportedOperationException e :layout-refused)) => :layout-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [] :int :blocking)) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_socketlike" [:int :int :int] :int {:blocking true :capture-native-error true}) -1 0 0) (catch Throwable e (boolean (re-find #"blocking ffi is unsupported" (ex-message e))))) => true
+  ok     (try (jolt.ffi/__ccallable (fn [] 1) [] :int) (catch UnsupportedOperationException e :callable-refused)) => :callable-refused
+  ok     (try (jolt.ffi/__cfn "f" [[:by-value [:struct [[:x :int]]]]] :int) (catch UnsupportedOperationException e :aggregate-refused)) => :aggregate-refused
+  ok     (try (jolt.ffi/__cfn "f" [:int :&] :int) (catch UnsupportedOperationException e :runtime-tail-refused)) => :runtime-tail-refused
+  ok     (try ((jolt.ffi/__cfn "joltffi_fx_layout_version" [:pointer :int] :pointer) 0 0) (catch Throwable e (boolean (re-find #"unregistered shape" (ex-message e))))) => true
+  ok     (let [p (jolt.ffi/alloc 8)] (try (jolt.ffi/write-bytes p "abc") (jolt.ffi/read-bytes p 3) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (:path (jolt.ffi/load-library {:darwin "build/gambit-ffi/libjoltffi-fixture.dylib"})) => "build/gambit-ffi/libjoltffi-fixture.dylib"
+  ok     (try (jolt.ffi/load-library "/nonexistent/libjoltffi-missing.dylib") (catch Throwable e (boolean (re-find #"cannot load" (ex-message e))))) => true
+  ok     (try (jolt.ffi/load-library "build/gambit-ffi/libjoltffi-unloadable.dylib") (catch Throwable e (boolean (re-find #"is there but did not load.*libjoltffi-dep" (ex-message e))))) => true
+  ok     (boolean (jolt.ffi/find-symbol "joltffi_fx_layout_version")) => true
+  ok     (jolt.ffi/find-symbol "joltffi_absent") => nil
+  ok     ((jolt.ffi/__cfn "joltffi_fx_vsetopt" [:pointer :int :varargs :pointer] :int) 0 7 0) => 7
+  ok     (= ((jolt.ffi/__cfn "joltffi_fx_success_errno" [:int :int :int] :int {:capture-native-error true}) 1 2 3) [6 7777]) => true
+  ok     (try ((jolt.ffi/__cfn "joltffi_absent" [] :int)) (catch Throwable e (boolean (re-find #"no entry" (ex-message e))))) => true
+  ok     (jolt.ffi/string->ptr nil) => 0
+  ok     (let [p (jolt.ffi/string->ptr "abc")] (try (jolt.ffi/ptr->string p 4) (finally (jolt.ffi/free p)))) => "abc"
+  ok     (let [p (jolt.ffi/alloc 8)] (jolt.ffi/free p) (jolt.ffi/__size p)) => 0
+gambitffi-public: 31 check(s), 0 failure(s)
+gambitffi-public: PASS — :gambit compiler + native gsi
+boot: backend target -> :gambit
+== construction: jolt-vector / jolt-list / jolt-hash-map / jolt-hash-set / jolt-count ==
+  ok     vector 1 2 3
+  ok     list 1 2 3
+  ok     map {:a 1}
+  ok     set #{7}
+  ok     count vector
+  ok     count list
+  ok     count map
+  ok     count set
+  ok     count string
+  ok     count empty vector
+  ok     count empty map
+  ok     count empty set
+  ok     count empty list
+  ok     empty vector render
+  ok     empty map render
+  ok     empty set render
+  ok     empty list render
+== jolt-conj / jolt-assoc / jolt-dissoc ==
+  ok     conj on vector
+  ok     conj on list prepends
+  ok     conj on nil builds a list
+  ok     conj [k v] pair into map -> get
+  ok     conj [k v] pair into map -> count
+  ok     assoc new key -> get
+  ok     assoc new key -> count
+  ok     assoc on vector by index
+  ok     assoc on nil -> map
+  ok     dissoc removes key
+  ok     dissoc shrinks count
+  ok     dissoc absent key is a no-op
+== jolt-get / jolt-nth ==
+  ok     get vector by index
+  ok     get vector out of range -> nil
+  ok     get map present key
+  ok     get map missing key -> default
+  ok     get set membership returns key
+  ok     get set absent -> nil
+  ok     nth vector
+  ok     nth list
+  ok     nth string
+  ok     subs cuts the span and leaves the source alone
+  ok     nth out of range -> not-found
+  ok     nth out of range raises jolt-throw
+  ok     nth oob exception class
+== jolt-first / jolt-next / jolt-seq ==
+  ok     first vector
+  ok     next vector
+  ok     first of next
+  ok     next of single-element list is nil
+  ok     seq vector
+  ok     seq list
+  ok     seq string
+  ok     count seq string
+  ok     first of seq list
+  ok     count seq of 2-entry map
+  ok     seq of map yields entry vectors
+  ok     seq single-entry map
+  ok     seq of empty vector is nil
+== lazy seqs: jolt-take / jolt-map / jolt-partition forced through jolt-pr-readable ==
+  ok     take 3 vector
+  ok     count take 3
+  ok     first of take
+  ok     take 1 list
+  ok     map inc vector
+  ok     partition 2 vector
+  ok     count partition 2
+== rendering: jolt-pr-readable (captures from bin/jolt on Chez) ==
+  ok     nested vector+list
+  ok     deep nesting
+  ok     nil and booleans
+  ok     strings with escapes
+  ok     chars incl named
+  ok     infinities and NaN
+  ok     bigints with N suffix
+  ok     ratios
+  ok     namespaced keywords
+  ok     symbols incl namespaced
+== jolt-read-string round-trips (jolt= to constructed + re-render) ==
+  ok     corpus re-render
+  ok     corpus jolt= to constructed
+  ok     escapes round-trip re-render
+  ok     escapes round-trip jolt=
+  ok     inf/NaN round-trip re-render
+  ok     inf round-trip jolt=
+  ok     char round-trip
+  ok     map round-trip jolt=
+  ok     set round-trip jolt=
+  ok     list round-trip jolt=
+  ok     integer round-trip jolt=
+  ok     keyword round-trip jolt=
+  ok     symbol round-trip jolt=
+== hasheq: jolt-hasheq on real collections, pinned to Chez (hash ...) ==
+  ok     hash [1 2 3]
+  ok     hash (list 1 2 3) == hash [1 2 3]
+  ok     hash []
+  ok     hash {}
+  ok     hash #{} == hash {}
+  ok     hash {:a 1}
+  ok     hash {:a 1 :b 2}
+  ok     hash #{1 2}
+  ok     hash mixed vector
+  ok     hash bigint
+  ok     hash ratio
+  ok     hash ignores meta
+== jolt-with-meta / jolt-meta ==
+  ok     meta round-trip
+  ok     meta not printed
+  ok     meta of a number is nil
+  ok     meta of a bare symbol is nil
+== def-var! / var-deref / def-dynvar! through rt-core ==
+  ok     def-var! then var-deref
+  ok     re-def-var! mutates root
+  ok     never-defined var is unbound sentinel
+  ok     def-dynvar! then var-deref
+  ok     dynvar carries :dynamic meta
+  ok     def-var! returns the var cell
+== jolt= structural equality ==
+  ok     vectors equal
+  ok     deep nesting equal
+  ok     map of vector equal
+  ok     set order-insensitive
+  ok     seq == vector (sequential equality, matches Chez)
+  ok     map key mismatch
+  ok     vector element mismatch
+== forcing lazy cells with threads ==
+  ok     a forked thread flips the multi-threaded flag
+  ok     two threads forcing one cell and one node ran each thunk once
+  ok     the cell's tail is published
+  ok     the node's value is published
+  ok     no claim is left behind
+
+kernel-test: 0 failure(s)
+kernel-test: PASS — booted kernel + natives verified on native gsi
+boot: backend target -> :gambit
+== jolt source through jolt-compile-eval on gsi ==
+  ok     (+ 1 2) => 3
+  ok     (* 2/3 6) => 4
+  ok     (+ 9007199254740993 1) => 9007199254740994
+  ok     {:a 1 :b 2} => {:a 1, :b 2}
+  ok     (conj [1 2] 3) => [1 2 3]
+  ok     (assoc {:a 1} :b 2) => {:a 1, :b 2}
+  ok     (map inc [1 2 3]) => (2 3 4)
+  ok     (->> (range 100) (filter odd?) (map #(* % %)) (reduce +)) => 166650
+  ok     (->> (range 20) (filter even?) (map inc) (take 5) vec) => [1 3 5 7 9]
+  ok     (defn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) => #'user/fib
+  ok     (fib 20) => 6765
+  ok     (let [x 10] (* x x)) => 100
+  ok     (loop [i 0 acc 0] (if (< i 5) (recur (inc i) (+ acc i)) acc)) => 10
+  ok     (str "jolt on " "gambit") => "jolt on gambit"
+  ok     (re-seq #"[a-z]+" "jolt on gambit js") => ("jolt" "on" "gambit" "js")
+  ok     (defmacro unless2 [c a b] (list 'if c b a)) => nil
+  ok     (unless2 false :yes :no) => :yes
+  ok     (try (/ 1 0) (catch Exception e :caught)) => :caught
+  ok     (sort > [3 1 4 1 5 9 2 6]) => (9 6 5 4 3 2 1 1)
+  ok     (defrecord Pt [x y]) => #'user/map->Pt
+  ok     (:x (->Pt 3 4)) => 3
+  ok     (pr-str (->Pt 1 2)) => "#user.Pt{:x 1, :y 2}"
+  ok     (defprotocol Shape (perim [s])) => #'user/perim
+  ok     (defrecord Sq [w] Shape (perim [s] (* 4 (:w s)))) => nil
+  ok     (perim (->Sq 5)) => 20
+  ok     (defmulti area :shape) => #'user/area
+  ok     (area {:shape :circle :r 21}) => THREW
+  ok     (defmethod area :circle [c] (* 2 (:r c))) => #object[clojure.lang.MultiFn 0x0 "area"]
+  ok     (area {:shape :circle :r 21}) => 42
+  ok     ((fn [a b] {:sum (+ a b) :prod (* a b)}) 3 4) => {:sum 7, :prod 12}
+  ok     (do (deftype Sg [s cnt] CharSequence (length [_] cnt) (charAt [_ i] (.charAt s i)) (subSequence [_ a b] (subs s a b)) (toString [_] (subs s 0 cnt))) [(count (->Sg "abcd" 3)) (vec (seq (->Sg "abcd" 3))) (nth (->Sg "abcd" 3) 1)]) => [3 [\a \b \c] \b]
+  ok     (do (deftype Sgr [s cnt] CharSequence (length [_] cnt) (charAt [_ i] (.charAt s i)) (subSequence [_ a b] (subs s a b)) (toString [_] (subs s 0 cnt))) (re-matches #"a+" (->Sgr "aaa" 3))) => "aaa"
+  ok     (do (deftype Psq [v] clojure.lang.ISeq (seq [_] (seq v)) (first [_] (first v)) (next [_] (next (seq v))) (more [_] (rest (seq v))) (count [_] (count v)) (equiv [_ o] (= (seq v) o)) (empty [_] nil) (cons [_ o] (cons o (seq v)))) [(pr-str (->Psq [1 2 3])) (clojure.string/replace (str (->Psq [1 2 3])) #"@[0-9a-f]+" "@H")]) => ["(1 2 3)" "user.Psq@H"]
+  ok     (count "gambit") => 6
+"Elapsed time: 0.06485 msecs"
+  ok     (time 1) => 1
+"Elapsed time: 2.701044 msecs"
+  ok     (time (reduce + (range 100))) => 4950
+  ok     (> (current-time-ms) 1700000000000) => true
+  ok     (do (flush) :ok) => :ok
+  ok     (delay? 1) => false
+  ok     (queue? 1) => false
+  ok     (tap> 1) => false
+  ok     (try (future 1) (catch Exception e (str (class e)))) => "class java.lang.UnsupportedOperationException"
+  ok     (try ((fn [x] x)) (catch Exception e (str (class e)))) => "class clojure.lang.ArityException"
+  ok     (str (class 1)) => "class java.lang.Long"
+  ok     (bit-and 12 10) => 8
+  ok     (bit-or 1 2 4) => 7
+  ok     (do (defn f2 ([x y] [x y]) ([x y & more] [x y more])) [(f2 1 2) (f2 1 2 3) (apply f2 1 2 [3 4]) (apply f2 1 [2])]) => [[1 2] [1 2 (3)] [1 2 (3 4)] [1 2]]
+  ok     (do (defn f3 ([x y & more] [x y more]) ([x y] [x y])) [(f3 1 2) (f3 1 2 3) (apply f3 1 [2]) (apply f3 1 2 [3 4])]) => [[1 2] [1 2 (3)] [1 2] [1 2 (3 4)]]
+  ok     (seq (chunk-first (seq (vec (range 40))))) => (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31)
+  ok     (* 2 1.5) => 3.0
+  ok     (hash [1 2 3]) => 736442005
+  ok     (hash (map inc [1 2])) => -1504369821
+  ok     [(.hashCode :a) (.hashCode (quote a/b)) (.hashCode "ab")] => [1013910569 -1640525104 3105]
+  ok     (defrecord Q [a]) => #'user/map->Q
+  ok     (= (hash (->Q 1)) (hash (->Q 1))) => true
+  ok     [(.indexOf "hello" "l") (.indexOf "hello" "l" 3) (.lastIndexOf "hello" "l") (.indexOf "hello" \l)] => [2 3 3 2]
+  ok     (locking :x 1) => 1
+  ok     (count (ns-publics (quote clojure.set))) => 12
+  ok     (str (find-var (quote clojure.core/print-method))) => "#'clojure.core/print-method"
+  ok     [(isa? Long Number) (seqable? 1) (ifn? :a) (class? String) (instance? String "a")] => [true false true true true]
+  ok     (count (supers Long)) => 4
+  ok     (do (defmulti m1 (fn [x] (class x))) (defmethod m1 Number [x] :num) (m1 1)) => :num
+  ok     (instance? Sequential (eduction (map inc) [1 2])) => true
+  ok     (seq (eduction (map inc) [1 2])) => (2 3)
+  ok     (try (zero? "a") (catch ClassCastException e (ex-message e))) => "class java.lang.String cannot be cast to class java.lang.Number"
+  ok     (with-open [r (reify java.io.Closeable (close [_] nil))] 1) => 1
+  ok     (with-out-str (print "hi")) => "hi"
+  ok     (try (throw (ex-info "x" {})) (catch Exception e :caught)) => :caught
+  ok     (try (re-pattern "\\p{L}") (catch Exception e (str (class e)))) => "class java.util.regex.PatternSyntaxException"
+  ok     [(parse-long "42") (parse-long "x") (parse-long "-7")] => [42 nil -7]
+  ok     (try (Long/parseLong "zz") (catch NumberFormatException e (ex-message e))) => "For input string: \"zz\""
+  ok     [(munge "a-b?") (clojure.lang.Compiler/demunge "a_b_QMARK_")] => ["a_b_QMARK_" "a-b?"]
+  ok     [(Math/floor 2.5) (Math/abs -3) (String/join "," ["a" "b"]) (Character/isWhitespace \space) (clojure.lang.Util/equiv 1 1)] => [2.0 3 "a,b" true true]
+  ok     [(clojure.math/sqrt 16) (clojure.math/next-up 1.0) (clojure.math/ulp 1.0) (str (clojure.math/copy-sign 1.0 -0.0)) (clojure.math/IEEE-remainder 11.0 3.0) (clojure.math/get-exponent 1024.5)] => [4.0 1.0000000000000002 2.220446049250313E-16 "-1.0" -1.0 10]
+  ok     [(try (clojure.math/add-exact 9223372036854775807 1) (catch ArithmeticException e (ex-message e))) (Math/multiplyExact 6 7) (str (Math/min -0.0 0.0)) (Math/signum -2.5)] => ["long overflow" 42 "-0.0" -1.0]
+  ok     [(Double/doubleToLongBits 1.5) (str (Double/longBitsToDouble 1)) (Float/floatToIntBits 0.1) (str 9.9E-324)] => [4609434218613702656 "4.9E-324" 1036831949 "9.9E-324"]
+  ok     [(= (class (Object.)) Object) (identical? (Object.) (Object.)) (System/getProperty "line.separator")] => [true false "\n"]
+  ok     (let [sb (StringBuilder.)] (.append sb "a") (.append sb 1) (.append sb \c) (str sb)) => "a1c"
+  ok     (let [sb (StringBuilder. "abc")] [(.length sb) (.charAt sb 1) (str (.reverse sb)) (count sb) (instance? CharSequence sb)]) => [3 \b "cba" 3 true]
+  ok     (with-out-str (clojure.pprint/pprint {:a [1 2] :b "x"})) => "{:a [1 2], :b \"x\"}\n"
+  ok     (clojure.pprint/cl-format nil "~5d|~a|~{~a~^,~}" 42 :x [1 2 3]) => "   42|:x|1,2,3"
+  ok     (binding [clojure.pprint/*print-right-margin* 24] (with-out-str (clojure.pprint/with-pprint-dispatch clojure.pprint/code-dispatch (clojure.pprint/pprint '(defn f [x] (if (pos? x) (inc x) (dec x))))))) => "(defn \n  f\n  [x]\n  (if\n    (pos? x)\n    (inc x)\n    (dec x)))\n"
+  ok     (clojure.pprint/cl-format nil "~,2f" 3.14159) => "3.14"
+  ok     (with-out-str (clojure.pprint/print-table [{:a 1 :b 2}])) => "\n| :a | :b |\n|----+----|\n|  1 |  2 |\n"
+  ok     [(.getName (class 1)) (.getSimpleName String) (.isInterface Sequential) (str (.getSuperclass Long))] => ["java.lang.Long" "String" true "class java.lang.Number"]
+  ok     [(str (class [])) (str Sequential) (pr-str Long)] => ["class clojure.lang.PersistentVector" "interface clojure.lang.Sequential" "java.lang.Long"]
+  ok     (let [b (java.nio.ByteBuffer/allocate 16)] (.putInt b 258) (.putDouble b 1.5) (.flip b) [(.getInt b) (.getDouble b) (.remaining b)]) => [258 1.5 0]
+  ok     (let [b (.order (java.nio.ByteBuffer/allocate 4) java.nio.ByteOrder/LITTLE_ENDIAN)] (.putInt b 1) (.rewind b) [(.get b) (.get b 1) (str (.order b))]) => [1 0 "LITTLE_ENDIAN"]
+  ok     (let [b (java.nio.ByteBuffer/allocate 4)] (.putFloat b 0.1) [(.getFloat b 0) (.getInt b 0)]) => [0.1 1036831949]
+  ok     [(str (java.nio.ByteBuffer/allocate 2)) (.getName (class (java.nio.ByteBuffer/allocateDirect 1))) (instance? java.nio.Buffer (java.nio.ByteBuffer/allocate 1))] => ["java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]" "java.nio.DirectByteBuffer" true]
+  ok     (let [b (java.nio.ByteBuffer/allocate 8) i (.asIntBuffer b)] (.put i 1 7) [(.getInt b 4) (str (.asCharBuffer (doto (java.nio.ByteBuffer/allocate 4) (.putChar \h) (.putChar \i) .flip)))]) => [7 "hi"]
+  ok     [(try (.getInt (java.nio.ByteBuffer/allocate 2)) (catch java.nio.BufferUnderflowException e :underflow)) (try (.put (.asReadOnlyBuffer (java.nio.ByteBuffer/allocate 1)) (byte 1)) (catch java.nio.ReadOnlyBufferException e :read-only))] => [:underflow :read-only]
+  ok     [(= (java.nio.ByteBuffer/allocate 2) (java.nio.ByteBuffer/allocate 2)) (.hashCode (doto (java.nio.ByteBuffer/allocate 2) (.put (byte 1)) .flip)) (compare (doto (java.nio.ByteBuffer/allocate 1) (.put 0 (byte 5))) (java.nio.ByteBuffer/allocate 1))] => [true 32 5]
+  ok     (let [b (java.nio.ByteBuffer/allocate 4)] (.putInt b 16909060) (.flip b) (.get b) (.compact b) [(.position b) (.get b 0) (.get b 2)]) => [3 2 4]
+  ok     (let [s (java.nio.CharBuffer/wrap "hi") v (.asCharBuffer (doto (java.nio.ByteBuffer/allocate 4) (.putChar \h) (.putChar \i) .flip))] [(= s v) (.hashCode s) (str (.subSequence s 1 2)) (.getName (class s)) (.isReadOnly s)]) => [true 4320 "i" "java.nio.StringCharBuffer" true]
+  ok     (let [m (java.util.TreeMap. {:c 3 :a 1 :b 2})] [(vec (keys m)) (str m) (pr-str m) (.firstKey m) (.floorKey m :bb) (vec (keys (.headMap m :b true)))]) => [[:a :b :c] "{:a=1, :b=2, :c=3}" "{:a 1, :b 2, :c 3}" :a :b [:a :b]]
+  ok     (let [m (java.util.TreeMap. >) d (.descendingMap m)] (.put m 1 :a) (.put d 3 :c) [(vec (keys m)) (vec (keys d)) (count m) (get m 3) (try (.put (.headMap m 2) 0 :x) (catch IllegalArgumentException e :iae))]) => [[3 1] [1 3] 2 :c :iae]
+  ok     (let [s (java.util.TreeSet. (java.util.Comparator/reverseOrder))] (.addAll s [1 3 2]) [(vec s) (.first s) (vec (.headSet s 2)) (= s #{1 2 3}) (str s)]) => [[3 2 1] 3 [3] true "[3, 2, 1]"]
+  ok     [(try (.put (java.util.TreeMap.) nil 1) (catch NullPointerException e :npe)) (try (let [m (java.util.TreeMap.)] (.put m :a 1) (.put m "b" 2)) (catch ClassCastException e :cce)) (= (java.util.TreeMap. {:a 1}) {:a 1}) (reduce-kv (fn [a k v] (conj a k v)) [] (java.util.TreeMap. {2 :b 1 :a}))] => [:npe :cce true [1 :a 2 :b]]
+  ok     (let [m (java.util.TreeMap. {:a 1 :b 2})] (doseq [e (.entrySet m)] (.setValue e (* 10 (val e)))) [(str m) (str (first m)) (into {} m) (try (.setValue (.firstEntry m) 0) (catch UnsupportedOperationException e :uoe))]) => ["{:a=10, :b=20}" ":a=10" {:a 10, :b 20} :uoe]
+  ok     [(jolt.host/profile-instrument! true) (jolt.host/profile-instrument! false) (jolt.host/profile-instrumenting?) (jolt.host/profile-sites) (count (jolt.host/profile-stats))] => [false true false [] 7]
+  ok     [(jolt.host/sample-start! 1000000 8) (jolt.host/sampling?) (jolt.host/sample-stop!) (jolt.host/sample-read)] => [false false nil [0 []]]
+  ok     (do (defn spt? [x] (= :spt (jolt.host/ref-get x :tag))) (defn spt [n] (doto (jolt.host/tagged-table :spt) (jolt.host/ref-put! :tag :spt) (jolt.host/ref-put! :n n))) :ok) => :ok
+  ok     (clojure.core/__register-compare! (fn [a b] (or (spt? a) (spt? b))) (fn [a b] (compare (jolt.host/ref-get a :n) (jolt.host/ref-get b :n)))) => nil
+  ok     [(compare (spt 1) (spt 2)) (compare (spt 2) (spt 2)) (mapv #(jolt.host/ref-get % :n) (sort [(spt 3) (spt 1) (spt 2)]))] => [-1 0 [1 2 3]]
+  ok     (clojure.core/__register-class! spt? (fn [_] "my.Spt") (fn [_] ["my.Spt" "my.Shape"])) => nil
+  ok     (do (defprotocol SptName (spt-name [x])) (extend-protocol SptName my.Shape (spt-name [x] :shape)) [(str (class (spt 1))) (spt-name (spt 1))]) => ["class my.Spt" :shape]
+  ok     [(clojure.core/__register-class-statics! "my.SptUtil" {"twice" (fn [x] (* 2 x)) "ZERO" 0}) (clojure.core/__register-class-ctor! "my.SptBox" (fn [x] [:box x]))] => [nil nil]
+  ok     [(my.SptUtil/twice 21) my.SptUtil/ZERO (my.SptBox. 1)] => [42 0 [:box 1]]
+  ok     ^double emission carries no #3% (target-prims :gambit)
+  ok     (let [f (fn [^double d] (long d)) i (fn [^double d] (int d)) c (fn [^double d] (char d)) u (fn [^double d] (unchecked-int d)) m (fn [t] (try (t) (catch IllegalArgumentException e (ex-message e))))] [(f 2.9) (f -2.9) (f 1.152921504606847E18) (f ##NaN) (i 2147483647.0) (m (fn [] (i 2147483647.9))) (int (c 55295.0)) (int (c 55296.0)) (u 4294967296.5)]) => [2 -2 1152921504606846976 0 2147483647 "Value out of range for int: 2.1474836479E9" 55295 55296 2147483647]
+  ok     (let [b (fn [^double d] (byte d)) c (fn [^double d] (char d)) m (fn [t] (try (t) (catch IllegalArgumentException e (ex-message e))))] [(m (fn [] (b ##NaN))) (m (fn [] (b 127.9))) (m (fn [] (c ##NaN))) (byte (identity ##NaN)) (byte (identity 127.9)) (m (fn [] (byte (identity ##Inf)))) (m (fn [] (byte (float ##NaN))))]) => ["Value out of range for byte: NaN" "Value out of range for byte: 127.9" "Value out of range for char: NaN" 0 127 "Value out of range for long: Infinity" "Value out of range for byte: NaN"]
+  ok     (defn vals [] 1) => #'user/vals, warned on stderr
+  ok     (vals) => 1
+  ok     (def pf (jolt.ffi/__cfn-pointer [:int64] :int64)) => #'user/pf
+  ok     (def pb (jolt.ffi/__cfn-pointer [[:by-value [:struct [[:a :int]]]]] :int64)) => #'user/pb
+  ok     (try (pf 1 2) (catch Throwable t (ex-message t))) => "jolt.ffi/pointer-fn: ffi is unsupported on the gambit target"
+  ok     (try (pb 1 2) (catch UnsupportedOperationException t (ex-message t))) => "jolt.ffi/pointer-fn: ffi is unsupported on the gambit target"
+  ok     (try (jolt.ffi/__ccallable (fn [p] 0) [[:by-value [:struct [[:a :int]]]]] :int) (catch UnsupportedOperationException t (ex-message t))) => "jolt.ffi/foreign-callable: ffi is unsupported on the gambit target"
+  ok     (try (jolt.ffi/__ccallable (fn [d] nil) [:int] [:by-value [:struct [[:a :int]]]]) (catch Throwable t (ex-message t))) => "jolt.ffi/foreign-callable: ffi is unsupported on the gambit target"
+eval-test: 0 failure(s)
+eval-test: PASS — jolt compiles and evaluates on native gsi

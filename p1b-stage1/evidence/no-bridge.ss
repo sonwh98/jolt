@@ -1,0 +1,5 @@
+(##include "/Users/sto/workspace/jolt-ffi-p1b/host/gambit/prelude-shims.ss")
+(##include "/Users/sto/workspace/jolt-ffi-p1b/host/gambit/scheme-adapter-runtime.ss")
+(let ((message (guard (e (#t (condition-message e))) (sa-foreign-alloc 8) "NO-RAISE")))
+  (if (equal? message "ffi is unsupported on the gambit target: the stage-1 native bridge is not built or failed to load — run make gambitffi-bridge from the repo root (looked for build/gambit-ffi/joltffi-bridge.o1)")
+      (begin (display message) (newline) (exit 0)) (exit 1)))

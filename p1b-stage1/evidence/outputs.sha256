@@ -1,0 +1,9 @@
+e74bebcb40700f0ab6b54e7e21e575cf58eef09839aa0e04eeed7d15a249791b  build/gambit-ffi/joltffi-bridge.o1
+9160beb9161e67936fe1a92fddac1a3fbb6c1a1a895766594ccf1d6a13fa9fa3  build/gambit-ffi/libjoltffi-fixture.dylib
+46bae31f1346f9c4fe8dc9e106c6502cd9cb9c99ae791fdc793c0d748979a0fa  build/gambit-ffi/libjoltffi-fixture2.dylib
+6a357bde77811c720f713261e8b308a2503ded522321767e5cc45dfcff294d21  build/gambit-ffi/libjoltffi-unloadable.dylib
+dc42d20172a613f65ad5736f8f7838746f04c00c3a6edace0cd0f3cd1374ab9b  /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc
+83aed98b27c4574b767d2e47c7062f40375ea5365333abee2364fade6713f015  /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsi
+310fac9a6baeec05be3d38dbeaa2fda02ccbbe0b3ffd174de5aa75800588488d  /Users/sto/.local/share/mise/installs/gambit/4.9.8/include/gambit.h
+86bba8349da976b9711266a109cf5ec10636459a60fcbed7523345f04431af14  /Users/sto/.local/share/mise/installs/gambit/4.9.8/lib/libgambit.a
+32f458ffcca3ceab06f823a37554fc1037eed739a892663d991bd3dadb8b832a  build/gambit-ffi/capture-test/joltffi-bridge.o1

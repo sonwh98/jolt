@@ -1,0 +1,35 @@
+(ns yin.repl.frontends
+  "The Gambit terminal catalog uses the forms-based Clojure frontend."
+  (:require [yang.clojure :as clojure]
+            [yang.frontend :as frontend]
+            [yin.repl :as repl]))
+
+(defn clojure-manifest []
+  {:yang.frontend/id :yang/clojure
+   :yang.frontend/spi 1
+   :yang.frontend/revision "c1-2"
+   :yang.frontend/language :clojure
+   :yang.frontend/grammar {:yang.grammar/package "none"
+                           :yang.grammar/entries {:module "program"}
+                           :yang.grammar/export-profile :yang.cst/v1}
+   :yang.frontend/options-schema :segment/none
+   :yang.frontend/lowering-profile :yang.clojure/constructed-collections-v1
+   :yang.frontend/runtime-profile :segment/legacy
+   :yang.frontend/support-profile :yang.clojure/c1})
+
+(defn- lower [forms]
+  (if (= 1 (count forms))
+    (clojure/compile (first forms))
+    (clojure/compile-program forms)))
+
+(defn standard []
+  (let [catalog (frontend/install frontend/empty-catalog (clojure-manifest)
+                                  {:input :forms, :parse identity, :lower lower})]
+    (when (frontend/refused? catalog)
+      (throw (ex-info "Could not install the Gambit Clojure frontend" catalog)))
+    catalog))
+
+(defn create-state
+  ([] (create-state {}))
+  ([opts]
+   (repl/create-state (update opts :frontends #(or % (standard))))))

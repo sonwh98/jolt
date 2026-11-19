@@ -1986,8 +1986,17 @@ DATOMWORLD_ROOT ?= ../datomworld
 gambitdaobytes:
 	sh host/gambit/ffi/watchdog.sh 240 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss "$(abspath $(DATOMWORLD_ROOT))"
 
+# The interpreted bootstrap is available through yin-repl-main.ss. Compiling
+# the same boot makes the full app closure fit the acceptance watchdog.
+GAMBIT_YIN_BOOT ?=
 gambityinrepl: gambitffi-bridge
-	sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$(abspath $(DATOMWORLD_ROOT))"
+	@boot="$(GAMBIT_YIN_BOOT)"; \
+	if [ -z "$$boot" ]; then \
+	  boot=$$(sh host/gambit/ffi/watchdog.sh 2400 python3 host/gambit/build-yin-boot.py \
+	    "$(GAMBIT_GSC)" "$(abspath build/gambit-yin)") || exit $$?; \
+	fi; \
+	JOLT_GAMBIT_YIN_BOOT="$$boot" sh test/gambit/yin-repl-session.sh \
+	  "$(GAMBIT_GSI)" "$(abspath $(DATOMWORLD_ROOT))" host/gambit/yin-repl-native.ss
 
 # Every Scheme global the full-profile boot references is defined — Gambit's
 # own linker report over the compiled boot, minus what the record translator

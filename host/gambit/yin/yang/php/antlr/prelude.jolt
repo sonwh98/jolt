@@ -1,0 +1,5 @@
+(ns yang.php.antlr.prelude
+  "The local Gambit catalog has no PHP frontend, so its registry carries no
+   PHP runtime bindings.")
+
+(defn admit [registry] registry)

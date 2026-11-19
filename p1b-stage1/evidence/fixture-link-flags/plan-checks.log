@@ -1,0 +1,3 @@
+Darwin: PASS — all four expanded fixture link commands are byte-identical
+Linux plan: PASS — all four fixture commands select -shared -fPIC (no Linux execution)
+Unsupported platform: PASS — make refuses with the explicit fixture-link error

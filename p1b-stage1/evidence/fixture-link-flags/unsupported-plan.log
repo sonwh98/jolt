@@ -1,0 +1,15 @@
+sh host/gambit/ffi/verify-digests.sh "/Users/sto/.local/share/mise/installs/gambit/4.9.8"
+/Applications/Xcode.app/Contents/Developer/usr/bin/make --no-print-directory gambitffi-verify-digests
+sh host/gambit/ffi/verify-digests.sh "/Users/sto/.local/share/mise/installs/gambit/4.9.8"
+mkdir -p build/gambit-ffi
+rm -f build/gambit-ffi/joltffi-bridge.o1 build/gambit-ffi/joltffi-bridge.o[0-9]* \
+	       build/gambit-ffi/joltffi-bridge.c build/gambit-ffi/joltffi-bridge.o \
+	       build/gambit-ffi/joltffi-bridge.scm
+cp host/gambit/ffi/joltffi-bridge.scm host/gambit/ffi/generated-shims.scm build/gambit-ffi/
+cd build/gambit-ffi && sh ../../host/gambit/ffi/watchdog.sh 120 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc -dynamic -keep-temp joltffi-bridge.scm
+shasum -a 256 build/gambit-ffi/joltffi-bridge.o1 \
+	  > build/gambit-ffi/joltffi-bridge.o1.sha256
+cc --version > build/gambit-ffi/compiler.txt
+shasum -a 256 /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsc /Users/sto/.local/share/mise/installs/gambit/4.9.8/bin/gsi "/Users/sto/.local/share/mise/installs/gambit/4.9.8/include/gambit.h" \
+	  "/Users/sto/.local/share/mise/installs/gambit/4.9.8/lib/libgambit.a" > build/gambit-ffi/runtime.sha256
+Makefile:2117: *** gambitffi: unsupported fixture-link platform 'FreeBSD' (expected Darwin or Linux).  Stop.

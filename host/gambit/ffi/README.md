@@ -87,9 +87,11 @@ and finish the toolchain portion with `gambitffi: toolchain verified (7 inputs)`
 No Linux manifest is supplied from macOS: until it is recorded on Linux,
 Linux verification intentionally fails for the missing platform file.
 Recording provenance does not qualify Linux execution, ABI or consumer parity.
-The native gates still need their independent Linux leg. In particular, the
-existing fixture recipes use Darwin `-dynamiclib` flags; this provenance-only
-change does not qualify those recipes on Linux.
+The native gates still need their independent Linux leg. All four fixture
+link commands select `-dynamiclib` on Darwin and `-shared -fPIC` on Linux;
+other host OS names raise an explicit fixture-link error. The existing `.dylib`
+fixture filenames are retained on both hosts. Linux link-plan checks on macOS
+are not execution or ABI qualification on Linux.
 
 The helper's acceptance, deterministic-recording and negative checks can be run
 with `python3 host/gambit/ffi/test-toolchain.py` (set TMPDIR inside the checkout

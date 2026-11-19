@@ -2082,6 +2082,17 @@ gambitboot:
 GAMBIT-FFI-DIR := host/gambit/ffi
 GAMBIT-FFI-BUILD := build/gambit-ffi
 
+# Keep Darwin's expanded link commands unchanged. Reject other hosts when an
+# FFI fixture recipe is expanded, without disabling unrelated make targets.
+GAMBIT-FFI-HOST-OS := $(shell uname -s)
+ifeq ($(GAMBIT-FFI-HOST-OS),Darwin)
+GAMBIT-FFI-SHARED-FLAGS := -dynamiclib
+else ifeq ($(GAMBIT-FFI-HOST-OS),Linux)
+GAMBIT-FFI-SHARED-FLAGS := -shared -fPIC
+else
+GAMBIT-FFI-SHARED-FLAGS = $(error gambitffi: unsupported fixture-link platform '$(GAMBIT-FFI-HOST-OS)' (expected Darwin or Linux))
+endif
+
 # the pinned inputs must match the recorded digests BEFORE anything compiles
 gambitffi-verify-digests:
 	@sh $(GAMBIT-FFI-DIR)/verify-digests.sh "$(GAMBIT_PREFIX)"
@@ -2105,7 +2116,7 @@ $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib: gambitffi-force $(GAMBIT-FFI-DIR)/
 		$(GAMBIT-FFI-DIR)/DIGESTS.txt
 	@$(MAKE) --no-print-directory gambitffi-verify-digests
 	@mkdir -p $(GAMBIT-FFI-BUILD)
-	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 $(GAMBIT-FFI-SHARED-FLAGS) -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
 	  $(GAMBIT-FFI-DIR)/joltffi-fixture.c
 	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
 	  > $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib.sha256
@@ -2114,7 +2125,7 @@ $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib: gambitffi-force $(GAMBIT-FFI-DIR)
 		$(GAMBIT-FFI-DIR)/DIGESTS.txt
 	@$(MAKE) --no-print-directory gambitffi-verify-digests
 	@mkdir -p $(GAMBIT-FFI-BUILD)
-	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 $(GAMBIT-FFI-SHARED-FLAGS) -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
 	  $(GAMBIT-FFI-DIR)/joltffi-fixture2.c
 	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
 	  > $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib.sha256
@@ -2126,8 +2137,8 @@ $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib: gambitffi-force $(GAMBIT-FFI-DI
 		$(GAMBIT-FFI-DIR)/joltffi-dep.c $(GAMBIT-FFI-DIR)/joltffi-unloadable.c
 	@$(MAKE) --no-print-directory gambitffi-verify-digests
 	@mkdir -p $(GAMBIT-FFI-BUILD)
-	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib $(GAMBIT-FFI-DIR)/joltffi-dep.c
-	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib \
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 $(GAMBIT-FFI-SHARED-FLAGS) -o $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib $(GAMBIT-FFI-DIR)/joltffi-dep.c
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 $(GAMBIT-FFI-SHARED-FLAGS) -o $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib \
 	  $(GAMBIT-FFI-DIR)/joltffi-unloadable.c $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib
 	rm $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib
 	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib \

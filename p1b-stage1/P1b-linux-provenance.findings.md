@@ -97,4 +97,72 @@ build issue remains visible in the existing fixture recipes: Darwin-specific
 those recipes and platform-specific witnesses still need their Linux leg.
 All callback/blocking and other stage-1 refusals remain unchanged. No push.
 
+## Linux r2 — platform-conditional fixture link flags
+
+Completed-GMT: 2026-11-19 10:35:29 GMT
+Completed-Local: 2026-11-19 17:35:29 ICT (+07)
+Coding-Agent: Codex
+Session-ID: 01a1f1f9-2d2b-71a2-b88a-1675b81dd975
+Created-GMT: 2026-11-19 10:32:05 GMT
+Local base: be0710cd. The orchestrator reports Linux pins recorded separately
+on shiva in f5920f1f; this fix changes no pin manifests or DIGESTS.txt.
+
+Makefile:2087 selects the fixture link flags from uname -s:
+
+- Darwin: -dynamiclib, preserving the existing complete expanded commands.
+- Linux: -shared -fPIC.
+- Other host OS names: an explicit unsupported fixture-link platform error
+  when the fixture recipe is expanded, without breaking unrelated targets.
+
+All four fixture C link lines use the selector: main fixture (Makefile:2119),
+duplicate-symbol fixture (:2128), missing dependency (:2140), and unloadable
+fixture (:2141). The audit found no other literal -dynamiclib link command in
+Makefile or host/gambit/ffi. Bridge and errno-test compilation continue through
+the provisioned gsc driver's native platform settings. Fixture filenames and
+paths, source files, options outside the shared-library flags, and all FFI
+capability/refusal semantics remain unchanged.
+
+Verification:
+
+```text
+Darwin: PASS — all four expanded fixture link commands are byte-identical
+Linux plan: PASS — all four fixture commands select -shared -fPIC (no Linux execution)
+Unsupported platform: PASS — make refuses with the explicit fixture-link error
+gambitffi-abi: 78 check(s), 0 failure(s)
+gambitffi-public: 44 check(s), 0 failure(s)
+gambitffi-errno-check: 9 check(s), 0 failure(s)
+gambitffi-load-failure-smoke: 14 check(s), 0 failure(s)
+gambitffi: PASS — all stage-1 qualified-tier gates green
+```
+
+Before/after Darwin dry-run plans compare complete command text, including
+continuation lines, source paths and output paths. Linux and FreeBSD branches
+were simulated through a make variable override in dry-run mode only; these
+are link-plan checks, not execution on Linux. The retained checker asserts
+four commands, exact Darwin equality, exact Linux substitution, and a nonzero
+unsupported-platform status with the intended message. Its watchdog is 90s
+(20s per make plan). The macOS make gambitffi regression ran with
+JOLT_REQUIRE_GAMBIT=1 under a 300s external watchdog. Raw plans, the checker,
+state-derived verdicts and the full native output are in
+`evidence/fixture-link-flags/`.
+
+Orchestrator rerun on shiva, after applying this fix to the existing branch
+while retaining f5920f1f's Linux manifest and digest-index changes:
+
+```sh
+cd "$HOME/ci/jolt-ffi-linux"
+mkdir -p build/p1b-linux-r2/tmp
+JOLT_REQUIRE_GAMBIT=1 sh host/gambit/ffi/watchdog.sh 600 make \
+  gambitffi gambitcheck gambitkernel gambiteval \
+  GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8" \
+  TMPDIR="$PWD/build/p1b-linux-r2/tmp"
+```
+
+Use the already configured Linux Chez setting if that lane supplies one.
+gambitffi forces all four fixture rebuilds, then runs ABI/public, errno and
+loader gates; gambitcheck retains supported-row and refusal assertions. Do not
+re-record pins merely to pass a mismatch. Linux execution/ABI qualification is
+still the orchestrator's independent leg; only the macOS regression and Linux
+link-plan selection were verified here. No push.
+
 DONE

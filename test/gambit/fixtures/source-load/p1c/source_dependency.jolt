@@ -1,0 +1,2 @@
+(ns p1c.source-dependency)
+(defn combine [a b] (+ a b))

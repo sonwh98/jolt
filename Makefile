@@ -126,7 +126,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 
 # Only mark PHONY targets for names that have file system conflicts:
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
-        gambitcheck gambitkernel gambiteval gambitseed gambitweb gambitprofile \
+        gambitcheck gambitkernel gambiteval gambitsourceload gambityinrepl gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -1972,6 +1972,19 @@ gambiteval:
 	else \
 		$(GAMBIT-SKIP); \
 	fi
+
+# The source-loader witness is self-contained. The full Yin gate reads a separate
+# datomworld checkout and stays opt-in while its native host closure is incomplete.
+gambitsourceload:
+	@if [ -x "$(GAMBIT_GSI)" ]; then \
+		sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss; \
+	else \
+		$(GAMBIT-SKIP); \
+	fi
+
+DATOMWORLD_ROOT ?= ../datomworld
+gambityinrepl: gambitffi-bridge
+	sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$(abspath $(DATOMWORLD_ROOT))"
 
 # Every Scheme global the full-profile boot references is defined — Gambit's
 # own linker report over the compiled boot, minus what the record translator

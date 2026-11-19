@@ -240,6 +240,8 @@
 
 (def-var! "clojure.core" "delay?" (lambda (x) #f))
 (def-var! "clojure.core" "queue?" (lambda (x) #f))
+(def-var! "clojure.core" "array?" (lambda (x) #f))
+(def-var! "clojure.core" "bytes?" (lambda (x) #f))
 
 ;; No tap registry exists, so nothing is listening and tap> reports that.
 ;; Registering one, on the other hand, is a request this target cannot honor.

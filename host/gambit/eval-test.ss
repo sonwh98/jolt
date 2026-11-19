@@ -99,6 +99,7 @@
 ;; A type this target cannot construct answers the question instead of raising.
 (check "(delay? 1)" "false")
 (check "(queue? 1)" "false")
+(check "[(array? []) (bytes? [])]" "[false false]")
 (check "(tap> 1)" "false")
 
 ;; An absent capability raises a catchable, named error rather than crashing on

@@ -2592,7 +2592,8 @@
  {:suite "records-ctor-arity" :expr "(do (defrecord ArC9b [x y]) (try (->ArC9b 1 2 3) (catch clojure.lang.ArityException e :arity-throw)))" :expected ":arity-throw"}
  {:suite "records-ctor-arity" :expr "(do (defrecord ArC9c [x y]) (->ArC9c 1 2))" :expected "#user.ArC9c{:x 1, :y 2}"}
  ;; Stage C — assoc applies ^double coercion on record fields
- {:suite "records-assoc-double" :expr "(do (deftype DblC10 [^double x]) (.getName (class (.-x (assoc (->DblC10 1) :x 2)))))" :expected "\"java.lang.Double\""}
+ {:suite "records-assoc-double" :expr "(do (defrecord DblC10 [^double x]) (.getName (class (.-x (assoc (->DblC10 1) :x 2)))))" :expected "\"java.lang.Double\""}
+ {:suite "records-assoc-refusal" :expr "(do (deftype AssocRefusal [x]) (let [t (AssocRefusal. 1)] [(associative? t) (try (assoc t :b 2) (catch ClassCastException e (ex-message e)))]))" :expected "[false \"class user.AssocRefusal cannot be cast to class clojure.lang.Associative\"]"}
  ;; Stage D — range step 0 repeats start infinitely
  {:suite "seq-range-step-zero" :expr "(take 3 (range 5 10 0))" :expected "(5 5 5)"}
  ;; Stage D — binding does not auto-deref var-cell

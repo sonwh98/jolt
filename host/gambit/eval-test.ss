@@ -53,6 +53,8 @@
 (check "(defrecord Pt [x y])" "#'user/map->Pt")
 (check "(:x (->Pt 3 4))" "3")
 (check "(pr-str (->Pt 1 2))" "\"#user.Pt{:x 1, :y 2}\"")
+(check "(do (deftype AssocRefusal [x]) (let [t (AssocRefusal. 1)] [(associative? t) (try (assoc t :b 2) (catch ClassCastException e (ex-message e)))]))"
+       "[false \"class user.AssocRefusal cannot be cast to class clojure.lang.Associative\"]")
 (check "(defprotocol Shape (perim [s]))" "#'user/perim")
 (check "(defrecord Sq [w] Shape (perim [s] (* 4 (:w s))))" "nil")
 (check "(perim (->Sq 5))" "20")

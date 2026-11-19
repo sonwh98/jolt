@@ -1393,6 +1393,7 @@
           (cond
             ((and (not (vector-ref ifc 14)) (jrec-cl coll "assoc")) =>
              (lambda (m) (jolt-invoke m coll k v)))
+            ((not (vector-ref ifc 3)) (%r-jolt-assoc1 coll k v))
             (else
              (let ((i (and (keyword? k) (jrec-field-index coll k))))
                (if i

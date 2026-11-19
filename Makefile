@@ -128,6 +128,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
         gambitcheck gambitkernel gambiteval gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
+        gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
         fibersbench dynbench \
         fibersresidue
@@ -1940,9 +1941,10 @@ gambitseedcheck:
 	    rm -rf "$$out"; exit 1; \
 	  fi
 
-gambitcheck:
+gambitcheck: gambitffi-bridge
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
-		"$(GAMBIT_GSI)" host/gambit/gambitcheck.ss; \
+		sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/gambitcheck.ss && \
+		sh host/gambit/ffi/watchdog.sh 180 "$(GAMBIT_GSI)" host/gambit/ffi/gambitffi-public.ss; \
 	else \
 		$(GAMBIT-SKIP); \
 	fi
@@ -1952,7 +1954,7 @@ gambitcheck:
 # a second on gsi. Run from the repo root (boot's irregex load is cwd-relative).
 gambitkernel:
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
-		"$(GAMBIT_GSI)" host/gambit/kernel-test.ss; \
+		sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/kernel-test.ss; \
 	else \
 		$(GAMBIT-SKIP); \
 	fi
@@ -1964,7 +1966,7 @@ gambitkernel:
 # for two weeks (jolt-cw2p) with nothing red. Run from the repo root.
 gambiteval:
 	@if [ -x "$(GAMBIT_GSI)" ]; then \
-		"$(GAMBIT_GSI)" host/gambit/eval-test.ss; \
+		sh host/gambit/ffi/watchdog.sh 180 "$(GAMBIT_GSI)" host/gambit/eval-test.ss; \
 	else \
 		$(GAMBIT-SKIP); \
 	fi
@@ -2059,6 +2061,121 @@ gambitboot:
 	else \
 	  $(GAMBIT-SKIP); \
 	fi
+
+# ---- P1b-stage1: the gambitffi* gates ----------------------------------------
+#
+# The bounded FFI tier qualified per the standing codex C4 PARTIAL-GO ruling:
+# memory ops, loading, ordinary calls and invocation-local errno capture,
+# behind the ahead-of-time native bridge (host/gambit/ffi/joltffi-bridge.scm,
+# compiled by gsc into build/gambit-ffi/joltffi-bridge.o1). Blocking,
+# callables, runtime signatures and object pinning keep their message-carrying
+# refusals; the gates assert both the witnesses AND the retained refusals.
+#
+# Deterministic bootstrap: every artifact builds from the pinned inputs in
+# host/gambit/ffi/DIGESTS.txt — verified before compiling, output digests
+# recorded after. No ambient .o1/.dylib is ever trusted. The aggregate target
+# is fail-closed: it passes only when all three gate scripts pass, and a gate
+# runs under the P1a-r2 external watchdog (host/gambit/ffi/watchdog.sh, the
+# same pattern the p1a witnesses use) so a frozen VM is a recorded failure,
+# never a hang.
+
+GAMBIT-FFI-DIR := host/gambit/ffi
+GAMBIT-FFI-BUILD := build/gambit-ffi
+
+# the pinned inputs must match the recorded digests BEFORE anything compiles
+gambitffi-verify-digests:
+	@sh $(GAMBIT-FFI-DIR)/verify-toolchain.sh "$(GAMBIT_PREFIX)"
+	@sh $(GAMBIT-FFI-DIR)/verify-digests.sh
+
+$(GAMBIT-FFI-BUILD)/joltffi-bridge.o1: gambitffi-force $(GAMBIT-FFI-DIR)/joltffi-bridge.scm \
+		$(GAMBIT-FFI-DIR)/DIGESTS.txt $(GAMBIT-FFI-DIR)/generated-shims.scm
+	@$(MAKE) --no-print-directory gambitffi-verify-digests
+	@mkdir -p $(GAMBIT-FFI-BUILD)
+	@rm -f $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1 $(GAMBIT-FFI-BUILD)/joltffi-bridge.o[0-9]* \
+	       $(GAMBIT-FFI-BUILD)/joltffi-bridge.c $(GAMBIT-FFI-BUILD)/joltffi-bridge.o \
+	       $(GAMBIT-FFI-BUILD)/joltffi-bridge.scm
+	cp $(GAMBIT-FFI-DIR)/joltffi-bridge.scm $(GAMBIT-FFI-DIR)/generated-shims.scm $(GAMBIT-FFI-BUILD)/
+	cd $(GAMBIT-FFI-BUILD) && sh ../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp joltffi-bridge.scm
+	@shasum -a 256 $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1 \
+	  > $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1.sha256
+	@cc --version > $(GAMBIT-FFI-BUILD)/compiler.txt
+	@shasum -a 256 $(GAMBIT_GSC) $(GAMBIT_GSI) "$(GAMBIT_PREFIX)/include/gambit.h" \
+	  "$(GAMBIT_PREFIX)/lib/libgambit.a" > $(GAMBIT-FFI-BUILD)/runtime.sha256
+
+$(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib: gambitffi-force $(GAMBIT-FFI-DIR)/joltffi-fixture.c \
+		$(GAMBIT-FFI-DIR)/DIGESTS.txt
+	@$(MAKE) --no-print-directory gambitffi-verify-digests
+	@mkdir -p $(GAMBIT-FFI-BUILD)
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
+	  $(GAMBIT-FFI-DIR)/joltffi-fixture.c
+	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
+	  > $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib.sha256
+
+$(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib: gambitffi-force $(GAMBIT-FFI-DIR)/joltffi-fixture2.c \
+		$(GAMBIT-FFI-DIR)/DIGESTS.txt
+	@$(MAKE) --no-print-directory gambitffi-verify-digests
+	@mkdir -p $(GAMBIT-FFI-BUILD)
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
+	  $(GAMBIT-FFI-DIR)/joltffi-fixture2.c
+	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
+	  > $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib.sha256
+
+# the present-but-unloadable candidate: a one-symbol dylib linked against a
+# dependency dylib this recipe then REMOVES, so dlopen fails with the loader's
+# own preserved reason (a missing dependency, not a missing file)
+$(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib: gambitffi-force $(GAMBIT-FFI-DIR)/DIGESTS.txt \
+		$(GAMBIT-FFI-DIR)/joltffi-fixture2.c
+	@$(MAKE) --no-print-directory gambitffi-verify-digests
+	@mkdir -p $(GAMBIT-FFI-BUILD)
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib $(GAMBIT-FFI-DIR)/joltffi-dep.c
+	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib \
+	  $(GAMBIT-FFI-DIR)/joltffi-unloadable.c $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib
+	rm $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib
+	@shasum -a 256 $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib \
+	  > $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib.sha256
+
+# bridge + fixtures, always current: the entry every gambitffi gate depends on
+.PHONY: gambitffi-force gambitffi-verify-digests
+gambitffi-force:
+
+gambitffi-bridge: gambitffi-verify-digests $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1 \
+                  $(GAMBIT-FFI-BUILD)/libjoltffi-fixture.dylib \
+                  $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib \
+                  $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib
+
+gambitffi-abi: gambitffi-bridge
+	@if [ -x "$(GAMBIT_GSI)" ]; then \
+		sh $(GAMBIT-FFI-DIR)/watchdog.sh 120 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-abi.ss && \
+		sh $(GAMBIT-FFI-DIR)/watchdog.sh 180 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-public.ss; \
+	else \
+		echo "$@: required Gambit runtime is absent" >&2; exit 1; \
+	fi
+
+
+$(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1: $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1
+	@mkdir -p $(GAMBIT-FFI-BUILD)/capture-test
+	@rm -f $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o[0-9]*
+	cp $(GAMBIT-FFI-DIR)/joltffi-bridge.scm $(GAMBIT-FFI-DIR)/generated-shims.scm $(GAMBIT-FFI-BUILD)/capture-test/
+	cd $(GAMBIT-FFI-BUILD)/capture-test && sh ../../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp -cc-options -DJOLTFFI_CAPTURE_TEST joltffi-bridge.scm
+	@shasum -a 256 $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1 > $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1.sha256
+
+gambitffi-errno-check: gambitffi-bridge $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1
+	@if [ -x "$(GAMBIT_GSI)" ]; then \
+		sh $(GAMBIT-FFI-DIR)/watchdog.sh 120 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-errno.ss; \
+	else \
+		echo "$@: required Gambit runtime is absent" >&2; exit 1; \
+	fi
+
+gambitffi-load-failure-smoke: gambitffi-bridge
+	@if [ -x "$(GAMBIT_GSI)" ]; then \
+		sh $(GAMBIT-FFI-DIR)/watchdog.sh 90 "$(GAMBIT_GSI)" $(GAMBIT-FFI-DIR)/gambitffi-load-failure.ss; \
+	else \
+		echo "$@: required Gambit runtime is absent" >&2; exit 1; \
+	fi
+
+# the aggregate: all three, fail-closed (each script exits nonzero on failure)
+gambitffi: gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke
+	@echo "gambitffi: PASS — all stage-1 qualified-tier gates green"
 
 # The browser bundle: the whole stack (kernel + seed + compiler + a queue-polling
 # REPL loop) compiled to one JavaScript file by the Gambit backend. ~30s, ~32MB

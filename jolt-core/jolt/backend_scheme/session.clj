@@ -74,7 +74,12 @@
 ;; derived spelling degrades to the checked op, safe-and-slower, never wrong.
 (defn target [] @(:target (cur)))
 (def ^:private target-prims
-  {:chez {:unsafe-prefix "#3%"}})
+  {:chez  {:unsafe-prefix "#3%"}
+   ;; P1b-stage1 (inventory Q4): the entry astra named, made explicit. Gambit
+   ;; has no unsafe variants, so the prefix is "" and every derived spelling
+   ;; degrades to the checked op — this table now DECIDES that instead of the
+   ;; (str nil) accident the pre-stage1 lookup degraded through.
+   :gambit {:unsafe-prefix ""}})
 (defn unsafe-prefix [] (get-in target-prims [(target) :unsafe-prefix]))
 
 ;; contagion clone sites (jolt devirt-gated fl* contagion for :num fields): a set of

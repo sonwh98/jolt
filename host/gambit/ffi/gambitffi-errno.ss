@@ -1,0 +1,36 @@
+;; Same generated shims as production, compiled with a post-capture clobber.
+;; No foreign-thread or nested-callback qualification is claimed by this gate.
+(##include "ffi-harness.ss")
+(load "build/gambit-ffi/capture-test/joltffi-bridge.o1")
+(ffi-load-fixture!)
+(ffi-check "post-capture clobber instrumentation enabled" (joltffi-capture-test-enabled?) #t)
+(let* ((target (sa-foreign-entry-address "joltffi_fx_socketlike"))
+       (cell (sa-foreign-alloc 4))
+       (eacces ((sa-foreign-procedure "joltffi_fx_eacces" () int)))
+       (f (sa-foreign-procedure-native-error posix () target (int int int) int)))
+  (ffi-check "wrong-order control result" (joltffi-ctrl-wrong-order target cell) -1)
+  (ffi-check "wrong-order control sees intervening clobber" (sa-foreign-ref 'int cell 0) 4242)
+  (ffi-check "real generated capture survives identical intervening clobber"
+             (call-with-values (lambda () (f -1 0 0)) list) (list -1 eacces))
+  ;; Success doesn't reset errno: preset and target execute in one C frame,
+  ;; avoiding assumptions about malloc/conversion preserving errno between calls.
+  (ffi-check "preserving success returns result" (joltffi-preserve-control target cell) 6)
+  (ffi-check "preserving success captures preset errno unnormalized" (sa-foreign-ref 'int cell 0) 7777)
+  (let ((pair (call-with-values (lambda () (f -1 0 0)) list)))
+    (joltffi-ctrl-wrong-order target cell)
+    (ffi-check "post-capture foreign clobber cannot change returned pair" pair (list -1 eacces)))
+  (ffi-check "generated successful capture keeps target errno, without normalization"
+    (call-with-values (lambda () ((sa-foreign-procedure-native-error posix () "joltffi_fx_success_errno" (int int int) int) 1 2 3)) list)
+    '(6 7777))
+  (let ((g (sa-foreign-procedure-native-error posix () "joltffi_fx_listenlike" (int int) int))
+        (ebadf ((sa-foreign-procedure "joltffi_fx_ebadf" () int))))
+    (let loop ((n 0))
+      (unless (= n 1000)
+        (let ((a (call-with-values (lambda () (f -1 n 0)) list))
+              (b (call-with-values (lambda () (g -1 n)) list)))
+          (unless (and (equal? a (list -1 eacces)) (equal? b (list -1 ebadf)))
+            (error 'errno "invocation-local capture failed" n a b)))
+        (loop (+ n 1))))
+    (ffi-check "1000 alternating invocation-local capture pairs" #t #t))
+  (sa-foreign-free cell))
+(ffi-gate-finish "gambitffi-errno-check")

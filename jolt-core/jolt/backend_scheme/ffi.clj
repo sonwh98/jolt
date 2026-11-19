@@ -460,35 +460,37 @@
 ;; call raised "no entry". curl_easy_setopt is that case. The address+convention
 ;; form this emits is the one the aggregate C witness already covers on each
 ;; target ABI.
+(defn- gambit-procedure-expr [node vi name]
+  ;; Gambit eval cannot see unit macros. Emit the adapter's registered-shape
+  ;; constructor with literal type data; C shims remain ahead-of-time facilities.
+  (if (:blocking node)
+    "(joltffi-public-blocking-raise)"
+    (let [at (:argtypes node)
+          types (if vi (vec (concat (subvec at 0 vi) (subvec at (inc vi)))) at)]
+      (str "(joltffi-public-procedure '(" (str/join " " (map ffi-arg-type->chez types)) ") '"
+           (ffi-type->chez (:rettype node)) " " name " " (if vi vi "#f") " " (if (:capture-native-error node) "#t" "#f") ")"))))
+
 (defn- ffi-named-procedure-expr [node vi signature]
   (let [csym (chez-str-lit (:csym node))
         capture (:capture-native-error node)
         blocking (:blocking node)
         conv (if vi (str " (__varargs_after " vi ")") "")
-        capture-conv (cond
-                       blocking "__collect_safe"
-                       ;; The outer wrapper already adds one list. A compound
-                       ;; convention needs one more so the adapter receives
-                       ;; (__varargs_after n) as one datum rather than two
-                       ;; flat convention arguments.
-                       vi (str "(__varargs_after " vi ")")
-                       :else "")
-        by-name (if capture
-                  (str "(jolt-ffi-native-error-procedure (" capture-conv ") "
-                       csym signature ")")
-                  (str "(" (if blocking
-                              "sa-foreign-procedure-blocking "
-                              "sa-foreign-procedure ")
-                       conv " " csym signature ")"))
-        scoped (str "(let ((a (jolt-ffi-dlsym-native " csym "))) "
-                    "(and a "
-                    (if capture
-                      (str "(jolt-ffi-native-error-procedure (" capture-conv ") a"
-                           signature ")")
-                      (str "(foreign-procedure"
-                           (when blocking " __collect_safe")
-                           (when vi conv)
-                           " a" signature ")"))
+        capture-conv (cond blocking "__collect_safe"
+                           vi (str "(__varargs_after " vi ")") :else "")
+        gambit? (= :gambit (target))
+        by-name (if gambit?
+                  (gambit-procedure-expr node vi csym)
+                  (if capture
+                    (str "(jolt-ffi-native-error-procedure (" capture-conv ") " csym signature ")")
+                    (str "(" (if blocking "sa-foreign-procedure-blocking " "sa-foreign-procedure ")
+                         conv " " csym signature ")")))
+        scoped (str "(let ((a (jolt-ffi-dlsym-native " csym "))) (and a "
+                    (if gambit?
+                      (gambit-procedure-expr node vi "a")
+                      (if capture
+                        (str "(jolt-ffi-native-error-procedure (" capture-conv ") a" signature ")")
+                        (str "(foreign-procedure" (when blocking " __collect_safe")
+                             (when vi conv) " a" signature ")")))
                     "))")]
     (str "(or p (begin (set! p (or " scoped " " by-name ")) p))")))
 
@@ -626,6 +628,23 @@
         (str "(lambda args (throw-jvm 'UnsupportedOperationException "
              (chez-str-lit "jolt.ffi/pointer-fn: ffi is unsupported on the gambit target")
              "))")
+      ;; gap G-2: a by-value aggregate needs define-ftype / (& ftype), unbound
+      ;; on the gambit boot — refuse in words instead of dying on the ftype
+      ;; forms the way the pre-stage1 emission did.
+      (and (= :gambit (target))
+           (or (some ffi-by-value? at) (ffi-by-value? (:rettype node))))
+        (str "(throw-jvm 'UnsupportedOperationException "
+             (chez-str-lit "jolt.ffi/foreign-fn: by-value aggregates are unsupported on the gambit target (no ftype engine behind the stage-1 bridge)")
+             ")")
+      ;; bare :& compiles a foreign procedure per observed tail shape at run
+      ;; time (ffi-varargs-compile, an eval of runtime-signature construction) —
+      ;; exactly the open-ended shape space the finite stage-1 registry cannot
+      ;; claim. Compile-time refusal; declared-tail varargs still route through
+      ;; the registry below.
+      (and (= :gambit (target)) vi (= vi (dec (count at))))
+        (str "(throw-jvm 'UnsupportedOperationException "
+             (chez-str-lit "jolt.ffi/foreign-fn: bare :& varargs are unsupported on the gambit target (per-call tail shapes compile at run time, outside the stage-1 registry)")
+             ")")
       (and vi (= vi (dec (count at)))) (emit-ffi-bare-varargs-fn node vi)
       :else (emit-ffi-fixed-fn node vi))))
 
@@ -757,11 +776,17 @@
 ;; The three jolt.ffi IR ops. EMIT lowers a callable's wrapped fn.
 (defn emit-ffi-node [emit node]
   (case (:op node)
-    :ffi-layout (emit-ffi-layout node)
+    ;; gap G-1 (inventory Q1): on :gambit a :ffi-layout emitted Chez
+    ;; define-ftype/make-ftype-pointer text that died as an unbound identifier
+    ;; at namespace load; refuse in words, at the form, instead.
+    :ffi-layout (if (= :gambit (target))
+                  (str "(throw-jvm 'UnsupportedOperationException "
+                       (chez-str-lit "jolt.ffi/layout: ffi-layout (ftype aggregates) are unsupported on the gambit target")
+                       ")")
+                  (emit-ffi-layout node))
     :ffi-fn (emit-ffi-fn node)
     :ffi-callable
-    (if (and (= :gambit (target))
-             (or (ffi-by-value? (:rettype node)) (some ffi-by-value? (:argtypes node))))
+    (if (= :gambit (target))
       ;; gambit has no ffi tier, and its eval knows no define-ftype, so a
       ;; by-value callable there would die on an unbound name rather than on
       ;; the target's own "unsupported" error. Raise when it is made, in words

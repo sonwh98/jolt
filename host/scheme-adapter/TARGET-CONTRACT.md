@@ -16,9 +16,9 @@ history is RFC 0010 on the site.
    absent capability raises or returns empty — it never fakes.
 3. **Replace the two target-owned files**: `scheme-adapter-runtime.ss` (your
    adapter IS this file for your target) and `hasheq.ss` (see below).
-4. **Add a backend primitive-table entry** (jolt-core/jolt/backend_scheme.clj
+4. **Add a backend primitive-table entry** (jolt-core/jolt/backend_scheme/session.clj
    `target-prims`): your spelling for the unsafe-op prefix (empty string =
-   checked ops, safe and slower) — and make the four `sa-foreign-*` syntaxes
+   checked ops, safe and slower) — and make the `sa-foreign-*` constructor syntaxes
    expand to your FFI forms.
 5. **Start from `guile.ss`** — the structural stub mirrors the Chez adapter
    section by section and marks every place where "the target has this" still
@@ -77,7 +77,11 @@ misbehavior, not a crash.
   and message without frames (the degradedbacktrace gate proves this mode),
   static frame reconstruction from callsite tables still works, and the image
   writer refuses closures instead of guessing.
-- **ffi**: without dlopen/FFI, `sa-load-shared-object` raises and jolt.ffi
+- **ffi**: capabilities may be qualified separately. Gambit native stage-1
+  provides memory, scoped loading, registered ordinary calls and atomic errno;
+  blocking, callbacks, pinning, aggregates and runtime signatures still raise.
+  See `host/gambit/ffi/README.md` for the exact public path and gate coverage.
+  Without dlopen/FFI, `sa-load-shared-object` raises and jolt.ffi
   surfaces it as a jolt-level error at `load-library` — the one user-facing
   choke point. `sa-lock-object`/`sa-unlock-object` may BOTH no-op on a
   non-moving collector (never just one). `sa-foreign-procedure-runtime`

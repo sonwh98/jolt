@@ -127,6 +127,11 @@
 ;; the clojure.core names the excluded java/ tree owns on Chez — after
 ;; post-prelude so these bindings are the last word
 (##include "host-vars.ss")
+;; the jolt.ffi names the excluded java/ffi.ss owns on Chez — P1b-stage1: the
+;; memory/loader/errno surface behind the qualified tier, with every
+;; unimplemented row bound to a message-carrying refusal (same rule as
+;; host-vars.ss: nothing unbound, nothing pretending)
+(##include "host-ffi.ss")
 (set-chez-ns! "user")
 (##include "seed/image.ss")
 (##include "../chez/compile-eval.ss")

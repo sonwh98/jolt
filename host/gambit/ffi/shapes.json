@@ -1,0 +1,326 @@
+{
+  "source": "p1b-inv/shim-registry.edn @ a6852ef8; selected ordinary procedure shapes, plus scalar ABI fixtures",
+  "shapes": [
+    {
+      "id": "s01",
+      "args": [],
+      "ret": "int",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s01b",
+      "args": [],
+      "ret": "integer-32",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s02",
+      "args": [
+        "void*",
+        "size_t"
+      ],
+      "ret": "int",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s03",
+      "args": [
+        "void*",
+        "size_t"
+      ],
+      "ret": "void",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s12",
+      "args": [
+        "void*",
+        "integer-64"
+      ],
+      "ret": "integer-32",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s12b",
+      "args": [
+        "void*",
+        "integer-64",
+        "integer-32"
+      ],
+      "ret": "void",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s13",
+      "args": [
+        "integer-64",
+        "void*",
+        "integer-64"
+      ],
+      "ret": "integer-64",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s18",
+      "args": [
+        "void*"
+      ],
+      "ret": "void",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s19-s20",
+      "args": [],
+      "ret": "void*",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s21",
+      "args": [
+        "int"
+      ],
+      "ret": "string",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "s22",
+      "args": [
+        "int",
+        "int",
+        "int"
+      ],
+      "ret": "int",
+      "capture": false,
+      "varargs": 2
+    },
+    {
+      "id": "s22b",
+      "args": [
+        "int",
+        "int",
+        "int"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": 2
+    },
+    {
+      "id": "s22c",
+      "args": [
+        "int",
+        "unsigned-long",
+        "void*"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": 2
+    },
+    {
+      "id": "s23",
+      "args": [
+        "int",
+        "int",
+        "int",
+        "void*",
+        "void*"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s26",
+      "args": [
+        "int",
+        "int",
+        "int"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s26b",
+      "args": [
+        "int",
+        "void*",
+        "int"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s26c",
+      "args": [
+        "int",
+        "int"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s26d",
+      "args": [
+        "int",
+        "int",
+        "int",
+        "void*",
+        "int"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s26e",
+      "args": [
+        "int",
+        "void*",
+        "void*"
+      ],
+      "ret": "int",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "s32-fixture",
+      "args": [
+        "void*",
+        "int",
+        "void*"
+      ],
+      "ret": "int",
+      "capture": false,
+      "varargs": 2
+    },
+    {
+      "id": "fixture-scalar-0",
+      "args": [
+        "integer-8"
+      ],
+      "ret": "integer-8",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-1",
+      "args": [
+        "unsigned-8"
+      ],
+      "ret": "unsigned-8",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-2",
+      "args": [
+        "integer-16"
+      ],
+      "ret": "integer-16",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-3",
+      "args": [
+        "unsigned-16"
+      ],
+      "ret": "unsigned-16",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-4",
+      "args": [
+        "integer-32"
+      ],
+      "ret": "integer-32",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-5",
+      "args": [
+        "unsigned-32"
+      ],
+      "ret": "unsigned-32",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-6",
+      "args": [
+        "integer-64"
+      ],
+      "ret": "integer-64",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-7",
+      "args": [
+        "unsigned-64"
+      ],
+      "ret": "unsigned-64",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-8",
+      "args": [
+        "size_t"
+      ],
+      "ret": "size_t",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-9",
+      "args": [
+        "ssize_t"
+      ],
+      "ret": "ssize_t",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-10",
+      "args": [
+        "float"
+      ],
+      "ret": "float",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-11",
+      "args": [
+        "double"
+      ],
+      "ret": "double",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "fixture-scalar-12",
+      "args": [
+        "void*"
+      ],
+      "ret": "void*",
+      "capture": false,
+      "varargs": null
+    }
+  ]
+}

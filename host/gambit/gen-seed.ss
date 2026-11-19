@@ -33,7 +33,7 @@
 
 ;; Flip the emission target to :gambit (R9). Every unsafe-prim site derives its
 ;; spelling from (unsafe-prefix) -> (get-in target-prims [(target) :unsafe-prefix]);
-;; :gambit is not in the table, so the prefix degrades to the checked op.
+;; :gambit explicitly selects the empty prefix and therefore checked ops.
 ;; The target lives on the PUBLISHED unit (backend_scheme.clj (cur) ->
 ;; jolt.op-registry/current-unit-box), and emit-image's ei-publish-unit! swaps in
 ;; its own fresh unit (new-unit defaults :target to :chez) — so publish FIRST,

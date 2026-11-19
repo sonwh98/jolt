@@ -224,6 +224,9 @@ sa-procedure-info
 sa-procedure-code-name
 #
 # tier: capability-ffi
+# Gambit native stage-1 is partial: registered ordinary shapes, scoped loader,
+# memory and invocation-local errno only. Blocking/callable/runtime-signature
+# constructors and object pinning raise. See host/gambit/ffi/README.md.
 # OUR OWN definitions in host/chez/scheme-adapter-runtime.ss (loaded FIRST in
 # the runtime manifest), not (chezscheme) exports — a target's adapter must
 # provide these SAME call shapes. Each is a one-liner over a blocklisted
@@ -268,6 +271,8 @@ sa-foreign-procedure-runtime
 sa-foreign-procedure
 sa-foreign-procedure-native-error
 sa-foreign-procedure-blocking
+sa-foreign-callable
+sa-foreign-callable-collect-safe
 #
 # tier: capability-continuations
 # OUR OWN definition in host/chez/scheme-adapter-runtime.ss — the one-shot

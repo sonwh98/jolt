@@ -1,3 +1,4 @@
+#!/usr/bin/env gsi-script
 (##include "boot.ss")
 (##include "host-apply.ss")
 (##include "source-loader.ss")
@@ -13,8 +14,25 @@
 
 (define (ce src) (jolt-pr-readable (jolt-eval-string src)))
 
+(define (run-byte-rows suite)
+  (let ((rows (call-with-input-file "test/gambit/unit.edn"
+                (lambda (port) (jolt-read-string (gambit-read-all port))))))
+    (for-each
+      (lambda (row)
+        (when (eq? (jolt-get row (keyword #f "suite")) suite)
+          (let ((label (jolt-get row (keyword #f "label")))
+                (source (jolt-get row (keyword #f "expr")))
+                (expected (jolt-get row (keyword #f "expected"))))
+            (source-check label expected (lambda () (ce source)))
+            (printf "  ok     ~a\n" label))))
+      (seq->list (jolt-seq rows)))))
+
+(define roots '(("test/gambit/fixtures/source-load" ".jolt" ".cljc")))
+(define args (cdr (command-line)))
 (gambit-install-source-loader!
-  '(("test/gambit/fixtures/source-load" ".jolt" ".cljc"))
+  (if (null? args)
+      roots
+      (cons (list (path-expand "src/jolt" (car args)) ".jolt") roots))
   '("clojure.core" "jolt.ffi"))
 (source-check "backend" ":gambit" (lambda () (ce "(jolt.backend-scheme.session/target)")))
 (source-check "loaded dependency and reader feature" "42"
@@ -28,4 +46,10 @@
   (lambda () (ce "(apply str [(char 55357) (char 56832)])")))
 (source-check "long source literal through compiler" "9000"
   (lambda () (ce (string-append "(count \"" (make-string 9000 #\x) "\")"))))
+(run-byte-rows (keyword #f "core-bytes"))
+(when (pair? args)
+  (source-check "load upstream dao.host.bytes" "nil"
+    (lambda () (ce "(require 'dao.host.bytes)")))
+  (run-byte-rows (keyword #f "dao-host-bytes"))
+  (display "gambitdaobytes: PASS — upstream Dao byte arrays on native gsi\n"))
 (display "gambitsourceload: PASS — native source loading and compiler string emission\n")

@@ -1,0 +1,18 @@
+[
+ {:suite :core-bytes
+  :label "bytes? recognizes byte arrays only"
+  :expr "[(bytes? (byte-array 0)) (bytes? (byte-array [1])) (array? (byte-array 1)) (bytes? nil) (bytes? [1]) (bytes? \"hi\") (bytes? 0)]"
+  :expected "[true true true false false false false]"}
+ {:suite :core-bytes
+  :label "core array operations see signed elements"
+  :expr "(let [b (byte-array 4 [0 128 255]) s (seq b)] [(alength b) (aget b 1) (aget b 2) (aset b 3 (unchecked-byte 254)) (vec s)])"
+  :expected "[4 -128 -1 -2 [0 -128 -1 -2]]"}
+ {:suite :dao-host-bytes
+  :label "unsigned reads and fresh slices"
+  :expr "(let [b (dao.host.bytes/from-vector [0 128 255]) s (dao.host.bytes/slice b 1 3) z (dao.host.bytes/alloc 2)] [(dao.host.bytes/bytes? b) (dao.host.bytes/bytes? []) (dao.host.bytes/length b) (dao.host.bytes/get b 2) (dao.host.bytes/set! b 1 42) (dao.host.bytes/to-vector b) (dao.host.bytes/to-vector s) (dao.host.bytes/equal? z (dao.host.bytes/from-vector [0 0]))])"
+  :expected "[true false 3 255 nil [0 42 255] [128 255] true]"}
+ {:suite :dao-host-bytes
+  :label "overlap copies as memmove and refusal leaves the target intact"
+  :expr "(let [b (dao.host.bytes/from-vector [0 1 128 255]) snapshot #(dao.host.bytes/to-vector b)] [(dao.host.bytes/copy! b 0 b 1 3) (snapshot) (try (dao.host.bytes/copy! b 0 b 2 3) (catch Exception e (:dao.host/refusal (ex-data e)))) (try (dao.host.bytes/set! b 0 256) (catch Exception e (:dao.host/refusal (ex-data e)))) (snapshot) (dao.host.bytes/copy! b 1 b 0 3) (snapshot)])"
+  :expected "[nil [0 0 1 128] :out-of-range :out-of-range [0 0 1 128] nil [0 1 128 128]]"}
+]

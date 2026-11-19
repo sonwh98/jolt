@@ -234,14 +234,128 @@
               (loop (jolt-seq (jolt-rest s)) (cons (cons (jolt-nth e 0) (jolt-nth e 1)) acc))))))
     jolt-nil))
 
-;; ---- queries answer, they do not raise -------------------------------------
-;; A predicate whose type cannot exist on this target is false, not an error —
-;; a caller asking "is this a delay?" deserves an answer.
+;; ---- delay ---------------------------------------------------------------
+;; One state word holds the pending thunk or the cached (success? . outcome).
+;; Forcing under the object monitor serializes the first evaluation, including
+;; failure, and drops the thunk once there is an outcome.
+(define (gambit-force-delay delay)
+  (let ((result
+          (jolt-with-monitor delay
+            (lambda ()
+              (let ((state (jolt-delay-state delay)))
+                (if (pair? state)
+                    state
+                    (let ((outcome (guard (e (#t (cons #f e)))
+                                     (cons #t (jolt-invoke0 state)))))
+                      (jolt-delay-state-set! delay outcome)
+                      outcome)))))))
+    (if (car result) (cdr result) (raise (cdr result)))))
 
-(def-var! "clojure.core" "delay?" (lambda (x) #f))
+(let ((previous-deref jolt-deref))
+  (set! jolt-deref
+    (lambda (x . opts)
+      (if (jolt-delay? x)
+          (gambit-force-delay x)
+          (apply previous-deref x opts)))))
+(def-var! "clojure.core" "deref" jolt-deref)
+(def-var! "clojure.core" "make-delay" make-jolt-delay)
+(def-var! "clojure.core" "delay?" jolt-delay?)
+(register-class-ctor! "clojure.lang.Delay" make-jolt-delay)
+(register-class-ctor! "Delay" make-jolt-delay)
+
+;; ---- byte arrays ---------------------------------------------------------
+;; Jolt sees signed byte elements, while the FFI carrier holds raw octets.
+(define (gambit-signed-byte octet)
+  (if (< octet 128) octet (- octet 256)))
+
+(define (gambit-byte-octet value)
+  (bitwise-and (jolt-unchecked-int (if (jfloat? value) (jfloat-fl value) value)) #xff))
+
+(define (gambit-byte-array size-or-items . init)
+  (cond
+    ((or (number? size-or-items) (jfloat? size-or-items))
+     (let ((size (jolt-int-cast size-or-items))
+           (fill (if (null? init) 0 (car init))))
+       (when (< size 0) (throw-jvm 'NegativeArraySizeException (number->string size)))
+       (if (or (number? fill) (jfloat? fill))
+           (make-u8vector size (gambit-byte-octet fill))
+           (let ((out (make-u8vector size 0)))
+             (let loop ((i 0) (items (jolt-seq fill)))
+               (unless (or (= i size) (jolt-nil? items))
+                 (u8vector-set! out i (gambit-byte-octet (seq-first items)))
+                 (when (< (+ i 1) size)
+                   (loop (+ i 1) (jolt-seq (seq-more items))))))
+             out))))
+    ((u8vector? size-or-items) (u8vector-copy size-or-items))
+    ((string? size-or-items) (string->utf8 size-or-items))
+    (else (list->u8vector
+            (map gambit-byte-octet (seq->list (jolt-seq size-or-items)))))))
+
+(define (gambit-byte-ref a i) (gambit-signed-byte (u8vector-ref a i)))
+
+(define (gambit-byte-index a i0)
+  (jolt-nth-nil-idx! i0)
+  (index-int-check! i0)
+  (let ((i (->idx i0)))
+    (and (<= 0 i) (< i (u8vector-length a)) i)))
+
+(register-count-arm! u8vector? u8vector-length)
+(let ((previous-nth jolt-nth))
+  (set! jolt-nth
+    (case-lambda
+      ((a i)
+       (if (u8vector? a)
+           (let ((at (gambit-byte-index a i)))
+             (if at (gambit-byte-ref a at) (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil)))
+           (previous-nth a i)))
+      ((a i default)
+       (if (u8vector? a)
+           (let ((at (gambit-byte-index a i)))
+             (if at (gambit-byte-ref a at) default))
+           (previous-nth a i default))))))
+(def-var! "clojure.core" "nth" jolt-nth)
+
+(define (gambit-byte-seq a i)
+  (let ((remaining (- (u8vector-length a) i)))
+    (if (= remaining 0)
+        jolt-nil
+        (make-cseqn a (make-lazy-src gambit-byte-tail a i)
+                    sk-array-cells-byte jolt-nil remaining))))
+(define gambit-byte-tail
+  (register-lazy-src! 'gambit-byte-tail (lambda (a i) (gambit-byte-seq a (+ i 1)))))
+(set-array-cells-ops!
+  (lambda (a remaining) (gambit-byte-ref a (- (u8vector-length a) remaining)))
+  (lambda (f acc a remaining)
+    (let ((end (u8vector-length a)))
+      (let loop ((i (- end remaining)) (acc acc))
+        (cond ((jolt-reduced? acc) (jolt-reduced-val acc))
+              ((= i end) acc)
+              (else (loop (+ i 1) (jolt-invoke2 f acc (gambit-byte-ref a i)))))))))
+(register-seq-arm! u8vector? (lambda (a) (gambit-byte-seq a 0)))
+
+(define (jolt-aset3 a i v)
+  (if (u8vector? a)
+      (let ((at (gambit-byte-index a i)) (octet (gambit-byte-octet v)))
+        (unless at (throw-jvm 'ArrayIndexOutOfBoundsException jolt-nil))
+        (u8vector-set! a at octet)
+        (gambit-signed-byte octet))
+      (begin (jolt-ref-put! a i v) v)))
+;; The numeric pass also uses these two heads for inferred or hinted byte arrays.
+(define (jolt-vaget a i) (jolt-nth a i))
+(define (jolt-baset a i v) (jolt-aset3 a i v))
+(def-var! "jolt.host" "ref-put!"
+  (lambda (a i v)
+    (if (u8vector? a)
+        (begin (jolt-aset3 a i v) a)
+        (jolt-ref-put! a i v))))
+
+(def-var! "clojure.core" "byte-array" gambit-byte-array)
+(def-var! "clojure.core" "bytes" (lambda (x) (if (u8vector? x) x (gambit-byte-array x))))
+(def-var! "clojure.core" "bytes?" u8vector?)
+(def-var! "clojure.core" "array?" jolt-array?)
+
+;; ---- queries answer, they do not raise -------------------------------------
 (def-var! "clojure.core" "queue?" (lambda (x) #f))
-(def-var! "clojure.core" "array?" (lambda (x) #f))
-(def-var! "clojure.core" "bytes?" (lambda (x) #f))
 
 ;; No tap registry exists, so nothing is listening and tap> reports that.
 ;; Registering one, on the other hand, is a request this target cannot honor.
@@ -391,7 +505,7 @@
 
 (degrade-core-vars! '("aclone" "into-array" "to-array" "make-array" "object-array" "int-array"
                       "long-array" "double-array" "float-array" "boolean-array"
-                      "byte-array" "char-array" "short-array")
+                      "char-array" "short-array")
                     "arrays are not wired up on this target (java/natives-array.ss)")
 
 (degrade-core-vars! '("future-call" "future-cancel" "send-via" "agent-errors"
@@ -400,8 +514,6 @@
                       "set-agent-send-executor!" "set-agent-send-off-executor!"
                       "shutdown-agents")
                     "futures and agents are not wired up on this target")
-
-(degrade-core-vars! '("make-delay") "delays are not wired up on this target")
 
 (degrade-core-vars! '("clojure.lang.PersistentQueue")
                     "persistent queues are not wired up on this target")

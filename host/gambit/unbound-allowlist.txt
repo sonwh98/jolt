@@ -45,7 +45,7 @@ data-readers-active
 ldr-apply-readers
 #
 # The accessors behind the value predicates rt-core.ss answers #f for: an
-# inst, a BigDecimal, an array and a host reader cannot be built here, so the
+# inst, a BigDecimal, a char array and a host reader cannot be built here, so the
 # arms that read them (format's %f, the array class tags, the char[] arms of
 # StringBuilder's append/insert/getChars behind char-array-arg?, the reader
 # protocols in post-prelude.ss and clojure.edn/read) are never entered.
@@ -63,10 +63,6 @@ jolt-inst-from-string
 chez-edn-read
 chez-line-seq
 host-reader-read
-#
-# Emitted for clojure.core.Vec's node writes (vector-of, 60-gvec.clj); no
-# array constructor exists here, so no Vec is ever built.
-jolt-aset3
 #
 # Native stage-1 exports loaded by joltffi-ensure-bridge! from the compiled
 # .o1. The static boot/JS linker cannot see those definitions. Native

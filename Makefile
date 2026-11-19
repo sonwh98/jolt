@@ -126,7 +126,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 
 # Only mark PHONY targets for names that have file system conflicts:
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
-        gambitcheck gambitkernel gambiteval gambitsourceload gambityinrepl gambitseed gambitweb gambitprofile \
+        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -1983,6 +1983,9 @@ gambitsourceload:
 	fi
 
 DATOMWORLD_ROOT ?= ../datomworld
+gambitdaobytes:
+	sh host/gambit/ffi/watchdog.sh 120 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss "$(abspath $(DATOMWORLD_ROOT))"
+
 gambityinrepl: gambitffi-bridge
 	sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$(abspath $(DATOMWORLD_ROOT))"
 

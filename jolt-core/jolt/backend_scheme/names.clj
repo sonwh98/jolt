@@ -20,7 +20,8 @@
     :else (str "\\x" (format "%x" cp) ";")))
 
 (defn chez-str-lit [s]
-  (str "\"" (apply str (map (fn [c] (char-escape (int c))) s)) "\""))
+  ;; Join without passing one argument per source character.
+  (str "\"" (str/join (map (fn [c] (char-escape (int c))) s)) "\""))
 ;; --- identifier munging ------------------------------------------------------
 ;; Every Clojure name the emitter writes as a Scheme IDENTIFIER — a local, a
 ;; param, a fn's letrec self-name, a direct-link binding — goes through

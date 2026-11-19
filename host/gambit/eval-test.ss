@@ -11,12 +11,15 @@
 
 (define failures 0)
 
-(define (check src expected)
+(define (check src expected . label)
   (let ((actual (guard (e (#t "THREW"))
-                  (jolt-pr-readable (jolt-compile-eval src "user")))))
+                  (jolt-pr-readable (jolt-compile-eval src "user"))))
+        (description (if (pair? label) (car label) src)))
     (if (string=? actual expected)
-        (printf "  ok     ~a => ~a\n" src actual)
-        (begin (printf "  FAIL   ~a: got ~s expected ~s\n" src actual expected)
+        (if (pair? label)
+            (printf "  ok     ~a\n" description)
+            (printf "  ok     ~a => ~a\n" description actual))
+        (begin (printf "  FAIL   ~a: got ~s expected ~s\n" description actual expected)
                (set! failures (+ failures 1))))))
 
 (printf "== jolt source through jolt-compile-eval on gsi ==\n")
@@ -42,6 +45,12 @@
 ;; strings + regex
 (check "(str \"jolt on \" \"gambit\")" "\"jolt on gambit\"")
 (check "(re-seq #\"[a-z]+\" \"jolt on gambit js\")" "(\"jolt\" \"on\" \"gambit\" \"js\")")
+;; Compare the whole doc, including escapes at both ends of a long literal.
+(let* ((doc (string-append "Start: \"😀\"\n" (make-string 9000 #\x) "\tEnd: \\"))
+       (literal (jolt-pr-readable doc)))
+  (check (string-append "(do (ns gambit.eval.long-doc " literal ")"
+                        " (:doc (meta (find-ns 'gambit.eval.long-doc))))")
+         literal "namespace docstring round-trips more than 9000 characters"))
 ;; defmacro then use in a later row
 (check "(defmacro unless2 [c a b] (list 'if c b a))" "nil")
 (check "(unless2 false :yes :no)" ":yes")
@@ -96,8 +105,17 @@
 (check "(> (current-time-ms) 1700000000000)" "true")
 (check "(do (flush) :ok)" ":ok")
 
-;; A type this target cannot construct answers the question instead of raising.
-(check "(delay? 1)" "false")
+;; A top-level delay is lazy, shares its cached result with deref, and never
+;; retries a throw. Use separate top-level forms, as the source loader does.
+(check "(def delay-runs (atom 0))" "#'user/delay-runs")
+(check "(def d (delay (swap! delay-runs inc) nil))" "#'user/d")
+(check "[(delay? d) (delay? 1) (realized? d) @delay-runs]" "[true false false 0]")
+(check "[(force d) @d (realized? d) @delay-runs (force 42)]" "[nil nil true 1 42]")
+(check "(def bad-d (delay (swap! delay-runs inc) (throw (ex-info \"boom\" {}))))" "#'user/bad-d")
+(check (string-append "[(try (force bad-d) (catch Exception e (ex-message e)))"
+                      " (try @bad-d (catch Exception e (ex-message e)))"
+                      " (realized? bad-d) @delay-runs]")
+       "[\"boom\" \"boom\" true 2]")
 (check "(queue? 1)" "false")
 (check "[(array? []) (bytes? [])]" "[false false]")
 (check "(tap> 1)" "false")

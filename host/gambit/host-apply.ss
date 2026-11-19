@@ -1,7 +1,6 @@
-;; The compiler escapes a Scheme string with (apply str ...) over its characters.
-;; Gambit limits the size of a Scheme argument frame, so join the pieces over
-;; a port without turning the list into arguments. Keep the single-argument
-;; identity and str's handling of adjacent UTF-16 surrogate units.
+;; Gambit limits the size of a Scheme argument frame. For (apply str ...), join
+;; the pieces over a port without turning the list into arguments. Keep str's
+;; single-argument identity and handling of adjacent UTF-16 surrogate units.
 (define (gambit-str-pieces xs)
   (cond
     ((null? xs) "")

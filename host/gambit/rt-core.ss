@@ -1247,16 +1247,14 @@
 ;; it: render each element with jolt-str-render-one, join by sep (default "").
 (define (jolt-str-join-var coll . opt)
   (let ((sep (if (pair? opt) (jolt-str-render-one (car opt)) "")))
-    ;; seq-more may return jolt-empty-list (map tail) — normalize via jolt-seq
-    ;; like seq->list, or the next round calls cseq accessors on the empty list
-    (let loop ((s (jolt-seq coll)) (acc '()))
-      (if (jolt-nil? s)
-          (apply string-append (reverse acc))
-          (let ((piece (jolt-str-render-one (seq-first s))))
-            (loop (jolt-seq (seq-more s))
-                  (if (null? acc)
-                      (list piece)
-                      (cons piece (cons sep acc)))))))))
+    (call-with-output-string
+      (lambda (out)
+        (let loop ((s (jolt-seq coll)) (first? #t))
+          (unless (jolt-nil? s)
+            (unless first? (display sep out))
+            (display (jolt-str-render-one (seq-first s)) out)
+            ;; seq-more can return an empty list. Normalize it before reading.
+            (loop (jolt-seq (seq-more s)) #f)))))))
 (def-var! "clojure.core" "str-join" jolt-str-join-var)
 
 ;; jolt-string-method — chez defines it in java/natives-str.ss, which the gambit
@@ -1531,20 +1529,15 @@
 
 ;; jclass?/jclass-name and the class objects they read live in host-vars.ss.
 
-;; ---- values the excluded java/ tree owns: none exists here ------------------
+;; ---- value predicates and array seams -------------------------------------
 ;; The shared dispatch arms ask these of ANY value on the way to their own
 ;; answer — value-host-tags tests jolt-array? before regex/uuid, inst? asks
-;; jinst?, format asks jbigdec?, (instance? File x) asks jfile? — so they have
-;; to answer, and the answer is #f: no array, inst, bigdec or File value can be
-;; constructed on this boot (natives-array.ss, inst-time.ss, bigdec.ss and
-;; io.ss are not in it). The accessors behind each predicate stay unbound and
-;; unreachable (unbound-allowlist.txt).
-(define (jolt-array? x) #f)
-(define (jolt-array-kind x) #f)
-;; The array seam java/byte-buffer.ss asks for (Chez: natives-array.ss). No byte
-;; array exists here, so a ByteBuffer owns a bare bytevector and has no .array;
-;; nothing is a typed array, so IntBuffer/wrap and a view's bulk T[] transfers
-;; refuse the argument before reaching the accessors, which raise if they ever do.
+;; jinst?, format asks jbigdec?, (instance? File x) asks jfile?.
+;; The native FFI byte carrier is also the only Jolt array on this boot.
+(define jolt-array? u8vector?)
+(define (jolt-array-kind x) (and (jolt-array? x) 'byte))
+;; The java.nio array seam is separate from the core byte-array operations.
+;; ByteBuffer owns its backing and typed buffers exist only as views.
 (define (nb-host-bytes a) #f)
 (define (nb-host-new-bytes n) #f)
 (define (nb-host-array? a kind) #f)
@@ -1564,6 +1557,9 @@
 (define (jfile? x) #f)
 (define (jbigdec? x) #f)
 
+(define-record-type jolt-delay (fields (mutable state)) (nongenerative gambit-jolt-delay-v1))
+(define (jolt-conc-realized? x) (and (jolt-delay? x) (pair? (jolt-delay-state x))))
+
 ;; ---- concurrency tier stubs (demo boot: single-threaded) ---------------------
 ;; java/concurrency.ss + natives-queue.ss are excluded from this boot. Gambit
 ;; satisfies the threads CONTRACT (G0: parameters fork-inherit, mutexes
@@ -1575,9 +1571,7 @@
 (define (jolt-future? x) #f)
 (define (jolt-promise? x) #f)
 (define (jolt-agent? x) #f)
-(define (jolt-delay? x) #f)
 (define (jolt-queue? x) #f)
-(define (jolt-conc-realized? x) #f)
 (define (jolt-native-future-done? x) #f)
 (define (jolt-native-future-cancelled? x) #f)
 (define (jolt-any-future? x) #f)

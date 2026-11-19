@@ -28,6 +28,12 @@
     (lambda args
       (joltffi-public-error (lambda () (apply fp args))))))
 
+(define (joltffi-str-arg what x)
+  (if (jolt-nil? x)
+      (throw-jvm 'IllegalArgumentException
+                 (string-append "jolt.ffi: " what " must be a string, got nil"))
+      (jolt-str-render-one x)))
+
 ;; ---- emitted-text helpers the compiler's ordinary-call wrappers lean on -----
 ;; The :string conversions invert per direction like the Chez pair; jolt truthy
 ;; rule for :bool; jfloat unboxing for :float/:double. jolt-ffi-c->string maps
@@ -80,7 +86,7 @@
 ;; keeps). Type keywords arrive as jolt keywords; the stdlib resolves layouts
 ;; and places before calling, so these see scalars only.
 (define (joltffi-keyword-name kw)
-  (if (keyword-t? kw) (keyword-t-name kw) kw))
+  (if (keyword-t? kw) (keyword-t-name kw) (joltffi-str-arg "foreign type" kw)))
 
 (define (joltffi-type->chez kw)
   (let ((n (joltffi-keyword-name kw)))
@@ -211,10 +217,10 @@
 (define (joltffi-read-bytes ptr n)
   (let* ((n (jnum->exact n)) (p (jnum->exact ptr)) (bv (make-bytevector n)))
     (sa-foreign-bytes-ref! p bv n)
-    (guard (e (#t (list->string (map integer->char (bytevector->u8-list bv)))))
+    (guard (e (#t (list->string (map integer->char (u8vector->list bv)))))
       (utf8->string bv))))
 (define (joltffi-write-bytes ptr s)
-  (let* ((bv (string->utf8 s)) (n (bytevector-length bv)) (p (jnum->exact ptr)))
+  (let* ((bv (string->utf8 (joltffi-str-arg "write-bytes value" s))) (n (bytevector-length bv)) (p (jnum->exact ptr)))
     (sa-foreign-bytes-set! p bv n)
     n))
 
@@ -255,8 +261,8 @@
 
 (define (joltffi-candidate-list name)
   (if (or (pvec? name) (jolt-seq? name) (jolt-lazyseq? name))
-      (map (lambda (c) (if (string? c) c (jolt-str-render-one c))) (seq->list (jolt-seq name)))
-      (list (jolt-str-render-one name))))
+      (map (lambda (c) (joltffi-str-arg "library candidate" c)) (seq->list (jolt-seq name)))
+      (list (joltffi-str-arg "library candidate" name))))
 
 (define (joltffi-load-failure-note cands)
   (let loop ((cs cands) (acc '()))
@@ -318,21 +324,22 @@
 
 (define (joltffi-loaded? name)
   (joltffi-ensure-bridge! 'jolt.ffi/loaded?)
-  (if (joltffi-load-native name) #t #f))
+  (if (joltffi-load-native (joltffi-str-arg "loaded? name" name)) #t #f))
 
 (define (joltffi-system-library-candidates n)
-  (list (string-append "lib" n ".dylib") (string-append n ".dylib")))
+  (let ((n (joltffi-str-arg "system-library-candidates name" n)))
+    (list (string-append "lib" n ".dylib") (string-append n ".dylib"))))
 
 (define (joltffi-load-system-library name)
   (joltffi-library-map
    (joltffi-load-candidates
-    (joltffi-system-library-candidates (if (string? name) name (jolt-str-render-one name))))))
+    (joltffi-system-library-candidates (joltffi-str-arg "load-system-library name" name)))))
 
 (define joltffi-find-symbol
   (case-lambda
     ((sym)
      (joltffi-ensure-bridge! 'jolt.ffi/find-symbol)
-     (let* ((n (if (string? sym) sym (jolt-str-render-one sym)))
+     (let* ((n (joltffi-str-arg "symbol" sym))
             (a (joltffi-dlsym-loaded n)))
        (cond (a a)
              ((guard (e (#t #f)) (sa-foreign-entry? n)) (sa-foreign-entry-address n))
@@ -340,7 +347,7 @@
     ((lib sym)
      (if (jolt-nil? lib)
          (joltffi-find-symbol sym)
-         (let* ((n (if (string? sym) sym (jolt-str-render-one sym)))
+         (let* ((n (joltffi-str-arg "symbol" sym))
                 (path (and (jolt-map? lib)
                            (jolt-get-dispatch lib (keyword #f "path") jolt-nil)))
                 (h (and (string? path) (joltffi-library-handle path))))
@@ -362,10 +369,13 @@
   (joltffi-ensure-bridge! 'jolt.ffi/defining-libraries)
   (make-pvec
    (list->vector
-    (map car (joltffi-definers (if (string? sym) sym (jolt-str-render-one sym)))))))
+    (map car (joltffi-definers (joltffi-str-arg "symbol" sym))))))
 
 (define (joltffi-load-failure-note-var cands)
-  (joltffi-load-failure-note (if (list? cands) cands (list cands))))
+  (or (joltffi-load-failure-note
+       (map (lambda (c) (joltffi-str-arg "load-failure-note candidate" c))
+            (seq->list (jolt-seq cands))))
+      jolt-nil))
 
 ;; ---- refusing rows (message-carrying; the capability stays unqualified) -------
 (define (joltffi-refuse-fn name reason)

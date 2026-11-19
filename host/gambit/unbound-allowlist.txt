@@ -1,5 +1,5 @@
 # unbound-allowlist.txt — Scheme globals the Gambit boot references and DOES NOT
-# define, each on a path this target never takes.
+# define statically: untaken paths or explicitly runtime-loaded native exports.
 #
 # One name per line, grouped under a comment that says why the group is
 # unreachable here. host/gambit/unbound-check.ss (make gambitunbound) pins
@@ -61,3 +61,40 @@ host-reader-read
 # Emitted for clojure.core.Vec's node writes (vector-of, 60-gvec.clj); no
 # array constructor exists here, so no Vec is ever built.
 jolt-aset3
+#
+# Native stage-1 exports loaded by joltffi-ensure-bridge! from the compiled
+# .o1. The static boot/JS linker cannot see those definitions. Native
+# constructors fail closed if the bridge cannot load. Web/JS FFI remains
+# unsupported; these entries do not qualify any JS native path.
+joltffi-bytes-from-bv!
+joltffi-bytes-to-bv!
+joltffi-dlerror
+joltffi-dlopen
+joltffi-dlsym
+joltffi-dlsym-global
+joltffi-free
+joltffi-malloc
+joltffi-platform-key
+joltffi-read-i32
+joltffi-ref-f32
+joltffi-ref-f64
+joltffi-ref-i16
+joltffi-ref-i32
+joltffi-ref-i64
+joltffi-ref-i8
+joltffi-ref-u16
+joltffi-ref-u32
+joltffi-ref-u64
+joltffi-ref-u8
+joltffi-set-f32!
+joltffi-set-f64!
+joltffi-set-i16!
+joltffi-set-i32!
+joltffi-set-i64!
+joltffi-set-i8!
+joltffi-set-u16!
+joltffi-set-u32!
+joltffi-set-u64!
+joltffi-set-u8!
+joltffi-shim-lookup
+joltffi-zero

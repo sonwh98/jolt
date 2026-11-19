@@ -457,7 +457,7 @@
 (define (joltffi-resolve-global name who)
   (joltffi-dlerror)
   (let ((a (joltffi-dlsym-global name)))
-    (if (joltffi-dlerror)
+    (if (or (joltffi-dlerror) (not a) (= a 0))
         (error who
                (string-append "jolt.ffi: no entry for \"" name
                               "\" — not in any loaded native and not in the process's global symbols"))

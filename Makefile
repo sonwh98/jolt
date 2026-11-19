@@ -2124,7 +2124,7 @@ $(GAMBIT-FFI-BUILD)/libjoltffi-fixture2.dylib: gambitffi-force $(GAMBIT-FFI-DIR)
 # dependency dylib this recipe then REMOVES, so dlopen fails with the loader's
 # own preserved reason (a missing dependency, not a missing file)
 $(GAMBIT-FFI-BUILD)/libjoltffi-unloadable.dylib: gambitffi-force $(GAMBIT-FFI-DIR)/DIGESTS.txt \
-		$(GAMBIT-FFI-DIR)/joltffi-fixture2.c
+		$(GAMBIT-FFI-DIR)/joltffi-dep.c $(GAMBIT-FFI-DIR)/joltffi-unloadable.c
 	@$(MAKE) --no-print-directory gambitffi-verify-digests
 	@mkdir -p $(GAMBIT-FFI-BUILD)
 	sh $(GAMBIT-FFI-DIR)/watchdog.sh 60 cc -O1 -dynamiclib -o $(GAMBIT-FFI-BUILD)/libjoltffi-dep.dylib $(GAMBIT-FFI-DIR)/joltffi-dep.c

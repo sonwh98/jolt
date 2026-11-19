@@ -45,7 +45,8 @@
    "clojure.core"
    ("seed/prelude.ss"
     "../chez/post-prelude.ss"
-    "host-vars.ss"))
+    "host-vars.ss"
+    "host-ffi.ss"))
 
   ;; The compiler image and the read-analyze-emit-eval path over it. Excluding
   ;; it gives a runtime that can hold and print jolt values but cannot compile

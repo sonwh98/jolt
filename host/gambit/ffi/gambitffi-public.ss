@@ -42,5 +42,21 @@
 (public-check "(jolt.ffi/string->ptr nil)" "0")
 (public-check "(let [p (jolt.ffi/string->ptr \"abc\")] (try (jolt.ffi/ptr->string p 4) (finally (jolt.ffi/free p))))" "\"abc\"")
 (public-check "(let [p (jolt.ffi/alloc 8)] (jolt.ffi/free p) (jolt.ffi/__size p))" "0")
+;; r2: 0xff is invalid UTF-8 and must take the Latin-1 fallback.
+(public-check "(let [p (jolt.ffi/alloc 1)] (try (jolt.ffi/write p :uint8 255) (= (jolt.ffi/read-bytes p 1) (str (char 255))) (finally (jolt.ffi/free p))))" "true")
+;; Naming arguments reject nil with the same messages as the Chez host.
+(public-check "(try (jolt.ffi/sizeof nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: foreign type must be a string, got nil\"")
+(public-check "(try (jolt.ffi/write-bytes 0 nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: write-bytes value must be a string, got nil\"")
+(public-check "(try (jolt.ffi/load-library [nil]) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: library candidate must be a string, got nil\"")
+(public-check "(try (jolt.ffi/load-system-library nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: load-system-library name must be a string, got nil\"")
+(public-check "(try (jolt.ffi/system-library-candidates nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: system-library-candidates name must be a string, got nil\"")
+(public-check "(try (jolt.ffi/loaded? nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: loaded? name must be a string, got nil\"")
+(public-check "(try (jolt.ffi/find-symbol nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: symbol must be a string, got nil\"")
+(public-check "(try (jolt.ffi/find-symbol (jolt.ffi/load-library \"build/gambit-ffi/libjoltffi-fixture.dylib\") nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: symbol must be a string, got nil\"")
+(public-check "(try (jolt.ffi/defining-libraries nil) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: symbol must be a string, got nil\"")
+(public-check "(try (jolt.ffi/load-failure-note [nil]) (catch IllegalArgumentException e (ex-message e)))" "\"jolt.ffi: load-failure-note candidate must be a string, got nil\"")
+;; Nil still has its documented absence meaning in these positions.
+(public-check "(jolt.ffi/load-library nil)" "nil")
+(public-check "(jolt.ffi/load-failure-note nil)" "nil")
 (printf "gambitffi-public: ~a check(s), ~a failure(s)\n" checks failures)
 (if (= failures 0) (begin (display "gambitffi-public: PASS — :gambit compiler + native gsi\n") (exit 0)) (exit 1))

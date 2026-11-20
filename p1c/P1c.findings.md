@@ -140,3 +140,56 @@ The terminal adapter also passed its separate native two-line and EOF probe.
 The end-to-end Yin corpus remains under verification. The standard
 `gambityinrepl` run has loaded DaoJing and entered the B-tree dependency
 under `yin.vm`. A `yin>` reply has yet to be observed.
+
+## Linux compiled Yin boot
+
+Session-ID: 01a1f1f9-2d2b-71a2-b88a-1675b81dd975
+
+The shiva run at `e28f40b6` used `~/ci/jolt-ffi-linux`, whose default
+`DATOMWORLD_ROOT=../datomworld` resolves to an absent checkout. With that path
+the original launcher printed the boot marker and exited 2 in 0.29s, with
+95,424 KiB peak RSS. The same launcher with either `-:h4000` or
+`-:max-heap=4M` exited 70 in under 0.01s at `##cte-lookup`, before the boot
+marker, with 10,944 KiB peak RSS. In Gambit 4.9.8, `h` sets a maximum and a
+bare number denotes KiB. `-:min-heap=128M` sets a floor. Runtime options go
+before the script name.
+
+The existing 31,545,888-byte Linux `kernel.o1` completed with default runtime
+options, `-:p1`, and explicit 128 MiB and 256 MiB minimums. The boot-only
+default run took 0.22s with 95,040 KiB peak RSS. A forced collection after it
+reported a 17,332,608-byte heap and 6,147,520 live bytes. The 128 MiB and
+256 MiB floor probes reached the same live size (about 6.15 MB) with peak RSS
+of 122,496 and 123,072 KiB respectively. The full-launch phase probe separately
+recorded kernel return at 0.222s, followed by all four driver includes and the
+FFI bridge by 0.223s. The last-GC heap was 17,323,416 bytes, of which
+5,966,712 were live at that collection. Process RSS began to rise during
+Yin source loading, reaching 413,320 KiB at 129s in a separate run.
+
+`gambityinrepl` now checks the source entry before building or loading the Yin
+kernel and prints the path and the `DATOMWORLD_ROOT` override on failure. The
+successful launcher receives the same resolved path and Gambit arguments.
+The missing-root assertion passed with status 2 and no kernel boot marker.
+
+With `/home/sto/workspace/datomworld` at `472d8ac2`, the original Linux
+launcher completed the 12-line gate corpus using the default heap. The source
+trace reached 138 namespace-ready markers, then all 12 expected replies in
+order including `yin> Bye`. `/usr/bin/time` measured 722,836 KiB peak RSS
+and 299.46s elapsed, with launcher status 0. The gate's own AWK assertions
+passed on that transcript. The shorter diagnostic deadlines expired during
+ordinary namespace loading. The successful run establishes bounded resource
+use for this acceptance corpus with Gambit's default heap growth. It provides
+no basis for imposing a minimum heap or changing Gambit's evaluator.
+
+For the orchestrator's shiva matrix, supply the actual source root explicitly:
+
+```sh
+make gambityinrepl DATOMWORLD_ROOT=/home/sto/workspace/datomworld \
+  GAMBIT_PREFIX="$HOME/.local/share/mise/installs/gambit/4.9.8"
+```
+
+The watchdog in the gate covers the whole session. The default-heap trace and
+failure comparison are under `build/p1c-linux/`.
+
+On macOS arm64, `gambityinrepl` passed before and after the preflight with the
+same cached kernel and Datomworld `27f207c0`. Both watchdogged runs produced
+the same 12 `yin>` replies byte for byte. `gambitsourceload` also passed.

@@ -58,5 +58,11 @@
 ;; Nil still has its documented absence meaning in these positions.
 (public-check "(jolt.ffi/load-library nil)" "nil")
 (public-check "(jolt.ffi/load-failure-note nil)" "nil")
+(public-check "(let [p (jolt.ffi/alloc 4)] (try [(jolt.ffi/write-array p (byte-array [0 -1 42 -128])) (vec (jolt.ffi/read-array p 4))] (finally (jolt.ffi/free p))))" "[4 [0 -1 42 -128]]")
+(public-check "(let [p jolt.ffi/null] [(jolt.ffi/write-array p (byte-array 0)) (alength (jolt.ffi/read-array p 0))])" "[0 0]")
+(public-check "(let [v (into [161] (vec (range 33)))] [(count v) (nth v 0) (nth v 33)])" "[34 161 32]")
+(public-check "(let [a (vec (range 16 49)) b (vec (range 49 82)) v (into a b)] [(nth v 0) (nth v 32) (nth v 33) (= v (vec (range 16 82)))])" "[16 48 49 true]")
+(public-check "(.getPath (java.io.File. \"some/path\"))" "\"some/path\"")
+(public-check "(try (.exists (java.io.File. \"some/path\")) (catch UnsupportedOperationException e (boolean (re-find #\"blocking ffi is unsupported\" (ex-message e)))))" "true")
 (printf "gambitffi-public: ~a check(s), ~a failure(s)\n" checks failures)
 (if (= failures 0) (begin (display "gambitffi-public: PASS — :gambit compiler + native gsi\n") (exit 0)) (exit 1))

@@ -224,6 +224,21 @@
     (sa-foreign-bytes-set! p bv n)
     n))
 
+;; Gambit's public byte-array is already a u8vector. These calls move octets
+;; without going through the string decoder or borrowing storage past the copy.
+(define (joltffi-read-array ptr count)
+  (let* ((n (jnum->exact count))
+         (out (make-u8vector n)))
+    (sa-foreign-bytes-ref! (jnum->exact ptr) out n)
+    out))
+
+(define (joltffi-write-array ptr bytes)
+  (unless (u8vector? bytes)
+    (throw-jvm 'IllegalArgumentException "jolt.ffi/write-array requires a byte-array"))
+  (let ((n (u8vector-length bytes)))
+    (sa-foreign-bytes-set! (jnum->exact ptr) bytes n)
+    n))
+
 ;; ptr->string: NUL-terminated C string at ptr (NULL/0 -> nil)
 (define joltffi-ptr->string
   (case-lambda
@@ -388,14 +403,8 @@
 (define (joltffi-refuse-var! name reason)
   (def-var! "jolt.ffi" name (joltffi-refuse-fn name reason)))
 
-;; byte-array moves need the jolt-array runtime (natives-array.ss is excluded
-;; from this boot's manifest) — the SA tier's bulk copies ARE qualified; this
-;; row is the jolt-array half.
-(joltffi-refuse-var! "read-array" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
+;; Sliced writes and typed array views are outside the qualified byte-copy rows.
 (joltffi-refuse-var! "read-into!" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
-(joltffi-refuse-var! "write-array" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
-(joltffi-refuse-var! "__read-array" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
-(joltffi-refuse-var! "__write-array" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
 (joltffi-refuse-var! "__read-into!" "byte-array moves need the jolt-array runtime, which this boot's manifest excludes")
 (joltffi-refuse-var! "__read-into-typed!" "typed-array views over foreign memory are not in the stage-1 registry")
 (joltffi-refuse-var! "__write-array-typed" "typed-array views over foreign memory are not in the stage-1 registry")
@@ -435,6 +444,10 @@
 (def-var! "jolt.ffi" "__size" joltffi-recorded-size)
 (def-var! "jolt.ffi" "__remember-size!" joltffi-remember-size!)
 (def-var! "jolt.ffi" "__forget-sizes!" joltffi-forget-sizes!)
+(def-var! "jolt.ffi" "read-array" joltffi-read-array)
+(def-var! "jolt.ffi" "write-array" joltffi-write-array)
+(def-var! "jolt.ffi" "__read-array" joltffi-read-array)
+(def-var! "jolt.ffi" "__write-array" joltffi-write-array)
 (def-var! "jolt.ffi" "read-bytes" joltffi-read-bytes)
 (def-var! "jolt.ffi" "write-bytes" joltffi-write-bytes)
 (def-var! "jolt.ffi" "__read-bytes" joltffi-read-bytes)

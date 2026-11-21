@@ -87,8 +87,7 @@
 ;; ============================================================================
 
 (define jolt-record-table (make-table test: eq?))     ;; type-name sym -> rtd
-(define jolt-record-id-table (make-table test: eqv?)) ;; id fixnum -> rtd
-(define jolt-record-counter 0)
+(define jolt-record-id-table (make-table test: eq?))  ;; private symbol -> rtd
 
 ;; rtd = #(id parent-name nfields field-name-list)
 (define (jolt-record-id-of name)
@@ -102,8 +101,8 @@
   (let* ((parent-id (and parent-name (jolt-record-id-of parent-name)))
          (parent-n (if parent-id (jolt-record-nfields parent-id) 0))
          (n (+ parent-n (length fields)))
-         (id (begin (set! jolt-record-counter (+ jolt-record-counter 1))
-                    jolt-record-counter))
+         ;; An integer tag aliases a plain vector whose first value is that integer.
+         (id (string->uninterned-symbol (symbol->string name)))
          (rtd (vector id parent-name n fields)))
     (table-set! jolt-record-table name rtd)
     (table-set! jolt-record-id-table id rtd)
@@ -111,7 +110,7 @@
 
 ;; Is ID a descendant-or-self of ANCESTOR-ID? Inclusive predicate semantics.
 (define (jolt-record-ancestor? id ancestor-id)
-  (or (= id ancestor-id)
+  (or (eq? id ancestor-id)
       (let* ((rtd (table-ref jolt-record-id-table id #f))
              (pn (and rtd (vector-ref rtd 1))))
         (and pn (jolt-record-ancestor? (jolt-record-id-of pn) ancestor-id)))))
@@ -132,7 +131,7 @@
   (lambda (x)
     (and (vector? x)
          (>= (vector-length x) 1)
-         (fixnum? (vector-ref x 0))
+         (symbol? (vector-ref x 0))
          (jolt-record-ancestor? (vector-ref x 0) id))))
 
 (define (make-jolt-record-field id parent-n own-index)
@@ -166,10 +165,10 @@
          (nstr (symbol->string name))
          (ctor-name (or ctor (string->symbol (string-append "make-" nstr))))
          (pred-name (or pred (string->symbol (string-append nstr "?")))))
-    (eval (list 'define ctor-name (list 'make-jolt-record-ctor id
+    (eval (list 'define ctor-name (list 'make-jolt-record-ctor (list 'quote id)
                                         (+ parent-n (length fields))))
           env)
-    (eval (list 'define pred-name (list 'make-jolt-record-pred id)) env)
+    (eval (list 'define pred-name (list 'make-jolt-record-pred (list 'quote id))) env)
     (let loop ((j 0) (fs fields))
       (if (pair? fs)
           (let* ((spec (car fs))               ; (kind . name) or (kind name acc [set])
@@ -182,12 +181,12 @@
                            (cadddr spec)
                            (string->symbol (string-append (symbol->string acc) "-set!")))))
             (eval (list 'define acc (list 'make-jolt-record-accessor
-                                          id parent-n j))
+                                          (list 'quote id) parent-n j))
                   env)
             ;; R6RS: only (mutable f) fields have a mutator binding.
             (when (eq? (car spec) 'mutable)
               (eval (list 'define setn (list 'make-jolt-record-setter
-                                             id parent-n j))
+                                             (list 'quote id) parent-n j))
                     env))
             (loop (+ j 1) (cdr fs)))
           #f))
@@ -201,7 +200,7 @@
 ;; (make-jolt-record-type returns it), so the descriptor is the registry rtd
 ;; and the raw constructor is rebuilt from it.
 (define (record-type-descriptor name)
-  (if (fixnum? name) (table-ref jolt-record-id-table name #f) #f))
+  (table-ref jolt-record-id-table name #f))
 (define (record-constructor rtd)
   (if (vector? rtd)
       (let ((id (vector-ref rtd 0)) (n (vector-ref rtd 2)))

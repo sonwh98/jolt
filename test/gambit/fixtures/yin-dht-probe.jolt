@@ -1,7 +1,6 @@
 ;; Appended to a scratch copy of jolt.gambit.yin. Keep the real driver and
-;; memory composition so each attempted operation gets its own Yin reply.
-(require '[dao.host.bytes :as p1e-bytes]
-         '[dao.stream :as p1e-stream]
+;; launcher composition so each attempted operation gets its own Yin reply.
+(require '[dao.stream :as p1e-stream]
          '[dao.stream.ringbuffer :as p1e-ring]
          '[jolt.scheme :as p1e-scheme])
 
@@ -9,6 +8,7 @@
 (def ^:private p1e-dir (jolt.host/getenv "JOLT_P1E_STORE"))
 (def ^:private p1e-durable (atom nil))
 (def ^:private p1e-memory (atom nil))
+(def ^:private p1e-session-store (atom nil))
 (def ^:private p1e-requests (atom nil))
 (def ^:private p1e-value {:p1e "yin-dht-local-round-trip" :count 3})
 
@@ -56,18 +56,40 @@
                         :bind-host "127.0.0.1" :bind-port 0})]
     (try
       (let [bound (p1e-next traffic cursor)
-            event (:dao.stream/value bound)
-            port (get-in event [:dao.stream.datagram/local :dao.stream.datagram/port])]
-        (if port
-          (let [payload (p1e-bytes/alloc 1)
-                _ (p1e-bytes/set! payload 0 42)
-                sent ((:send! seam) "127.0.0.1" port payload)
-                step ((:step! seam))
-                received (p1e-next traffic bound)]
-            {:bound event :send sent :step step :receive (:dao.stream/value received)})
-          event))
+            local (get-in bound [:dao.stream/value :dao.stream.datagram/local])
+            port (:dao.stream.datagram/port local)
+            payload (byte-array [42 -1 0])]
+        (when-not (and (= "127.0.0.1" (:dao.stream.datagram/host local))
+                       (integer? port) (pos? port))
+          (throw (ex-info "UDP loopback did not bind" {:bound bound})))
+        (let [sent ((:send! seam) "127.0.0.1" port payload)
+              received (loop [attempts 16]
+                         (let [step ((:step! seam))
+                               rx (p1e-next traffic bound)]
+                           (if (or (:progressed? step) (zero? attempts))
+                             rx
+                             (recur (dec attempts)))))
+              packet (:dao.stream/value received)]
+          ((:close! seam))
+          (let [closed (:dao.stream/value (p1e-next traffic received))]
+            (if (and (= :dao.stream/ok (:dao.stream/outcome sent))
+                     (= "Kv8A" (:dao.stream.datagram/bytes packet))
+                     (= local (:dao.stream.datagram/source packet))
+                     (= :dao.stream.datagram/closed (:dao.stream.datagram/event closed)))
+              [:udp-loopback-ok (:dao.stream.datagram/bytes packet) :closed]
+              (throw (ex-info "UDP loopback did not round trip"
+                              {:sent sent :packet packet :closed closed}))))))
       (finally
         ((:close! seam))))))
+
+(defn- p1e-session-round-trip []
+  (let [handle @p1e-session-store
+        address (jing/segment-key p1e-value)]
+    (when (and handle
+               (= :missing (jing/get handle address :missing))
+               (= address (jing/materialize! handle p1e-value))
+               (= p1e-value (jing/get handle address :missing)))
+      [:dht-index-put-get address p1e-value])))
 
 (defn- p1e-run [op]
   (case op
@@ -86,7 +108,9 @@
     :memory-get (if-let [handle @p1e-memory]
                   (jing/get handle (jing/segment-key p1e-value) :missing)
                   :blocked-no-memory-dht-handle)
-    :replicate-request (when @p1e-requests (p1e-check-request))
+    :replicate-request (= (jing/segment-key p1e-value)
+                          (:dao.jing.dht/replicate (p1e-check-request)))
+    :session-round-trip (p1e-session-round-trip)
     :udp-loopback (p1e-loopback)
     :udp-native-load (do (require 'jolt.socket.native) :socket-native-loaded)
     :c4-control (p1e-call "dao.posix.file" "realpath" p1e-dir)
@@ -99,10 +123,12 @@
     {'run (vm/primitive-profile 'run :pure [1] #{} :none)}))
 
 (defn- p1e-open [spec opts]
-  (assoc-in (open-memory spec opts) [:engine-inputs :host-modules 'p1e.probe]
-            p1e-activate))
+  (let [opened (open-store spec opts)]
+    (when (= :dht spec)
+      (reset! p1e-session-store (:index-store opened)))
+    (assoc-in opened [:engine-inputs :host-modules 'p1e.probe] p1e-activate)))
 
 (defn -main [& args]
-  (main/main! args {:composition-spec? #{:mem}
+  (main/main! args {:composition-spec? #{:mem :dht}
                     :parse-store-arg parse-store
                     :open p1e-open}))

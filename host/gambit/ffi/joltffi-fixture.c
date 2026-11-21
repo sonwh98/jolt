@@ -282,3 +282,45 @@ int joltffi_fx_vsetopt(void *handle, int option, ...) {
   return (handle != NULL) + option + (value != NULL);
 }
 int joltffi_fx_free_count(void) { return frees; }
+
+/* P1f: the Internet address conversion and datagram call shapes. Exercise all
+   argument positions, including bits above 32 in size_t and the socklen_t. */
+int joltffi_fx_einval(void) { return EINVAL; }
+
+int joltffi_fx_inet_pton(int af, void *src, void *dst) {
+  if (af != 6 || *(const uint8_t *)src != 0xff)
+    return 0;
+  *(uint8_t *)dst = 42;
+  return 1;
+}
+
+void *joltffi_fx_inet_ntop(int af, void *src, void *dst, unsigned int len) {
+  if (af != 6 || *(const uint8_t *)src != 42 || len != UINT32_MAX)
+    return NULL;
+  *(uint8_t *)dst = 0xff;
+  return dst;
+}
+
+ssize_t joltffi_fx_sendto(int fd, void *buf, size_t len, int flags,
+                          void *addr, unsigned int addrlen) {
+  if (fd != 17 || *(const uint8_t *)buf != 0xff || len != UINT64_C(0x100000003)
+      || flags != -8 || *(const uint8_t *)addr != 42 || addrlen != UINT32_MAX) {
+    errno = EINVAL;
+    return -1;
+  }
+  errno = 7777;
+  return (ssize_t)len;
+}
+
+ssize_t joltffi_fx_recvfrom(int fd, void *buf, size_t len, int flags,
+                            void *addr, void *addrlen) {
+  if (fd != 17 || len != UINT64_C(0x100000003) || flags != -8) {
+    errno = EAGAIN;
+    return -1;
+  }
+  *(uint8_t *)buf = 42;
+  *(uint8_t *)addr = 0xff;
+  *(unsigned int *)addrlen = 28;
+  errno = 7777;
+  return (ssize_t)len;
+}

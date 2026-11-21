@@ -128,8 +128,9 @@
 ;; so radix addressing gives way to a size-table search. A relaxed node is a
 ;; dedicated record — a regular branch is a Scheme vector of children and a leaf
 ;; is a chunk of ELEMENTS (which can themselves be Scheme vectors), so a record
-;; is the only representation whose discrimination is total: rrbnode? and
-;; vector? are disjoint, and a value is only ever treated as a node at level>0.
+;; has a separate rrbnode? predicate. Gambit represents the record itself
+;; as a tagged vector, so a raw vector? test cannot select the dense branch.
+;; Only levels above zero discriminate between dense and relaxed nodes.
 ;; sizes are CUMULATIVE subtree counts (sizes[k] = elements in children 0..k).
 ;;
 ;; Invariants:
@@ -185,7 +186,7 @@
   (let loop ((node node) (level level) (i i))
     (cond
       ((fx=? level 0) (vector-ref node (fxand i 31)))
-      ((vector? node) (loop (vector-ref node (fxand (fxsra i level) 31)) (fx- level 5) i))
+      ((not (rrbnode? node)) (loop (vector-ref node (fxand (fxsra i level) 31)) (fx- level 5) i))
       (else
        (let* ((i (fxand i (fx- (fxsll 1 (fx+ level pv-bits)) 1)))
               (sizes (rrbnode-sizes node))
@@ -275,8 +276,8 @@
            (vector-ref tail (fx- i tailoff))
            (let descend ((node (pvec-root p)) (level (pvec-shift p)))
              (cond ((fx=? level 0) (vector-ref node (fxand i 31)))
-                   ((vector? node) (descend (vector-ref node (fxand (fxsra i level) 31)) (fx- level 5)))
-                   (else (pv-trie-ref-from node level i)))))))))
+                   ((rrbnode? node) (pv-trie-ref-from node level i))
+                   (else (descend (vector-ref node (fxand (fxsra i level) 31)) (fx- level 5))))))))))
 ;; (pvec-ref-or p i miss): the element at I when I is a fixnum inside P's range,
 ;; else MISS, evaluated only then. The in-range read every hot vector path opens
 ;; with, so the fast case is one inline test and the slow case keeps each

@@ -126,7 +126,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 
 # Only mark PHONY targets for names that have file system conflicts:
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
-        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitseed gambitweb gambitprofile \
+        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitdht gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -1989,10 +1989,10 @@ gambitdaobytes:
 # The interpreted bootstrap is available through yin-repl-main.ss. Compiling
 # the same boot makes the full app closure fit the acceptance watchdog.
 GAMBIT_YIN_BOOT ?=
-gambityinrepl: gambitffi-bridge
+gambityinrepl gambitdht: gambitffi-bridge
 	@yin_root="$(abspath $(DATOMWORLD_ROOT))"; \
 	if [ ! -f "$$yin_root/src/cljc/yin/repl/main.cljc" ]; then \
-	  echo "gambityinrepl: no Yin source entry under $$yin_root. Set DATOMWORLD_ROOT to a Datomworld checkout." >&2; \
+	  echo "$@: no Yin source entry under $$yin_root. Set DATOMWORLD_ROOT to a Datomworld checkout." >&2; \
 	  exit 2; \
 	fi; \
 	boot="$(GAMBIT_YIN_BOOT)"; \
@@ -2000,8 +2000,12 @@ gambityinrepl: gambitffi-bridge
 	  boot=$$(sh host/gambit/ffi/watchdog.sh 2400 python3 host/gambit/build-yin-boot.py \
 	    "$(GAMBIT_GSC)" "$(abspath build/gambit-yin)") || exit $$?; \
 	fi; \
-	JOLT_GAMBIT_YIN_BOOT="$$boot" sh test/gambit/yin-repl-session.sh \
-	  "$(GAMBIT_GSI)" "$$yin_root" host/gambit/yin-repl-native.ss
+	if [ "$@" = gambitdht ]; then \
+	  sh test/gambit/yin-dht-probe.sh "$(GAMBIT_GSI)" "$$yin_root" "$$boot"; \
+	else \
+	  JOLT_GAMBIT_YIN_BOOT="$$boot" sh test/gambit/yin-repl-session.sh \
+	    "$(GAMBIT_GSI)" "$$yin_root" host/gambit/yin-repl-native.ss; \
+	fi
 
 # Every Scheme global the full-profile boot references is defined — Gambit's
 # own linker report over the compiled boot, minus what the record translator
@@ -2140,7 +2144,7 @@ $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1: gambitffi-force $(GAMBIT-FFI-DIR)/joltffi
 	       $(GAMBIT-FFI-BUILD)/joltffi-bridge.c $(GAMBIT-FFI-BUILD)/joltffi-bridge.o \
 	       $(GAMBIT-FFI-BUILD)/joltffi-bridge.scm
 	cp $(GAMBIT-FFI-DIR)/joltffi-bridge.scm $(GAMBIT-FFI-DIR)/generated-shims.scm $(GAMBIT-FFI-BUILD)/
-	cd $(GAMBIT-FFI-BUILD) && sh ../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp joltffi-bridge.scm
+	cd $(GAMBIT-FFI-BUILD) && sh ../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp -ld-options -pthread joltffi-bridge.scm
 	@shasum -a 256 $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1 \
 	  > $(GAMBIT-FFI-BUILD)/joltffi-bridge.o1.sha256
 	@cc --version > $(GAMBIT-FFI-BUILD)/compiler.txt
@@ -2201,7 +2205,7 @@ $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1: $(GAMBIT-FFI-BUILD)/joltffi-
 	@mkdir -p $(GAMBIT-FFI-BUILD)/capture-test
 	@rm -f $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o[0-9]*
 	cp $(GAMBIT-FFI-DIR)/joltffi-bridge.scm $(GAMBIT-FFI-DIR)/generated-shims.scm $(GAMBIT-FFI-BUILD)/capture-test/
-	cd $(GAMBIT-FFI-BUILD)/capture-test && sh ../../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp -cc-options -DJOLTFFI_CAPTURE_TEST joltffi-bridge.scm
+	cd $(GAMBIT-FFI-BUILD)/capture-test && sh ../../../$(GAMBIT-FFI-DIR)/watchdog.sh 120 $(GAMBIT_GSC) -dynamic -keep-temp -ld-options -pthread -cc-options -DJOLTFFI_CAPTURE_TEST joltffi-bridge.scm
 	@shasum -a 256 $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1 > $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1.sha256
 
 gambitffi-errno-check: gambitffi-bridge $(GAMBIT-FFI-BUILD)/capture-test/joltffi-bridge.o1

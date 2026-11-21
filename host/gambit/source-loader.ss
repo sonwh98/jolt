@@ -84,7 +84,8 @@
            (guard (e (#t (table-set! loaded name 'failed) (raise e)))
              (jolt-with-ns-bound
                (lambda ()
-                 (jolt-eval-string (call-with-input-file file gambit-read-all) file)
+                 (parameterize ((rdr-read-features (cons "gambit" (rdr-read-features))))
+                   (jolt-eval-string (call-with-input-file file gambit-read-all) file))
                  (unless (string=? name (chez-current-ns))
                    (throw-jvm 'IllegalStateException
                               (string-append file ": expected namespace " name)))))

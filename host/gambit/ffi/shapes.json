@@ -1,5 +1,5 @@
 {
-  "source": "p1b-inv/shim-registry.edn @ a6852ef8; selected ordinary procedure shapes, plus scalar ABI fixtures",
+  "source": "p1b-inv/shim-registry.edn @ a6852ef8; selected ordinary procedure shapes, plus scalar ABI fixtures; P1f ordinary inet address, UDP send/receive shapes",
   "shapes": [
     {
       "id": "s01",
@@ -320,6 +320,57 @@
       ],
       "ret": "void*",
       "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "p1f-inet-pton",
+      "args": [
+        "int",
+        "void*",
+        "void*"
+      ],
+      "ret": "int",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "p1f-inet-ntop",
+      "args": [
+        "int",
+        "void*",
+        "void*",
+        "unsigned-int"
+      ],
+      "ret": "void*",
+      "capture": false,
+      "varargs": null
+    },
+    {
+      "id": "p1f-sendto",
+      "args": [
+        "int",
+        "void*",
+        "size_t",
+        "int",
+        "void*",
+        "unsigned-int"
+      ],
+      "ret": "ssize_t",
+      "capture": true,
+      "varargs": null
+    },
+    {
+      "id": "p1f-recvfrom",
+      "args": [
+        "int",
+        "void*",
+        "size_t",
+        "int",
+        "void*",
+        "void*"
+      ],
+      "ret": "ssize_t",
+      "capture": true,
       "varargs": null
     }
   ]

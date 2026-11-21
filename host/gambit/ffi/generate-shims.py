@@ -9,7 +9,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent
 shapes = json.loads((root / 'shapes.json').read_text())['shapes']
 types = {
-    'int': ('int', 'int'), 'integer-8': ('int8_t', 'int8'),
+    'int': ('int', 'int'), 'unsigned-int': ('unsigned int', 'unsigned-int'), 'integer-8': ('int8_t', 'int8'),
     'unsigned-8': ('uint8_t', 'unsigned-int8'),
     'integer-16': ('int16_t', 'int16'), 'unsigned-16': ('uint16_t', 'unsigned-int16'),
     'integer-32': ('int32_t', 'int32'), 'unsigned-32': ('uint32_t', 'unsigned-int32'),

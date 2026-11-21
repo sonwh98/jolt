@@ -268,6 +268,44 @@ static unsigned long joltffi_generated_32(unsigned long fn, unsigned long a0)
   void * r = f((void *)a0);
   return (unsigned long)r;
 }
+/* p1f-inet-pton: variadic boundary None, capture False */
+static int joltffi_generated_33(unsigned long fn, int a0, unsigned long a1, unsigned long a2)
+{
+  int (*f)(int, void *, void *) = (int (*)(int, void *, void *))fn;
+  int r = f(a0, (void *)a1, (void *)a2);
+  return r;
+}
+/* p1f-inet-ntop: variadic boundary None, capture False */
+static unsigned long joltffi_generated_34(unsigned long fn, int a0, unsigned long a1, unsigned long a2, unsigned int a3)
+{
+  void * (*f)(int, void *, void *, unsigned int) = (void * (*)(int, void *, void *, unsigned int))fn;
+  void * r = f(a0, (void *)a1, (void *)a2, a3);
+  return (unsigned long)r;
+}
+/* p1f-sendto: variadic boundary None, capture True */
+static ssize_t joltffi_generated_35(unsigned long fn, unsigned long errout, int a0, unsigned long a1, size_t a2, int a3, unsigned long a4, unsigned int a5)
+{
+  ssize_t (*f)(int, void *, size_t, int, void *, unsigned int) = (ssize_t (*)(int, void *, size_t, int, void *, unsigned int))fn;
+  ssize_t r = f(a0, (void *)a1, a2, a3, (void *)a4, a5);
+  int saved = errno;
+  *(int *)errout = saved;
+#ifdef JOLTFFI_CAPTURE_TEST
+  errno = 4242; /* after capture, before Gambit conversion */
+#endif
+  return r;
+}
+/* p1f-recvfrom: variadic boundary None, capture True */
+static ssize_t joltffi_generated_36(unsigned long fn, unsigned long errout, int a0, unsigned long a1, size_t a2, int a3, unsigned long a4, unsigned long a5)
+{
+  ssize_t (*f)(int, void *, size_t, int, void *, void *) = (ssize_t (*)(int, void *, size_t, int, void *, void *))fn;
+  ssize_t r = f(a0, (void *)a1, a2, a3, (void *)a4, (void *)a5);
+  int saved = errno;
+  *(int *)errout = saved;
+#ifdef JOLTFFI_CAPTURE_TEST
+  errno = 4242; /* after capture, before Gambit conversion */
+#endif
+  return r;
+}
 SHIMS
 )
 (define (joltffi-shim-0 fn)
@@ -336,6 +374,14 @@ SHIMS
   ((c-lambda (unsigned-long float64) float64 "joltffi_generated_31") fn a0))
 (define (joltffi-shim-32 fn a0)
   ((c-lambda (unsigned-long unsigned-long) unsigned-long "joltffi_generated_32") fn a0))
+(define (joltffi-shim-33 fn a0 a1 a2)
+  ((c-lambda (unsigned-long int unsigned-long unsigned-long) int "joltffi_generated_33") fn a0 a1 a2))
+(define (joltffi-shim-34 fn a0 a1 a2 a3)
+  ((c-lambda (unsigned-long int unsigned-long unsigned-long unsigned-int) unsigned-long "joltffi_generated_34") fn a0 a1 a2 a3))
+(define (joltffi-shim-35 fn errout a0 a1 a2 a3 a4 a5)
+  ((c-lambda (unsigned-long unsigned-long int unsigned-long size_t int unsigned-long unsigned-int) ssize_t "joltffi_generated_35") fn errout a0 a1 a2 a3 a4 a5))
+(define (joltffi-shim-36 fn errout a0 a1 a2 a3 a4 a5)
+  ((c-lambda (unsigned-long unsigned-long int unsigned-long size_t int unsigned-long unsigned-long) ssize_t "joltffi_generated_36") fn errout a0 a1 a2 a3 a4 a5))
 (define joltffi-shims
   (list
     (list '() 'int #f #f joltffi-shim-0)
@@ -371,6 +417,10 @@ SHIMS
     (list '(float) 'float #f #f joltffi-shim-30)
     (list '(double) 'double #f #f joltffi-shim-31)
     (list '(void*) 'void* #f #f joltffi-shim-32)
+    (list '(int void* void*) 'int #f #f joltffi-shim-33)
+    (list '(int void* void* unsigned-int) 'void* #f #f joltffi-shim-34)
+    (list '(int void* size_t int void* unsigned-int) 'ssize_t #t #f joltffi-shim-35)
+    (list '(int void* size_t int void* void*) 'ssize_t #t #f joltffi-shim-36)
 ))
 (define (joltffi-shim-lookup args ret capture? variadic)
   (let loop ((es joltffi-shims))

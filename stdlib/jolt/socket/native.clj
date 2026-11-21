@@ -264,7 +264,10 @@
     (ffi/defcfn c-send  "send" [:int :pointer :size_t :int] :ssize_t
       {:blocking true :capture-native-error true})
     ;; :blocking because a close with SO_LINGER set can wait for the peer
-    (ffi/defcfn c-close "close" [:int] :int {:blocking true :capture-native-error true})
+    #?(:gambit (ffi/defcfn ^:private c-close-blocking "close" [:int] :int
+                  {:blocking true :capture-native-error true})
+       :default (ffi/defcfn c-close "close" [:int] :int
+                  {:blocking true :capture-native-error true}))
     ;; Linux accepts close-on-exec in one call, so a process spawned on another
     ;; thread never sees the connection; macOS has no accept4 and guard-accepted!
     ;; sets it after
@@ -603,6 +606,28 @@
   []
   (let [sa (ffi/alloc sockaddr-storage-size)]
     [sa (int-cell sockaddr-storage-size)]))
+
+#?(:gambit
+   (do
+     (def ^:private await-datagram-close
+       (delay ((requiring-resolve 'jolt.scheme/proc) "joltffi-await-datagram-close")))
+
+     (defn c-close [fd]
+       ;; Only the owned Internet datagram path uses the native cleanup
+       ;; worker. A content filter can delay close even without SO_LINGER.
+       (let [[sa lenp] (alloc-sockaddr)
+             opt (ffi/alloc 4)]
+         (try
+           (let [[name-result _] (c-getsockname fd sa lenp)]
+             (if (and (zero? name-result)
+                      (contains? #{af-inet af-inet6} (sockaddr-family sa))
+                      (do (ffi/write lenp :int 4)
+                          (let [[result _] (c-getsockopt fd sol-socket (if macos? 0x1008 3) opt lenp)]
+                            (and (zero? result) (= 2 (ffi/read opt :int))))))
+               (let [result ((force await-datagram-close) fd)]
+                 [(if (neg? result) -1 0) (bit-and result 0xffffffff)])
+               (c-close-blocking fd)))
+           (finally (ffi/free opt) (ffi/free lenp) (ffi/free sa)))))))
 
 (defn- named-address [f fd]
   (let [[sa lenp] (alloc-sockaddr)]

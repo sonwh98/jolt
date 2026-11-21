@@ -27,8 +27,8 @@ requires `emittedheads`, which checks emitted names against user-local shadowing
 `p1b-inv/shim-registry.edn` at fork `a6852ef8`. It includes ordinary procedure
 shapes S01/S01b/S02/S03/S12/S12b/S13/S18/S19/S20/S21/S22/S22b/S22c/S23/
 S26/S26b/S26c/S26d/S26e, the S32 declared-tail fixture (two fixed arguments),
-and thirteen explicit scalar identity fixtures. S19 and S20 share one ABI.
-Blocking/callable/pointer-call/aggregate/bare-varargs shapes are refused.
+thirteen explicit scalar identity fixtures, and the P1f inet address conversion
+and UDP send/receive shapes. S19 and S20 share one ABI. Blocking/callable/pointer-call/aggregate/bare-varargs shapes are refused.
 Other shapes are deliberately rejected; this is not unrestricted FFI.
 
 `generate-shims.py` emits `generated-shims.scm` from that manifest. Identity
@@ -136,13 +136,19 @@ available to same-unit Scheme callers. No `c-lambda` is evaluated at runtime.
 The `:gambit` primitive table explicitly selects the empty unsafe-op prefix.
 
 This is the fork's compiler/eval gate path, not `bin/jolt build`: the build CLI,
-AOT/FASL/subprocess, module/native dependency loading and complete stdlib
-`jolt.ffi` namespace loading are not qualified on Gambit. Explicit library
-loading works; pending `:jolt/native` discovery is not implemented. Public
-jolt-array copy helpers remain refused because this boot excludes their
-runtime; adapter u8vector bulk copies and public string-byte copies work.
-String arguments remain refused; native copies via `string->ptr` work.
-No Web/JS, Linux, MT, or native consumer parity is claimed.
+AOT/FASL/subprocess and automatic native dependency loading are outside this
+tier. The native Yin source loader loads the stdlib `jolt.ffi` declarations
+over the host-owned primitives. Public two-argument `read-array` and
+`write-array` copy raw bytes via the adapter's u8vector bulk copies. String
+arguments remain refused; native copies via `string->ptr` work.
+
+`make gambitdht` runs native Yin with `--index-store dht:` for a memory-backed
+DHT index and checks the UDP loopback seam in the session. This CLI profile
+starts a solo node. Durable `dht:<dir>` requires Chez in the Jolt launchers.
+Generic socket close and file I/O remain subject to C4. For owned Internet
+datagram descriptors, a native close worker owns the syscall and its errno.
+Gambit yields while it waits for completion. The Linux execution leg is
+separate from the Darwin gate.
 
 The real collector witness clears an unreachable weak key. It does not test
 collection during C execution. Bulk copies borrow Scheme storage only for a

@@ -37,7 +37,7 @@
       (append '(("host/gambit/yin" ".jolt"))
               (list (list (path-expand "src/jolt" (car args)) ".jolt"))
               roots))
-  '("clojure.core" "jolt.ffi"))
+  '("clojure.core"))
 (source-check "backend" ":gambit" (lambda () (ce "(jolt.backend-scheme.session/target)")))
 (source-check "loaded dependency and reader feature" "42"
   (lambda () (ce "(require '[p1c.source-entry :as entry]) (entry/result)")))
@@ -52,6 +52,12 @@
   (lambda () (ce (string-append "(count \"" (make-string 9000 #\x) "\")"))))
 (run-unit-rows (keyword #f "core-bytes"))
 (run-unit-rows (keyword #f "core-arrays"))
+(source-check "load jolt.ffi declarations from source" "nil"
+  (lambda () (ce "(require '[jolt.ffi :as ffi])")))
+(source-check "defcfn expands from the loaded namespace" "def"
+  (lambda ()
+    (ce "(first (macroexpand-1 '(ffi/defcfn native-constant \"example\"
+                                   [] :int {:capture-native-error true})))")))
 (source-check "load jolt.scheme" "nil" (lambda () (ce "(require 'jolt.scheme)")))
 (run-unit-rows (keyword #f "core-prims"))
 (run-unit-rows (keyword #f "yin-blake3"))

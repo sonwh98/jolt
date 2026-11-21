@@ -256,10 +256,10 @@
 ;; The OS family every host OS branch derives. Contract: one of the three
 ;; symbols. Degradation: none — the sites have no safe assumed default; an
 ;; unrecognized host falls back to 'linux, matching the Chez adapter's
-;; else-branches. The G1 demo runs no OS branches, so 'linux is documented as
-;; the else-default, not probed.
+;; else-branches. In Gambit's configuration triple Darwin uses vendor apple
+;; and a versioned OS symbol (for example darwin25.6.0).
 (define (sa-os-family)
-  'linux)
+  (if (memq 'apple (system-type)) 'macos 'linux))
 
 ;; (sa-arch) -> 'x86-64 | 'arm64 | 'i386 | 'other
 ;; The machine architecture. Contract: the architecture symbol. Degradation:

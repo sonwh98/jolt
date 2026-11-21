@@ -194,6 +194,16 @@
                                 "no shim registers the class (host/gambit/host-statics.ss)")))))))))
 (def-var! "clojure.core" "host-new" (lambda (c . a) (apply host-new c a)))
 
+;; Constructing a File only wraps the path. Store preflight filesystem
+;; operations are governed by the same C4 boundary as the POSIX file overlay.
+(register-class-ctor! "java.io.File"
+  (lambda (path) (make-jhost "file" (jolt-need-string path))))
+(register-host-methods! "file"
+  (cons (cons "getPath" jhost-state)
+        (map (lambda (name)
+               (cons name (lambda (_) (joltffi-public-blocking-raise))))
+             '("exists" "isDirectory" "canWrite" "mkdirs"))))
+
 ;; ---- the statics the seed reaches -----------------------------------------------
 ;; Each is the member Chez registers in host-static-methods.ss, with the same
 ;; body, so a call answers the same on both targets. Long/parseLong is

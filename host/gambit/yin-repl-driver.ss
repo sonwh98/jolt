@@ -81,7 +81,7 @@
                         (list (path-expand "src/clj" root) ".clj")
                         (list (path-expand "stdlib" jolt-root) ".jolt" ".cljc" ".clj")
                         (list (path-expand "jolt-core" jolt-root) ".cljc" ".clj"))
-                  '("clojure.core" "jolt.ffi"))))
+                  '("clojure.core"))))
           (parameterize ((current-directory root))
             (let* ((audit? (getenv "JOLT_YIN_AUDIT" #f))
                    (before (and audit? (unbound-var-names))))

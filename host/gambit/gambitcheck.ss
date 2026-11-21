@@ -391,7 +391,10 @@
 (define (test-sa-surface)
   (printf "== sa-* runtime surface ==\n")
   (check "sa-host-tag" (sa-host-tag) "gambit")
-  (check "sa-os-family (documented else-default)" (sa-os-family) 'linux)
+  (check "sa-os-family matches the platform's native bridge"
+         (sa-os-family)
+         (begin (joltffi-ensure-bridge! 'sa-os-family)
+                (if (string=? (joltffi-platform-key) "darwin") 'macos 'linux)))
   (check "sa-arch (degraded)" (sa-arch) 'other)
   (check "sa-endian" (sa-endian) 'little)
   (check "sa-real-time-ms is an exact integer" (exact-integer? (sa-real-time-ms)) #t)

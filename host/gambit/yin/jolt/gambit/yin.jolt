@@ -1,5 +1,5 @@
 (ns jolt.gambit.yin
-  "The local-memory composition for the Gambit terminal."
+  "The memory and memory-backed DHT compositions for the Gambit terminal."
   (:require [dao.jing :as jing]
             [jolt.ffi :as ffi]
             [yin.repl.main :as main]
@@ -23,19 +23,50 @@
     {'materialize-sha256
      (vm/primitive-profile 'materialize-sha256 :pure [1] #{} :none)}))
 
+(def ^:private memory-engine-inputs
+  {:host-modules {'jolt.ffi activate-ffi
+                  'dao.jing.mem activate-store}})
+
 (defn- open-memory [spec _opts]
   {:index-store (store/open spec)
-   :engine-inputs {:host-modules {'jolt.ffi activate-ffi
-                                  'dao.jing.mem activate-store}}})
+   :engine-inputs memory-engine-inputs})
+
+(defn- open-dht []
+  (let [join (requiring-resolve 'dao.space.dht/join)
+        payload-budget (requiring-resolve 'dao.space.dht/payload-budget)
+        local (store/open :mem)
+        node (try
+               (join {:local local})
+               (catch Throwable e
+                 (jing/close! local)
+                 (throw e)))
+        handle (:handle node)]
+    (try
+      {:index-store handle
+       :publication-policy {:max-payload-bytes (payload-budget node)}}
+      (catch Throwable e
+        (jing/close! handle)
+        (throw e)))))
+
+(defn- open-store [spec opts]
+  (if (= spec :dht)
+    (assoc (open-dht) :engine-inputs memory-engine-inputs)
+    (open-memory spec opts)))
 
 (defn- parse-store [arg]
-  (let [spec (store/parse-arg arg)]
-    (when-not (= spec :mem)
-      (throw (ex-info "The local Gambit session supports only --index-store mem"
-                      {:store spec})))
-    spec))
+  (if (= arg "dht:")
+    :dht
+    (let [spec (store/parse-arg arg [{:prefix "dht:" :label "dht:"
+                                     :parse (fn [dir]
+                                              (throw (ex-info
+                                                       "Gambit supports --index-store dht: with memory backing. Durable dht:<dir> requires Chez."
+                                                       {:dir dir})))}])]
+      (when-not (= spec :mem)
+        (throw (ex-info "The local Gambit session supports --index-store mem or dht:"
+                        {:store spec})))
+      spec)))
 
 (defn -main [& args]
-  (main/main! args {:composition-spec? #{:mem}
+  (main/main! args {:composition-spec? #{:mem :dht}
                     :parse-store-arg parse-store
-                    :open open-memory}))
+                    :open open-store}))

@@ -18,11 +18,14 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
 #include <stdarg.h>
 #include <sys/types.h>
+#include <unistd.h>
 _Static_assert(sizeof(void*) == 8 && sizeof(long) == 8 && sizeof(int) == 4, "stage-1 requires LP64");
 
 static int joltffi_capture_test_enabled(void)
@@ -73,6 +76,72 @@ static char *joltffi_c_dlerror (void)
 
 static int joltffi_c_dlclose (unsigned long h)
 { return dlclose (___CAST(void *, h)); }
+
+/* Datagram cleanup stays off the Gambit processor. On Darwin a content
+   filter can delay close even with SO_LINGER disabled. The native worker
+   owns only a C allocation and an fd, and never enters the Scheme runtime. */
+struct joltffi_close_job {
+  atomic_int refs;
+  atomic_int done;
+  int fd;
+  int result;
+  int error;
+};
+
+static void joltffi_close_job_release(unsigned long address)
+{
+  struct joltffi_close_job *job = (struct joltffi_close_job *)address;
+  if (atomic_fetch_sub_explicit(&job->refs, 1, memory_order_acq_rel) == 1)
+    free(job);
+}
+
+static void *joltffi_close_worker(void *arg)
+{
+  struct joltffi_close_job *job = arg;
+  errno = 0;
+  int result = close(job->fd);
+  int error = errno;
+  job->result = result;
+  job->error = error;
+  atomic_store_explicit(&job->done, 1, memory_order_release);
+  joltffi_close_job_release((unsigned long)job);
+  return NULL;
+}
+
+static unsigned long joltffi_start_datagram_close(int fd)
+{
+  struct joltffi_close_job *job = malloc(sizeof *job);
+  if (job == NULL)
+    return 0;
+  atomic_init(&job->refs, 2);
+  atomic_init(&job->done, 0);
+  job->fd = fd;
+
+  pthread_attr_t attrs;
+  pthread_t worker;
+  int error = pthread_attr_init(&attrs);
+  if (error == 0) {
+    error = pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_DETACHED);
+    if (error == 0)
+      error = pthread_create(&worker, &attrs, joltffi_close_worker, job);
+    pthread_attr_destroy(&attrs);
+  }
+  if (error != 0) {
+    job->result = -2; /* submission failed; close() was never called */
+    job->error = error;
+    atomic_store_explicit(&job->done, 1, memory_order_release);
+    joltffi_close_job_release((unsigned long)job);
+  }
+  return (unsigned long)job;
+}
+
+static int64_t joltffi_poll_datagram_close(unsigned long address)
+{
+  struct joltffi_close_job *job = (struct joltffi_close_job *)address;
+  if (!atomic_load_explicit(&job->done, memory_order_acquire))
+    return INT64_MIN;
+  return job->result * INT64_C(4294967296) + job->error;
+}
 
 /* ---- memory ----------------------------------------------------------------- */
 static unsigned long joltffi_c_malloc (unsigned long n)
@@ -202,6 +271,29 @@ JOLTFFI-C-BEGIN
   (= 1 ((c-lambda () int "joltffi_capture_test_enabled"))))
 (define (joltffi-platform-key)
   ((c-lambda () char-string "joltffi_c_os")))
+
+;; The result packs close's signed int and the worker's captured errno.
+;; Yield using Gambit's scheduler while the worker holds its own reference.
+(define (joltffi-await-datagram-close fd)
+  (let* ((start (c-lambda (int) unsigned-long "joltffi_start_datagram_close"))
+         (poll (c-lambda (unsigned-long) int64 "joltffi_poll_datagram_close"))
+         (release (c-lambda (unsigned-long) void "joltffi_close_job_release"))
+         (job (start fd)))
+    (if (= job 0)
+        (error "jolt.ffi: could not allocate datagram close job")
+        (dynamic-wind
+          (lambda () #f)
+          (lambda ()
+            (let loop ()
+              (let ((result (poll job)))
+                (cond ((= result -9223372036854775808)
+                       (thread-sleep! 0.001)
+                       (loop))
+                      ((< result -4294967296)
+                       (error "jolt.ffi: could not start datagram close worker"
+                              (+ result 8589934592)))
+                      (else result)))))
+          (lambda () (release job))))))
 
 ;; ---- loader wrappers ----------------------------------------------------------
 (define (joltffi-dlopen path)

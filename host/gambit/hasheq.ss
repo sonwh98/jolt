@@ -553,7 +553,7 @@
 (define (jolt-identity-hashed? x)
   (and (vector? x)
        (fx>= (vector-length x) 1)
-       (fixnum? (vector-ref x 0))
+       (symbol? (vector-ref x 0))
        (table-ref jolt-record-id-table (vector-ref x 0) #f)
        ;; records and deftypes keep the structural hash they reach here with
        (not (jrec? x))

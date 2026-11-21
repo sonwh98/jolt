@@ -239,4 +239,62 @@
  (lambda () (sa-foreign-procedure (__varargs_after 1) 1 (int int int) int)) "unregistered shape")
 (ffi-check-raise-message "string arguments refuse"
  (lambda () (sa-foreign-procedure "absent" (u8*) int)) ":string arguments are unsupported")
+(printf "== P1f Internet address and datagram shapes ==\n")
+(let ((src (sa-foreign-alloc 8))
+      (dst (sa-foreign-alloc 8))
+      (lenp (sa-foreign-alloc 4))
+      (pton (sa-foreign-procedure "joltffi_fx_inet_pton" (int void* void*) int))
+      (ntop (sa-foreign-procedure "joltffi_fx_inet_ntop" (int void* void* unsigned-int) void*))
+      (sendto (sa-foreign-procedure-native-error posix ()
+                "joltffi_fx_sendto" (int void* size_t int void* unsigned-int) ssize_t))
+      (recvfrom (sa-foreign-procedure-native-error posix ()
+                  "joltffi_fx_recvfrom" (int void* size_t int void* void*) ssize_t))
+      (eagain ((sa-foreign-procedure "joltffi_fx_eagain" () int)))
+      (einval ((sa-foreign-procedure "joltffi_fx_einval" () int))))
+  (dynamic-wind
+    (lambda () #f)
+    (lambda ()
+      (sa-foreign-set! 'unsigned-8 src 0 255)
+      (ffi-check "inet_pton int and output pointer" (pton 6 src dst) 1)
+      (ffi-check "inet_pton writes binary address" (sa-foreign-ref 'unsigned-8 dst 0) 42)
+      (ffi-check "inet_ntop unsigned socklen and returned pointer" (ntop 6 dst src #xffffffff) src)
+      (ffi-check "inet_ntop null result" (ntop 6 dst src 0) 0)
+      (ffi-check "sendto six slots, wide result and errno"
+        (call-with-values (lambda () (sendto 17 src #x100000003 -8 dst #xffffffff)) list)
+        (list #x100000003 7777))
+      (ffi-check "sendto captures error from its own call"
+        (call-with-values (lambda () (sendto -1 src 8 0 dst 0)) list)
+        (list -1 einval))
+      (ffi-check "recvfrom six slots, wide result and errno"
+        (call-with-values (lambda () (recvfrom 17 src #x100000003 -8 dst lenp)) list)
+        (list #x100000003 7777))
+      (ffi-check "recvfrom payload, source address and in/out socklen"
+        (list (sa-foreign-ref 'unsigned-8 src 0) (sa-foreign-ref 'unsigned-8 dst 0)
+              (sa-foreign-ref 'unsigned-int lenp 0))
+        '(42 255 28))
+      (ffi-check "recvfrom would-block capture"
+        (call-with-values (lambda () (recvfrom -1 src 8 0 dst lenp)) list)
+        (list -1 eagain)))
+    (lambda () (sa-foreign-free lenp) (sa-foreign-free dst) (sa-foreign-free src))))
+
+(let* ((socket (sa-foreign-procedure-native-error posix () "socket" (int int int) int))
+       (getsockname (sa-foreign-procedure-native-error posix () "getsockname"
+                     (int void* void*) int))
+       (ebadf ((sa-foreign-procedure "joltffi_fx_ebadf" () int)))
+       (fd (call-with-values (lambda () (socket 2 2 17))
+             (lambda (fd _) fd)))) ; AF_INET, SOCK_DGRAM, IPPROTO_UDP on both legs
+  (ffi-check-true "datagram close test opened a fresh fd" (>= fd 0))
+  (when (>= fd 0)
+    (ffi-check "datagram worker returns success" (joltffi-await-datagram-close fd) 0)
+    (let ((addr (sa-foreign-alloc 128)) (lenp (sa-foreign-alloc 4)))
+      (dynamic-wind
+        (lambda () (sa-foreign-set! 'int lenp 0 128))
+        (lambda ()
+          (ffi-check "the worker closed the descriptor"
+            (call-with-values (lambda () (getsockname fd addr lenp)) list)
+            (list -1 ebadf)))
+        (lambda () (sa-foreign-free lenp) (sa-foreign-free addr)))))
+  (ffi-check "datagram worker returns its own close errno"
+    (joltffi-await-datagram-close -1) (+ (- (expt 2 32)) ebadf)))
+
 (ffi-gate-finish "gambitffi-abi")

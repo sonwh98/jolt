@@ -1,0 +1,181 @@
+[claude-code:unrecognized_model] {"model":"glm-5.3","query_source":"sdk"}
+The Write call was not granted, so I could not write the findings file — per the task's fallback clause, here are the complete findings in this response instead.
+
+Completed-GMT: 2026-11-22 17:57:55 GMT
+Completed-Local: 2026-11-23 00:57:55 ICT (+07)
+
+The findings file `collab/yin-repl/1795371200000-reviewer-store-swap-p3-gate.glm-5.3.findings.md` could **not** be written (write permission was not granted). Complete findings:
+
+---
+
+```markdown
+Created-GMT: 2026-11-22 17:57:55 GMT
+Created-Local: 2026-11-23 00:57:55 ICT (+07)
+Coding-Agent: glm-5.3 (adversarial review seat)
+Session-ID: 1ba02c6c-a8d3-4eea-8377-14aff23bf770
+
+# Task: store-swap Slice 3 — Gambit overlay (use-store honest degradation)
+
+Reviewed: uncommitted diff on gambit-ffi-p1-store-swap
+(host/gambit/yin/jolt/gambit/yin.jolt, test/gambit/yin-repl-session.sh) against
+the design contract (1795360785000, Decision 5 + file-spec item 6) and the
+datomworld driver on branch store-swap-p1 (../datomworld-store-swap:
+yin.repl.main/replace-store, swap_store, boot; yin.repl/store.cljc,
+repl.cljc; yin.shell.cli/parse-store-command as grammar reference).
+Verification already done by the implementer (make gambityinrepl PASS, macOS
+arm64, exit 0) was not re-run, per the task instructions.
+
+## Adjudication
+
+### 1. Fidelity to Decision 5 — PASS
+
+- dht-scheme is plain data, byte-identical to the design's descriptor
+  (host/gambit/yin/jolt/gambit/yin.jolt:11-15). The only new require is
+  dao.posix.file (:4), which itself requires only jolt.scheme — no
+  yin.shell.dht, no dao.stream.udp, no java.io.File anywhere on the load path.
+- Startup :parse-store-arg is unchanged (yin.jolt:44-49, wired at :71);
+  yin.repl.main consumes :parse-store-command only in swap_store
+  (main.cljc:497) and parses startup flags solely via :parse-store-arg
+  (main.cljc:185,226), so --index-store file:/dht: still refuses startup with
+  exit 1 (parse-store + store/parse-arg without extra schemes → "Unknown
+  --index-store").
+- open-gambit (yin.jolt:38-42) evaluates (posix-file/realpath (:dir spec)) as
+  the FIRST expression on the non-mem path; {:index-store (store/open spec)}
+  is unreachable behind it because realpath unconditionally routes to
+  joltffi-public-blocking-raise (host/gambit/yin/dao/posix/file.jolt:20). The
+  composed branch of replace-store calls the composition :open directly
+  (main.cljc:456-457) without checked-spec, so no java.io.File and no spec-type
+  refusal can precede the C4 error.
+- :mem path delegates to open-memory (yin.jolt:33-36), preserving
+  :engine-inputs {:host-modules {jolt.ffi …, dao.jing.mem …}} — proven by the
+  transcript's post-swap (require 'jolt.ffi) → 'jolt.ffi and
+  (jolt.ffi/sizeof :int32) → 4.
+- :composition-spec? (constantly true): exactly two consumers — boot
+  (main.cljc:288-291) and replace-store (main.cljc:453). At boot only :mem can
+  reach it (parse-store gates earlier), so behavior is identical to the old
+  #{:mem}; at swap, always-composed is correct on Gambit because open-gambit
+  self-dispatches :mem vs durable. No other composition key is affected:
+  admitting?/refusal/step/startup-lines/banner-lines are absent → engine
+  defaults (composition-admitting? true, no transport step), so quiesce,
+  reset, evaluation, and shutdown paths are un-hijacked. Non-swap behavior is
+  unchanged (old map was a subset of the new one).
+
+### 2. parse-swap-command contract — PASS (one LOW)
+
+- Grammar parity with the design and with the reference
+  yin.shell.cli/parse-store-command (cli.cljc:608-639): identical supported
+  text ("mem, file:<dir>, dht:<dir>"), identical no-args / bad-target /
+  options-must-be-keyword-value-pairs messages, and the exact design string
+  "store options require dht:<dir>" for trailing opts on :mem/:file.
+  :mem is normalized to "mem" (label matches swap-summary's output).
+- Driver feeding is correct: driver.cljc:447 passes
+  (rest (adapter/command-form line)) — a seq of forms matching the
+  [[target & options :as args]] destructure.
+- main.cljc:503's describe-spec guard is correctly skipped when the
+  composition supplies its own parser (dht: specs must pass through).
+- LOW (below): the return map omits the contract's :opts key.
+
+### 3. Transcript state machine — PASS
+
+- All 20 replies are asserted in order with step gating; any extra yin> line
+  fails via the catch-all. The C4 rules (steps 9/13/14) are unanchored
+  prefixes, matching the full message including the "— GC-safe blocking is
+  unqualified on Gambit 4.9.8 (no verified release/claim transition)" tail.
+  The quiesce rule (step 10) is fully anchored and matches
+  yin.repl/swap-refusal's exact string (repl.cljc:2540). Step 15's "Switched
+  index store to mem (code index cleared)" matches swap-summary (label "mem",
+  :mem spec → "(code index cleared)", repl.cljc:2579-2587).
+- Decision 5's failure story is fully covered: dirty swap refused (step 10),
+  state survives ((+ p1c-score 1) → 101, step 11 — this IS design story step
+  2's (+ x 1) survival probe), reset (12), C4 for file: (13), C4 for dht:
+  (14), mem swap succeeds (15), post-swap evaluation (16-18), clean exit 0
+  (19 + watchdog status check).
+- Deviation 1 (require 'jolt.ffi before the post-swap sizeof): necessary and
+  precedented. A swap rebuilds the VM session (make-session → make-vm) with a
+  clean symbol environment while :host-modules repopulates the registry, so
+  guest code must require to link — exactly the pattern the pre-swap sequence
+  in the same script already uses (FORMS lines 20-21) and the pattern
+  documented in test/yin/repl/dht_test.cljc ("a (reset) drops host modules:
+  require the DHT one each time"). It strengthens the assertion: the require
+  succeeding is itself proof that :host-modules survived the swap. ACCEPTED.
+- Deviation 2 (the (+ p1c-score 1) → 101 probe): implements the design's
+  failure-story step 2 verbatim rather than deviating from it. ACCEPTED.
+
+### 4. Defect hunt — CLEAN
+
+- No double-open/double-close on the mem path: one open per swap
+  (open-gambit → open-memory → store/open); the old store is closed exactly
+  once, after the commit point (main.cljc:481-482, release-store! with
+  store/close! fallback since the Gambit composition has no :close-store!);
+  an open-time throw (the C4 case) precedes both release calls and leaves the
+  old store live; a failed install releases only the new store
+  (main.cljc:478-480).
+- No error swallowing around the C4 refusal: the new yin.jolt code contains
+  no try/catch at all; swap_store's catch is
+  #?(:cljd Object :clj Throwable :cljs :default) (main.cljc:506), which
+  catches the host UnsupportedOperationException (ex-data nil) and formats it
+  via format-swap-error — transcript-proven ("Error: blocking ffi is
+  unsupported on the gambit target — …" printed inline, session survives).
+  release-store! swallows only cleanup errors on retired/failed stores, which
+  Decision 2 step 5 explicitly sanctions.
+- The C4 boundary is unweakened: dao.posix.file's overlay is untouched (every
+  function refuses), no blocking FFI is qualified or shimmed, and realpath is
+  invoked for its refusal, not its effect. The refusal is not blocked-FFI
+  qualified anywhere.
+- Post-swap session is quiesced (make-session ends :quiesced? true,
+  repl.cljc:1016; install-store rebuilds through it), so a subsequent swap is
+  not wrongly refused.
+- /tmp/gambit-nope is never created (all file ops refuse), and even a
+  pre-existing directory would not change realpath's unconditional refusal.
+
+## Findings
+
+MEDIUM | none | — | —
+
+(No medium-or-higher defects found.)
+
+LOW | host/gambit/yin/jolt/gambit/yin.jolt:67 | parse-swap-command returns
+{:spec spec :label target}, omitting the :parse-store-command contract's :opts
+key (design file-spec item 4 step 2 and yin.shell.cli/parse-store-command
+:635-639 return {:spec :opts :label}). Tolerated by replace-store today:
+(assoc opts …) on nil yields a map and (select-keys nil […]) yields {} — and
+on Gambit the value would always be empty because dht: targets never open and
+mem/file refuse trailing opts at parse. | Return :opts {} (or the folded
+pairs) for shape parity, so a future driver that reads :opts keys without a
+nil guard cannot silently mis-configure a Gambit swap.
+
+LOW | host/gambit/yin/jolt/gambit/yin.jolt:61-66 | dht: trailing options are
+accepted without validation — no :manifest startup-pin refusal and no
+unknown-option refusal, diverging from Decision 4 grammar rules 2-3
+(cli.cljc:625-629,604). Unreachable-in-effect on Gambit: every dht: open
+refuses at realpath inside :open before opts are read, and file-spec item 6
+specifies exactly this "pass :file/:dht specs through to :open" subset. The
+observable difference is only the message: (use-store "dht:/x" :garbage 1)
+prints the C4 refusal on Gambit vs "Unknown (use-store ...) option" on the
+JVM. | Acceptable as designed; optionally add the :manifest check for message
+parity if the owner wants the startup-pin hint on Gambit too.
+
+LOW | test/gambit/yin-repl-session.sh:31-32 | Post-swap host-module retention
+is asserted only for jolt.ffi; design verification-bar item 5 names both
+jolt.ffi and dao.jing.mem ("(use-store "mem") succeeds and retains jolt.ffi
+and dao.jing.mem"). dao.jing.mem is installed by the same :engine-inputs map
+and the same install-store path, so the gap is near-tautological, but nothing
+in the transcript proves it. | Add a post-swap (require 'dao.jing.mem) step
+(asserting 'dao.jing.mem) alongside the jolt.ffi probe.
+
+INFO | host/gambit/yin/jolt/gambit/yin.jolt:41-42 | (store/open spec) behind
+realpath is dead code on Gambit (realpath always refuses). If the C4 boundary
+were ever lifted, a :dht spec would then hit checked-spec's "Unknown
+:index-store-spec" refusal — safe, but a :file spec would reach
+dao.space.store's java.io.File path (the P1e pre-C4 failure). | None required
+now; if the overlay is ever qualified, re-visit this branch explicitly.
+
+INFO | test/gambit/yin-repl-session.sh | The Linux x86_64 leg of the Slice 3
+exit gate has not been run (implementer deferred it; macOS arm64 PASS
+recorded in 1795367167000). | Run make gambityinrepl on Linux x86_64 at the
+upgrade gate before advancing the jolt-toolchain.edn pin.
+
+## Verdict
+
+APPROVED
+```

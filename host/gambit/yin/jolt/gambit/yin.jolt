@@ -1,11 +1,18 @@
 (ns jolt.gambit.yin
   "The local-memory composition for the Gambit terminal."
   (:require [dao.jing :as jing]
+            [dao.posix.file :as posix-file]
             [jolt.ffi :as ffi]
             [yin.repl.main :as main]
             [yin.repl.store :as store]
             [yin.vm :as vm]
             [yin.vm.module :as module]))
+
+(def ^:private dht-scheme
+  {:prefix "dht:"
+   :label "dht:<dir>"
+   :type :dht
+   :parse (fn [dir] {:type :dht :dir dir})})
 
 (defn- activate-ffi [registry]
   (module/register-host-module
@@ -28,6 +35,12 @@
    :engine-inputs {:host-modules {'jolt.ffi activate-ffi
                                   'dao.jing.mem activate-store}}})
 
+(defn- open-gambit [spec opts]
+  (if (= :mem spec)
+    (open-memory spec opts)
+    (do (posix-file/realpath (:dir spec))
+        {:index-store (store/open spec)})))
+
 (defn- parse-store [arg]
   (let [spec (store/parse-arg arg)]
     (when-not (= spec :mem)
@@ -35,7 +48,26 @@
                       {:store spec})))
     spec))
 
+(defn- parse-swap-command [[target & options :as args]]
+  (let [supported "mem, file:<dir>, dht:<dir>"
+        target (cond
+                 (empty? args)
+                 (throw (ex-info (str "(use-store <store> ...) needs a store: " supported) {}))
+
+                 (= :mem target) "mem"
+                 (string? target) target
+                 :else
+                 (throw (ex-info (str "(use-store ...) expects a store: " supported) {})))
+        spec (store/parse-arg target [dht-scheme])
+        pairs (partition 2 options)]
+    (when-not (and (even? (count options)) (every? (comp keyword? first) pairs))
+      (throw (ex-info "(use-store ...) options must be keyword-value pairs" {})))
+    (when (and (seq pairs) (not= :dht (:type spec)))
+      (throw (ex-info "store options require dht:<dir>" {})))
+    {:spec spec :label target}))
+
 (defn -main [& args]
-  (main/main! args {:composition-spec? #{:mem}
+  (main/main! args {:composition-spec? (constantly true)
                     :parse-store-arg parse-store
-                    :open open-memory}))
+                    :parse-store-command parse-swap-command
+                    :open open-gambit}))

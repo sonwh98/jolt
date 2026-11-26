@@ -98,12 +98,16 @@
 ;; only reached for values no branch here claims, and a record is claimed.
 (define str-tostring-hook #f)
 (define (set-str-tostring-hook! f) (set! str-tostring-hook f))
+;; A collection's rendering: readable, unless the java layer replaces it with one
+;; that follows *print-dup* (io-streams.ss).
+(define str-coll-render (lambda (v) (jolt-pr-readable v)))
+(define (set-str-coll-render! f) (set! str-coll-render f))
 (define (jolt-str-one v)
   (let ((own (and str-tostring-hook (str-tostring-hook v))))
     (cond
       ((string? own) own)
       ((or (pvec? v) (pmap? v) (pset? v) (cseq? v) (empty-list-t? v) (jolt-lazyseq? v))
-       (jolt-pr-readable v))
+       (str-coll-render v))
       (else (jolt-str-render-one v)))))
 ;; A string renders as itself. jolt-str-one asks the toString hook first, but
 ;; that hook only ever answers for a record (protocols.ss), so a string can skip
@@ -168,7 +172,13 @@
              (string-append "Index " (number->string i) " out of bounds for length "
                             (number->string n))))
 
+;; An in-range fixnum index -- every (.charAt s i) a scanner makes -- reads
+;; before the jolt->idx coercion, which is an out-of-line call (7.6 -> ~3 ns).
 (define (jolt-char-at s i)
+  (if (and (fixnum? i) (fx>=? i 0) (fx<? i (string-length s)))
+      (string-ref s i)
+      (jolt-char-at-coerced s i)))
+(define (jolt-char-at-coerced s i)
   (let ((i (jolt->idx i)))
     (if (and (fixnum? i) (fx>=? i 0) (fx<? i (string-length s)))
         (string-ref s i)
@@ -245,10 +255,26 @@
     ((iface-method coll "reduce" 3) (jolt-into (make-pvec (vector)) coll))
     (else (make-pvec (list->vector (seq->list coll))))))
 
-(define (jolt-keyword . args)
-  (cond
-    ((= (length args) 1)
-     (let ((a (car args)))
+;; The one-argument string spelling splits on the FIRST slash, except at
+;; either end: this is that slash's index, or #f. A macro, and each caller
+;; applies its own interner, so (keyword "x") still calls keyword directly: a split procedure
+;; that took the interner cost every one-argument string keyword ~1.5ns, and
+;; binding it to a local ~0.5ns. Gambit expands syntax-rules without hygiene,
+;; so the operand is evaluated, once, before the macro binds a name of its own.
+(define-syntax keyword-split-index
+  (syntax-rules ()
+    ((_ str)
+     (let ((a str))
+       (let loop ((i 0))
+         (cond ((>= i (string-length a)) #f)
+               ((char=? (string-ref a i) #\/) (and (> i 0) (< i (- (string-length a) 1)) i))
+               (else (loop (+ i 1)))))))))
+
+;; Per-arity clauses: a rest list cost every (keyword ...) call an allocation
+;; and two length walks, which showed in symbol->keyword loops.
+(define jolt-keyword
+  (case-lambda
+    ((a)
        (cond
          ((jolt-nil? a) jolt-nil)
          ((keyword? a) a)
@@ -256,26 +282,24 @@
          ;; (keyword "x/y") => :x/y with ns "x" — destructure's {:keys [x/y]} builds
          ;; the key this way, so without the split the namespaced key never matches.
          ((string? a)
-          (let ((si (let loop ((i 0))
-                      (cond ((>= i (string-length a)) #f)
-                            ((char=? (string-ref a i) #\/) i)
-                            (else (loop (+ i 1)))))))
-            (if (and si (> si 0) (< si (- (string-length a) 1)))
+          (let ((si (keyword-split-index a)))
+            (if si
                 (keyword (substring a 0 si) (substring a (+ si 1) (string-length a)))
                 (keyword #f a))))
          ((jolt-symbol? a)
           (let ((ns (symbol-t-ns a)))
             (keyword (if (or (jolt-nil? ns) (not ns) (eq? ns '())) #f ns) (symbol-t-name a))))
-         (else jolt-nil))))
-    ((= (length args) 2)
-     (keyword (let ((ns (car args))) (if (jolt-nil? ns) #f ns))
-              (jolt-need-string (cadr args))))
-    (else (throw-jvm (quote ArityException) "Wrong number of args passed to: keyword"))))
+         (else jolt-nil)))
+    ((ns name)
+     (keyword (if (jolt-nil? ns) #f ns) (jolt-need-string name)))
+    (args (throw-jvm (quote ArityException) "Wrong number of args passed to: keyword"))))
 
-(define (jolt-symbol-new . args)
-  (cond
-    ((= (length args) 1)
-     (let ((a (car args)))
+;; A case-lambda, not (. args): symbol is called per token by tools.reader and
+;; rewrite-clj, and the rest list plus two length calls were most of a call.
+;; A string's symbol is built unpooled (values.ss jolt-symbol/unpooled).
+(define jolt-symbol-new
+  (case-lambda
+    ((a)
        (cond
          ((jolt-symbol? a) a)
          ;; (symbol "ns/name") splits the namespace at the FIRST "/" (JVM
@@ -289,27 +313,27 @@
             (if (string=? a "/")
                 (jolt-symbol #f "/")
                 (let loop ((i 1))
-                  (cond ((>= i slen) (jolt-symbol #f a))
+                  (cond ((fx>=? i slen) (jolt-symbol/unpooled #f a))
                         ((char=? (string-ref a i) #\/)
-                         (jolt-symbol (substring a 0 i) (substring a (+ i 1) slen)))
-                        (else (loop (+ i 1))))))))
+                         (jolt-symbol/unpooled (substring a 0 i) (substring a (fx+ i 1) slen)))
+                        (else (loop (fx+ i 1))))))))
          ((keyword? a) (jolt-symbol (keyword-t-ns a) (keyword-t-name a)))
          ;; (symbol a-var) -> the var's qualified symbol (clojure.spec.alpha/->sym).
          ((var-cell? a) (jolt-symbol (var-cell-ns a) (var-cell-name a)))
-         (else (throw-jvm (quote IllegalArgumentException) (string-append "no conversion to symbol: " (jolt-final-str a)))))))
+         (else (throw-jvm (quote IllegalArgumentException) (string-append "no conversion to symbol: " (jolt-final-str a))))))
     ;; (symbol ns name): a nil namespace is the no-ns sentinel #f (NOT jolt-nil),
     ;; so (symbol nil "x") equals (symbol "x") and the reader literal 'x — jolt=
     ;; compares ns with strict equal?, so a jolt-nil ns would differ from #f.
-    ((= (length args) 2)
-     (let ((ns (car args)) (nm (cadr args)))
+    ((ns nm)
+     (begin
        (unless (or (jolt-nil? ns) (string? ns))
          (throw-jvm (quote ClassCastException)
                     (string-append (jolt-final-str ns) " cannot be cast to java.lang.String")))
        (unless (string? nm)
          (throw-jvm (quote ClassCastException)
                     (string-append (jolt-final-str nm) " cannot be cast to java.lang.String")))
-       (jolt-symbol (if (jolt-nil? ns) #f ns) nm)))
-    (else (throw-jvm (quote ArityException) "Wrong number of args passed to: symbol"))))
+       (jolt-symbol/unpooled (if (jolt-nil? ns) #f ns) nm)))
+    (args (throw-jvm (quote ArityException) "Wrong number of args passed to: symbol"))))
 
 ;; gensym: per-process counter. The bump and the read are ONE step — a bare
 ;; (set! c (+ c 1)) followed by a read of c is a read-modify-write, and two
@@ -600,9 +624,13 @@
                     ((jsurr? x) (jsurr-unit x))
                     ((and (number? x) (exact? x)) (truncate x))
                     (else (jolt-cast-truncate-slow x)))))
-       (if (and (>= n -2147483648) (<= n 2147483647))
-           n
-           (jolt-int-overflow-throw))))))
+       ;; RT.intCast(Object) narrows through longCast first, so a value past
+       ;; the long range (a BigInt, a ratio truncating past it) is longCast's
+       ;; IllegalArgumentException naming the truncated value, not the overflow.
+       (cond ((and (>= n -2147483648) (<= n 2147483647)) n)
+             ((and (>= n -9223372036854775808) (<= n 9223372036854775807))
+              (jolt-int-overflow-throw))
+             (else (jolt-cast-range-throw "long" n)))))))
 (define (jolt-int-cast-prim x)
   (if (jfloat? x)
       (let ((d (jfloat-fl x)))

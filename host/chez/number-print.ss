@@ -1,5 +1,5 @@
-;; number-print.ss — how jolt prints a number: Double.toString's layout over the
-;; host's shortest round-trip digits. Portable (R7RS strings and arithmetic), so
+;; number-print.ss — how jolt prints a number, as Double.toString does. Portable
+;; (R7RS strings and arithmetic, the fx/bitwise spellings both hosts bind), so
 ;; Chez (rt.ss loads it) and Gambit (rt-core.ss includes it) print alike.
 
 ;; jolt has a numeric tower (exact integer / ratio / double, distinguished by
@@ -8,132 +8,273 @@
 
 ;; Double.toString layout: plain decimal when 1e-3 <= |x| < 1e7, otherwise
 ;; scientific d.dddE±x with one digit before the point; the mantissa always
-;; carries a decimal point ("1.0E100", "2.3E-4", "1.2345678E7"). The host's
-;; shortest-round-trip digits are kept and only the layout is rearranged, except
-;; for a subnormal (see flonum-two-digits).
-;; The two significant digits nearest the finite, positive double X, as
-;; (digits . point) in jolt-flonum->string's terms (value = 0.DIGITS x 10^POINT,
-;; trailing zero dropped), or #f when that decimal does not read back as X.
-(define (flonum-two-digits x)
-  (let* ((v (exact x))
-         ;; e: 10^e <= v < 10^(e+1)
-         (e (let loop ((e (exact (floor (/ (log x) (log 10.0))))))
-              (cond ((> (expt 10 e) v) (loop (- e 1)))
-                    ((<= (expt 10 (+ e 1)) v) (loop (+ e 1)))
-                    (else e))))
-         (n (round (/ v (expt 10 (- e 1)))))              ; 10..100
-         (point (if (= n 100) (+ e 2) (+ e 1)))
-         (n (if (= n 100) 10 n)))
-    (and (= (exact->inexact (* n (expt 10 (- point 2)))) x)
-         (let ((s (number->string n)))
-           (cons (if (char=? (string-ref s 1) #\0) (substring s 0 1) s) point)))))
+;; carries a decimal point ("1.0E100", "2.3E-4", "1.2345678E7").
+;;
+;; The digits are the JDK's own (JDK 19+, jdk.internal.math.DoubleToDecimal):
+;; Raffaello Giulietti's Schubfach, ported below. A double some decimal of at
+;; most 15 significant digits reads back as is answered first by a cheaper
+;; search in flonum arithmetic (flonum-fast-digits); both give the shortest
+;; decimal, the nearest of those, the even one on a tie, and at least two
+;; digits for a subnormal (4.9E-324). The host's number->string is not used:
+;; its digit search is arbitrary-precision and its ties go the other way.
 
-;; At 16 or 17 significant digits the double can lie exactly halfway between
-;; two decimals of that length that both read back as it, and the host and the
-;; JVM may break that tie differently: Chez rounds it up, Double.toString to the
-;; even digit (1338163280546708.25 is 1.3381632805467082E15 on the JVM,
-;; -650605845684.15625 is -6.506058456841562E11). Only an odd last digit D can
-;; be the wrong side of a tie, with the double exactly half a unit of the last
-;; place from D; that needs x * 2^(1-p) to be an odd integer, which is checked
-;; first in flonum arithmetic, so an ordinary long double costs a parity test
-;; and a few float operations, never the exact arithmetic. Answers the even neighbour's digits, or
-;; #f to keep the host's.
-(define (flonum-long-digits x digits point)
-  (let ((dlen (string-length digits)))
-    (and (odd? (char->integer (string-ref digits (fx- dlen 1))))   ; #\1 is 49
-         (let ((p (- point dlen)))                 ; the last digit's place
-           ;; x * 2^(1-p) is an odd integer: exact in flonum arithmetic, since
-           ;; scaling by a power of two only moves the exponent
-           (and (if (< p 0)
-                    (let ((y (* x (expt 2.0 (- 1 p)))))
-                      (and (= y (round y)) (not (= (* y 0.5) (round (* y 0.5))))))
-                    (and (> p 0) (integer? x)))
-                (let* ((v (exact x))
-                       (d (string->number digits))
-                       (unit (expt 10 p))
-                       (even (cond ((= v (* (- d 1/2) unit)) (- d 1))
-                                   ((= v (* (+ d 1/2) unit)) (+ d 1))
-                                   (else #f)))
-                       ;; and only when that neighbour reads back as x: a unit
-                       ;; wider than the double's spacing leaves the host's
-                       ;; digits the only ones that do
-                       (s (and even (= (exact->inexact (* even unit)) x)
-                               (number->string even))))
-                  (and s (fx=? (string-length s) dlen)
-                       (let loop ((k dlen))
-                         (if (and (fx>? k 1) (char=? (string-ref s (fx- k 1)) #\0))
-                             (loop (fx- k 1))
-                             (substring s 0 k))))))))))
 
+;; The fast path: a double that some decimal of at most 15 significant digits
+;; reads back as -- 1.1, 3.25, 0.001, what EDN and JSON mostly carry -- has its
+;; digits found in flonum arithmetic, about a third of Schubfach's time, which
+;; pays a 126-bit multiply.
+;;
+;; For k = 0, 1, ... take y = x * 10^k and n = round(y). With n < 2^53 and
+;; 10^k <= 10^22 both exact, the division is correctly rounded, so (= (/ n 10^k) x)
+;; is exactly "the decimal n x 10^-k reads back as x". The first k with a hit has
+;; the fewest fractional digits, so the fewest significant ones: the shortest
+;; decimal. No other integer can hit: below 10^15 a double's spacing scaled by
+;; 10^k is under 0.23, so a k-place decimal that reads back as x lies within 0.12
+;; of x * 10^k, and y is within 0.12 of that; one integer, round(y), is that close,
+;; so there is no nearest-or-even choice to make. Past 15 digits Schubfach answers.
+;; Answers (digits . point) for a positive X, or #f.
+(define flonum-pow10
+  (let ((v (make-vector 23 1.0)))
+    (do ((k 1 (fx+ k 1))) ((fx= k 23) v)
+      (vector-set! v k (fl* 10.0 (vector-ref v (fx- k 1)))))))
+;; The digit producers below answer (M . POINT): M the digits as a fixnum with
+;; its trailing zeros dropped, value = 0.M x 10^POINT. jolt-flonum->string lays
+;; M out straight into its result (flonum-layout/fx); the string forms, (DIGITS
+;; . POINT), are built from these for the callers that want text (#1713).
+(define (fx-digits->string m)
+  (let* ((len (fx-decimal-length m)) (s (make-string len #\0)))
+    (fx-fill-digits! s m len)
+    s))
+(define (fx-digits-pair->strings d) (cons (fx-digits->string (car d)) (cdr d)))
+;; (M . POINT) for the decimal N x 10^-K, N a positive fixnum: M is N with its
+;; trailing zeros dropped, worked out by hand because number->string of a fixnum
+;; cost ~0.2 us, most of a short double's print
+(define (flonum-fixnum-digits/fx n k)
+  ;; fx-digits.ss's divide-free helpers: each fxquotient here was a dependent
+  ;; hardware divide, ~110 ns for the "15" of 1.5
+  (let strip ((m n) (z 0))
+    (let ((q (fx-quot10 m)))
+      (if (fx=? m (fx* q 10))
+          (strip q (fx+ z 1))
+          (cons m (fx- (fx+ (fx-decimal-length m) z) k))))))
+(define (flonum-fast-digits/fx x)
+  (and (fl>= x 1e-22) (fl< x 1e15)
+       (let loop ((k 0))
+         (and (fx< k 23)
+              (let* ((p (vector-ref flonum-pow10 k))
+                     (y (fl* x p)))
+                (and (fl< y 1e15)
+                     (let ((n (flround y)))
+                       (if (and (fl>= n 1.0) (fl= (fl/ n p) x))
+                           (flonum-fixnum-digits/fx (flonum->fixnum n) k)
+                           (loop (fx+ k 1))))))))))
+(define (flonum-fast-digits x) (let ((d (flonum-fast-digits/fx x))) (and d (fx-digits-pair->strings d))))
+
+;; --- Schubfach --------------------------------------------------------------
+;; DoubleToDecimal.toDecimal, ported. The paper: R. Giulietti, "The Schubfach way
+;; to render doubles" (2020). Names follow the JDK source; vb, vbl and vbr are the
+;; double and its rounding interval's ends scaled by 10^-k, with a sticky low bit.
+;; g(k) is floor(10^-k / 2^r) + 1 for the r putting it in [2^125, 2^126); the
+;; table is the JDK's MathUtils.g, computed on first use rather than spelled out
+;; (617 entries; the first is checked by make flonumprint against the JDK's).
+;; The JDK splits g in two 63-bit halves and multiplies in longs; here g is one
+;; exact integer, and rop takes the product whole: its floor over 2^127 with bits
+;; 64..126 as the sticky bit is exactly what the JDK's rop computes.
+;; fixnum arithmetic: E is a binary exponent (|e| <= 1074) or a decimal one
+;; (|e| <= 324), so every product stays below 2^50 (#1713)
+(define (sf-flog10pow2 e) (fxsra (fx* e 661971961083) 41))
+(define (sf-flog10-3q-pow2 e) (fxsra (fx+ (fx* e 661971961083) -274743187321) 41))
+(define (sf-flog2pow10 e) (fxsra (fx* e 913124641741) 38))
+(define sf-g-table #f)
+(define (sf-g k)
+  (let ((v (or sf-g-table
+               (let ((v (make-vector 617)))
+                 (do ((k -324 (+ k 1))) ((> k 292))
+                   (let ((r (- (sf-flog2pow10 (- k)) 125)))
+                     (vector-set! v (+ k 324) (+ 1 (floor (/ (expt 10 (- k)) (expt 2 r)))))))
+                 ;; filling is idempotent: a racing first use builds an equal table
+                 (set! sf-g-table v)
+                 v))))
+    (vector-ref v (+ k 324))))
+(define (sf-rop p)
+  (let ((v (bitwise-arithmetic-shift-right p 127)))
+    (if (eqv? 0 (bitwise-bit-field p 64 127)) v (fxior v 1))))
+;; The same rop over g's 28-bit limbs and a multiplier CP below 2^59, in
+;; fixnums (#1713). The JDK takes g as two 63-bit halves and multiplies in longs
+;; with multiplyHigh; a Chez fixnum is 61 bits, so the product is formed limb by
+;; limb instead: every limb product is below 2^56 and every column sum below
+;; 2^58. Bits 127 and up are the value, bits 64..126 the sticky bit, exactly as
+;; sf-rop reads the bignum product (checked against it for every k and five
+;; million multipliers). The bignum multiply, shifts and bit-field read cost
+;; ~100 ns a rop, three per double.
+(define sf-m28 #xFFFFFFF)
+(define (sf-rop/fx gl cp)
+  (let* ((c0 (sa-ufxand cp sf-m28)) (c1 (sa-ufxand (sa-ufxsra cp 28) sf-m28)) (c2 (sa-ufxsra cp 56))
+         (g0 (sa-uvector-ref gl 0)) (g1 (sa-uvector-ref gl 1)) (g2 (sa-uvector-ref gl 2))
+         (g3 (sa-uvector-ref gl 3)) (g4 (sa-uvector-ref gl 4))
+         (t1 (sa-ufx+ (sa-ufxsra (sa-ufx* g0 c0) 28) (sa-ufx+ (sa-ufx* g1 c0) (sa-ufx* g0 c1))))
+         (t2 (sa-ufx+ (sa-ufxsra t1 28) (sa-ufx+ (sa-ufx* g2 c0) (sa-ufx+ (sa-ufx* g1 c1) (sa-ufx* g0 c2)))))
+         (t3 (sa-ufx+ (sa-ufxsra t2 28) (sa-ufx+ (sa-ufx* g3 c0) (sa-ufx+ (sa-ufx* g2 c1) (sa-ufx* g1 c2)))))
+         (t4 (sa-ufx+ (sa-ufxsra t3 28) (sa-ufx+ (sa-ufx* g4 c0) (sa-ufx+ (sa-ufx* g3 c1) (sa-ufx* g2 c2)))))
+         (t5 (sa-ufx+ (sa-ufxsra t4 28) (sa-ufx+ (sa-ufx* g4 c1) (sa-ufx* g3 c2))))
+         (t6 (sa-ufx+ (sa-ufxsra t5 28) (sa-ufx* g4 c2)))
+         (v (sa-ufxior (sa-ufxsra (sa-ufxand t4 sf-m28) 15)
+                       (sa-ufxior (sa-ufxsll (sa-ufxand t5 sf-m28) 13) (sa-ufxsll t6 41))))
+         (sticky (sa-ufxior (sa-ufxsra (sa-ufxand t2 sf-m28) 8)
+                            (sa-ufxior (sa-ufxand t3 sf-m28) (sa-ufxand t4 #x7FFF)))))
+    (if (sa-ufx=? sticky 0) v (sa-ufxior v 1))))
+;; g(k) as its five 28-bit limbs, low first, built with the g table
+(define sf-gl-table #f)
+(define (sf-gl k)
+  (let ((v (or sf-gl-table
+               (let ((v (make-vector 617)))
+                 (do ((k -324 (+ k 1))) ((> k 292))
+                   (let ((g (sf-g k)))
+                     (vector-set! v (+ k 324)
+                                  (vector (bitwise-and g sf-m28)
+                                          (bitwise-and (bitwise-arithmetic-shift-right g 28) sf-m28)
+                                          (bitwise-and (bitwise-arithmetic-shift-right g 56) sf-m28)
+                                          (bitwise-and (bitwise-arithmetic-shift-right g 84) sf-m28)
+                                          (bitwise-arithmetic-shift-right g 112)))))
+                 (set! sf-gl-table v)
+                 v))))
+    (vector-ref v (+ k 324))))
+;; (digits . point) of F x 10^E, F a positive fixnum: F's digits with its
+;; trailing zeros dropped, two per step (values.ss fx-fill-digits!)
+(define (sf-to-digits/fx f e)
+  (let strip ((m f) (z 0))
+    (let ((q (fx-quot10 m)))
+      (if (fx=? m (fx* q 10))
+          (strip q (fx+ z 1))
+          (cons m (+ (fx-decimal-length m) z e))))))
+(define (sf-to-decimal q c dk)
+  (let* ((out (fxand c 1))
+         (cb (fxsll c 2))
+         (regular (or (not (fx=? c 4503599627370496)) (fx=? q -1074)))   ; C_MIN = 2^52, Q_MIN
+         (k (if regular (sf-flog10pow2 q) (sf-flog10-3q-pow2 q)))
+         (h (+ q (sf-flog2pow10 (- k)) 2))
+         ;; the multipliers of cb and its interval's ends, cbl = cb - 2 (- 1
+         ;; at C_MIN) and cbr = cb + 2, shifted by h; below 2^59 for every
+         ;; double, which sf-rop/fx needs, with the bignum rop kept for any other
+         (cpr (fxsll (fx+ cb 2) h))
+         (cp (fxsll cb h))
+         (cpl (fxsll (fx- cb (if regular 2 1)) h))
+         (fixnum-rop? (fx<? cpr 576460752303423488))   ; 2^59
+         (gl (and fixnum-rop? (sf-gl k)))
+         (vb (if gl (sf-rop/fx gl cp) (sf-rop (* (sf-g k) cp))))
+         (vbl (if gl (sf-rop/fx gl cpl) (sf-rop (* (sf-g k) cpl))))
+         (vbr (if gl (sf-rop/fx gl cpr) (sf-rop (* (sf-g k) cpr))))
+         (s (fxsra vb 2)))
+    (or (and (fx>=? s 100)
+             (let* ((sp10 (fx* 10 (fxquotient s 10)))
+                    (tp10 (fx+ sp10 10))
+                    (upin (fx<=? (fx+ vbl out) (fxsll sp10 2)))
+                    (wpin (fx<=? (fx+ (fxsll tp10 2) out) vbr)))
+               (and (not (eq? upin wpin)) (sf-to-digits/fx (if upin sp10 tp10) k))))
+        (let* ((t (fx+ s 1))
+               (uin (fx<=? (fx+ vbl out) (fxsll s 2)))
+               (win (fx<=? (fx+ (fxsll t 2) out) vbr)))
+          (if (not (eq? uin win))
+              (sf-to-digits/fx (if uin s t) (+ k dk))
+              (let ((cmp (fx- vb (fxsll (fx+ s t) 1))))
+                (sf-to-digits/fx (if (or (fx<? cmp 0) (and (fx=? cmp 0) (fx=? 0 (fxand s 1)))) s t)
+                             (+ k dk))))))))
+;; (digits . point) for a finite, nonzero double X, from its bit pattern
+(define (flonum-schubfach-digits/fx x)
+  (let* ((hi (sa-flonum-hi32 x))
+         (bq (fxand (fxsra hi 20) #x7ff))
+         (t (fxior (fxsll (fxand hi #xfffff) 32) (sa-flonum-lo32 x))))
+    (if (fx>? bq 0)
+        (let ((mq (fx- 1075 bq)) (c (fxior 4503599627370496 t)))
+          ;; an integer below 2^53 is its own digits (the JDK's fast path)
+          (or (and (fx>? mq 0) (fx<? mq 53)
+                   (let ((f (fxsra c mq)))
+                     (and (fx=? (fxsll f mq) c) (sf-to-digits/fx f 0))))
+              (sf-to-decimal (fx- 0 mq) c 0)))
+        ;; subnormal: below C_TINY the JDK scales by 10 for a second digit
+        (if (fx<? t 3) (sf-to-decimal -1074 (fx* 10 t) -1) (sf-to-decimal -1074 t 0)))))
+(define (flonum-schubfach-digits x) (fx-digits-pair->strings (flonum-schubfach-digits/fx x)))
+
+;; Double.toString's layout of the decimal 0.DIGITS x 10^POINT
+;; Double.toString's layout of (digits . point). The plain decimal forms
+;; (1e-3 <= |x| < 1e7) are written straight into one string of their final
+;; length (#1713): building "1.5" out of two substrings and two appends was
+;; ~70 ns of a (str 1.5).
+(define (flonum-copy-digits! s at digits from to)
+  (do ((i from (fx+ i 1)) (j at (fx+ j 1))) ((fx=? i to)) (string-set! s j (string-ref digits i))))
+(define (flonum-layout neg? digits point)
+  (let ((dlen (string-length digits)) (sign (if neg? 1 0)))
+    (cond
+      ((string=? digits "0") (if neg? "-0.0" "0.0"))
+      ((and (fixnum? point) (fx>=? point -2) (fx<=? point 7))
+       (let ((s (cond
+                  ((fx<=? point 0)              ; 0.00ddd
+                   (let ((s (make-string (fx+ sign 2 (fx- 0 point) dlen) #\0)))
+                     (string-set! s (fx+ sign 1) #\.)
+                     (flonum-copy-digits! s (fx+ sign 2 (fx- 0 point)) digits 0 dlen)
+                     s))
+                  ((fx>=? point dlen)           ; ddd00.0
+                   (let ((s (make-string (fx+ sign point 2) #\0)))
+                     (flonum-copy-digits! s sign digits 0 dlen)
+                     (string-set! s (fx+ sign point) #\.)
+                     s))
+                  (else                         ; dd.ddd
+                   (let ((s (make-string (fx+ sign dlen 1) #\.)))
+                     (flonum-copy-digits! s sign digits 0 point)
+                     (flonum-copy-digits! s (fx+ sign point 1) digits point dlen)
+                     s)))))
+         (when neg? (string-set! s 0 #\-))
+         s))
+      (else
+       (let ((res (string-append (substring digits 0 1) "."
+                                 (if (fx>? dlen 1) (substring digits 1 dlen) "0")
+                                 "E" (number->string (- point 1)))))
+         (if neg? (string-append "-" res) res))))))
+
+;; Double.toString's digits of a finite double X's magnitude, as (digits .
+;; point): value = 0.DIGITS x 10^POINT, no trailing zero, ("0" . 1) for zero.
+;; java.util.Formatter rounds these same digits (FormattedFPDecimal, JDK 21),
+;; so natives-format.ss starts from them too.
+(define (jolt-flonum-digits x)
+  (if (fl= x 0.0)
+      (cons "0" 1)
+      (or (flonum-fast-digits (flabs x)) (flonum-schubfach-digits (flabs x)))))
 (define (jolt-flonum->string x)
-  (let* ((s (number->string x))
-         (neg? (char=? (string-ref s 0) #\-))
-         (body0 (if neg? (substring s 1 (string-length s)) s))
-         ;; Chez appends a "|prec" suffix to subnormal strings (e.g. "5e-324|1").
-         ;; Strip it before the exponent substring is parsed, else string->number
-         ;; misreads "-324|1" as a precision-qualified flonum (-256.0) and corrupts
-         ;; the value.
-         (bar (let loop ((i 0))
-                (cond ((fx>=? i (string-length body0)) #f)
-                      ((char=? (string-ref body0 i) #\|) i)
-                      (else (loop (fx+ i 1))))))
-         (body (if bar (substring body0 0 bar) body0))
-         (blen (string-length body))
-         (epos (let loop ((i 0))
-                 (cond ((fx>=? i blen) #f)
-                       ((memv (string-ref body i) '(#\e #\E)) i)
-                       (else (loop (fx+ i 1))))))
-         (mant (if epos (substring body 0 epos) body))
-         (eexp (if epos (string->number (substring body (fx+ epos 1) blen)) 0))
-         (mlen (string-length mant))
-         (dot (let loop ((i 0))
-                (cond ((fx>=? i mlen) #f)
-                      ((char=? (string-ref mant i) #\.) i)
-                      (else (loop (fx+ i 1))))))
-         (digits (if dot
-                     (string-append (substring mant 0 dot) (substring mant (fx+ dot 1) mlen))
-                     mant))
-         (point (+ (if dot dot mlen) eexp)))
-    ;; normalize: drop leading zeros (adjusting the point), then trailing zeros
-    (let* ((dlen0 (string-length digits))
-           (lead (let loop ((i 0))
-                   (if (and (fx<? i (fx- dlen0 1)) (char=? (string-ref digits i) #\0))
-                       (loop (fx+ i 1)) i)))
-           (digits (substring digits lead dlen0))
-           (point (- point lead))
-           (dlen (let loop ((i (string-length digits)))
-                   (if (and (fx>? i 1) (char=? (string-ref digits (fx- i 1)) #\0))
-                       (loop (fx- i 1)) i)))
-           (digits (substring digits 0 dlen))
-           (digits (or (and (fx>=? dlen 16) (flonum-long-digits (flabs x) digits point)) digits))
-           (dlen (string-length digits))
-           ;; Double.toString never prints fewer than two significant digits, and
-           ;; it picks the two-digit decimal NEAREST the double rather than padding
-           ;; the shortest one with a 0. For a normal double that is the same
-           ;; thing; a subnormal has so few bits that it is not: MIN_VALUE is
-           ;; 4.94...E-324, shortest "5" but printed 4.9E-324, and twice it is
-           ;; 9.88...E-324, shortest "1" (1.0E-323) but printed 9.9E-324.
-           (two (and (fx=? dlen 1) (not (string=? digits "0"))
-                     (fl< (flabs x) 2.2250738585072014e-308)   ; subnormal
-                     (flonum-two-digits (flabs x))))
-           (digits (if two (car two) digits))
-           (point (if two (cdr two) point))
-           (dlen (string-length digits))
-           (res (cond
-                  ((string=? digits "0") "0.0")
-                  ((and (>= point -2) (<= point 7))   ; 1e-3 <= |x| < 1e7
-                   (cond
-                     ((<= point 0)
-                      (string-append "0." (make-string (- point) #\0) digits))
-                     ((>= point dlen)
-                      (string-append digits (make-string (- point dlen) #\0) ".0"))
-                     (else (string-append (substring digits 0 point) "."
-                                          (substring digits point dlen)))))
-                  (else
-                   (string-append (substring digits 0 1) "."
-                                  (if (fx>? dlen 1) (substring digits 1 dlen) "0")
-                                  "E" (number->string (- point 1)))))))
-      (if neg? (string-append "-" res) res))))
+  (cond ((fl= x 0.0) (if (fx=? 0 (sa-flonum-hi32 x)) "0.0" "-0.0"))
+        ;; NaN and the infinities print as jolt-num->string decides, before here
+        ((not (fl= (fl- x x) 0.0)) (number->string x))
+        (else
+         (let* ((ax (flabs x))
+                (d (or (flonum-fast-digits/fx ax) (flonum-schubfach-digits/fx ax))))
+           (flonum-layout/fx (fl<? x 0.0) (car d) (cdr d))))))
+;; flonum-layout's plain decimal forms with the digits M (a fixnum, no trailing
+;; zero) written once, into the result itself: the digit string and the copy
+;; out of it were a third of a 17-digit double's print. The scientific form,
+;; rare, goes through the string layout.
+(define (flonum-layout/fx neg? m point)
+  (let ((dlen (fx-decimal-length m)) (sign (if neg? 1 0)))
+    (if (and (fixnum? point) (fx>=? point -2) (fx<=? point 7))
+        (let ((s (cond
+                   ((fx<=? point 0)              ; 0.00ddd
+                    (let* ((len (fx+ sign 2 (fx- 0 point) dlen)) (s (make-string len #\0)))
+                      (string-set! s (fx+ sign 1) #\.)
+                      (fx-fill-digits! s m len)
+                      s))
+                   ((fx>=? point dlen)           ; ddd00.0
+                    (let ((s (make-string (fx+ sign point 2) #\0)))
+                      (fx-fill-digits! s m (fx+ sign dlen))
+                      (string-set! s (fx+ sign point) #\.)
+                      s))
+                   (else                         ; dd.ddd: the digits, then the
+                    (let* ((len (fx+ sign dlen 1)) (s (make-string len #\0)))
+                      (fx-fill-digits! s m len)   ; integer part moved left one
+                      (do ((i sign (fx+ i 1))) ((fx=? i (fx+ sign point)))
+                        (string-set! s i (string-ref s (fx+ i 1))))
+                      (string-set! s (fx+ sign point) #\.)
+                      s)))))
+          (when neg? (string-set! s 0 #\-))
+          s)
+        (flonum-layout neg? (fx-digits->string m) point))))
 
 (define (jolt-num->string x)
   (cond

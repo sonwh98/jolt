@@ -165,6 +165,25 @@
               obj)))))
 (def-var! "jolt.host" "jolt-class-for" jolt-class-for)
 
+;; The class of an instance built before its type was REDEFINED (records.ss
+;; jrdesc-rtag): the old class, which on the JVM is another Class object than the
+;; new definition's although it has the same name. One token per retired
+;; descriptor, never interned by name -- the name now belongs to the new class --
+;; and marked in its state so = tells it from every other token of that name.
+(define retired-class-tokens (make-weak-eq-hashtable))
+(define (jolt-retired-class-token d)
+  (jolt-with-mutex hsc-mu
+    (or (hashtable-ref retired-class-tokens d #f)
+        (let ((o (make-jhost "class" (vector (jrdesc-tag d) 'retired))))
+          (hashtable-set! retired-class-tokens d o)
+          o))))
+(define (jclass-retired? x)
+  (let ((st (jhost-state x)))
+    (and (fx>? (vector-length st) 1) (eq? (vector-ref st 1) 'retired))))
+;; extends? asks it of its type argument: such a class is matched by identity
+;; alone, its name being the new class's
+(def-var! "jolt.host" "retired-class?" (lambda (x) (and (jclass? x) (jclass-retired? x))))
+
 ;; Per-site cache for a class-name symbol: the token jolt-class-for answered,
 ;; with the drop epoch it answered in. The hook below bumps the epoch whenever it
 ;; drops a token, so the cached one is current while the epochs match. The epoch
@@ -195,7 +214,7 @@
     (let ((h (hashtable-ref class-statics-tbl cls #f)))
       (when h
         (let ((v (hashtable-ref h "TYPE" #f)))
-          (when (string? v) (class-statics-member-set! h "TYPE" (jolt-class-for v)))))))
+          (when (string? v) (class-statics-replace! cls (list (cons "TYPE" (jolt-class-for v)))))))))
   '("Long" "Integer" "Short" "Byte" "Character" "Boolean" "Double" "Float" "Void"))
 ;; A deftype registered AFTER its JVM spelling was interned — an :import or a
 ;; class symbol compiled ahead of the defining namespace, which the JVM rejects
@@ -223,8 +242,10 @@
 ;; strings are no longer = to a jclass — class-key survives for internal
 ;; dispatch boundaries only (multimethod tables, catch dispatch, isa?).
 (register-eq-arm! (lambda (a b) (and (jclass? a) (jclass? b)))
-                  (lambda (a b) (let ((ka (class-key a)) (kb (class-key b)))
-                                  (and ka kb (string=? ka kb) #t))))
+                  (lambda (a b) (if (or (jclass-retired? a) (jclass-retired? b))
+                                    (eq? a b)
+                                    (let ((ka (class-key a)) (kb (class-key b)))
+                                      (and ka kb (string=? ka kb) #t)))))
 ;; A deftype/defrecord TYPE TOKEN and (class inst) are the same Class object on
 ;; the JVM — identical?, not merely =. jolt spells them differently (the token is
 ;; the ctor procedure, so it stays callable) and they compared unequal, so
@@ -237,9 +258,16 @@
 (register-eq-arm! (lambda (a b)
                     (or (and (jclass? a) (procedure? b) (deftype-ctor-tag b) #t)
                         (and (jclass? b) (procedure? a) (deftype-ctor-tag a) #t)))
-                  (lambda (a b) (let ((ka (class-key a)) (kb (class-key b)))
-                                  (and ka kb (string=? ka kb) #t))))
-(register-hash-arm! jclass? (lambda (x) (jolt-hash (jclass-name x))))
+                  ;; a redefined type's old class is not its current type token
+                  (lambda (a b) (and (not (and (jclass? a) (jclass-retired? a)))
+                                     (not (and (jclass? b) (jclass-retired? b)))
+                                     (let ((ka (class-key a)) (kb (class-key b)))
+                                       (and ka kb (string=? ka kb) #t)))))
+;; A retired token is = only to itself, so it need not hash with its name; it
+;; hashes apart from it, as the JVM's two Class objects do.
+(register-hash-arm! jclass? (lambda (x) (if (jclass-retired? x)
+                                            (jolt-hash (string-append (jclass-name x) retired-tag-marker))
+                                            (jolt-hash (jclass-name x)))))
 ;; The nine primitive classes. jolt names them exactly as the JVM does — the
 ;; class `long` is spelled "long" — and they are in no class graph row, so this
 ;; literal set is what tells them from a reference class.
@@ -289,9 +317,21 @@
 (register-pr-arm! jclass? jclass-print-name)
 ;; print/println of a Class prints the bare name (getName), like pr — the JVM's
 ;; print-method for Class ignores *print-readably*. Only str is "class <name>".
+;; A deftype or defrecord name evaluates to its constructor token, which stands
+;; for the class (= to it, same hash, (class SomeType) is Class), so it prints
+;; as the class does rather than as an opaque fn.
+(define (deftype-token-class x)
+  (let ((tag (and (procedure? x) (deftype-ctor-tag x))))
+    (and tag (jolt-class-for tag))))
+(define (deftype-token? x) (and (deftype-token-class x) #t))
+(register-str-render! deftype-token? (lambda (x) (jclass-tostring (deftype-token-class x))))
+(register-pr-arm! deftype-token? (lambda (x) (jclass-print-name (deftype-token-class x))))
 (let ((prev (var-deref "clojure.core" "__print1")))
   (def-var! "clojure.core" "__print1"
-    (lambda (x) (if (jclass? x) (jclass-print-name x) (jolt-invoke1 prev x)))))
+    (lambda (x)
+      (cond ((jclass? x) (jclass-print-name x))
+            ((deftype-token-class x) => jclass-print-name)
+            (else (jolt-invoke1 prev x))))))
 (register-host-methods! "class"
   (list (cons "getName" (lambda (self) (jclass-jvm-name self)))
         (cons "getCanonicalName" (lambda (self) (hsc-canonical-name (jclass-jvm-name self))))
@@ -376,21 +416,31 @@
 
 ;; JVM class assignability for isa? (20-coll): true when child and parent are both
 ;; class values and parent is child, java.lang.Object (every class's root), or a
-;; modeled ancestor of child (full name or last segment). nil for non-class args, so
-;; isa? falls through to its hierarchy/vector logic.
+;; modeled ancestor of child. A last-segment match counts only when one side is a
+;; simple name, as in jch-isa?: java.lang.Process is not babashka.process.Process.
+;; nil for non-class args, so isa? falls through to its hierarchy/vector logic.
 (def-var! "jolt.host" "class-isa?"
   (lambda (child parent)
     (let ((cc (class-key child)) (pp (class-key parent)))
-      (if (and cc pp)
-          (let ((pseg (hsc-last-segment pp)))
+      (cond
+        ;; a redefined type's old class (jolt-retired-class-token) is neither the
+        ;; new class nor below it; its supers still answer
+        ((and (jclass? parent) (jclass-retired? parent)) jolt-nil)
+        ((and cc pp (jclass? child) (jclass-retired? child)
+              (or (string=? cc pp) (string=? (hsc-last-segment cc) (hsc-last-segment pp))))
+         jolt-nil)
+        ((and cc pp)
+          (let ((pseg (hsc-last-segment pp))
+                (pdot? (memv #\. (string->list pp))))
             (if (let loop ((names (cons cc (jch-closure cc))))
                   (cond ((string=? pp "java.lang.Object") #t)
                         ((null? names) #f)
                         ((or (string=? pp (car names))
-                             (string=? pseg (hsc-last-segment (car names)))) #t)
+                             (and (not (and pdot? (memv #\. (string->list (car names)))))
+                                  (string=? pseg (hsc-last-segment (car names))))) #t)
                         (else (loop (cdr names)))))
-                #t jolt-nil))
-          jolt-nil))))
+                #t jolt-nil)))
+        (else jolt-nil)))))
 
 ;; is NAME a class the host models (registered in the class graph, or a fn class)?
 ;; Object itself is modeled.

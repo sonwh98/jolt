@@ -671,6 +671,9 @@
 (jch-register-supers! "clojure.lang.IDrop" '())
 (jch-mark-interface! "clojure.lang.IDrop")
 (jch-register-supers! "clojure.lang.PersistentQueue" '("clojure.lang.IPersistentList" "clojure.lang.IPersistentCollection" "java.util.Collection"))
+;; the reader's two literal wrappers: lookups on :tag/:form and :form/:splicing?
+(jch-register-supers! "clojure.lang.TaggedLiteral" '("clojure.lang.ILookup"))
+(jch-register-supers! "clojure.lang.ReaderConditional" '("clojure.lang.ILookup"))
 ;; scalars / named / callable
 (jch-register-supers! "clojure.lang.Keyword" '("clojure.lang.IFn" "clojure.lang.Named" "java.lang.Comparable" "java.io.Serializable"))
 (jch-register-supers! "clojure.lang.Symbol" '("clojure.lang.IObj" "clojure.lang.IFn" "clojure.lang.Named" "java.lang.Comparable" "java.io.Serializable"))
@@ -806,6 +809,7 @@
 (jch-register-supers! "java.io.FileNotFoundException" '("java.io.IOException"))
 (jch-register-supers! "java.io.UnsupportedEncodingException" '("java.io.IOException"))
 (jch-register-supers! "java.io.EOFException" '("java.io.IOException"))
+(jch-register-supers! "java.io.UTFDataFormatException" '("java.io.IOException"))
 ;; java.util.zip's exception classes (JDK 21 ZipException.java,
 ;; DataFormatException.java). Here, before host-static-classes.ss, so its
 ;; Throwable sweep gives them constructors.
@@ -817,6 +821,7 @@
 (jch-register-supers! "java.nio.file.AccessDeniedException" '("java.nio.file.FileSystemException"))
 (jch-register-supers! "java.nio.file.NotDirectoryException" '("java.nio.file.FileSystemException"))
 (jch-register-supers! "java.nio.file.NotLinkException" '("java.nio.file.FileSystemException"))
+(jch-register-supers! "java.nio.file.FileSystemLoopException" '("java.nio.file.FileSystemException"))
 (jch-register-supers! "java.nio.file.DirectoryNotEmptyException" '("java.nio.file.FileSystemException"))
 (jch-register-supers! "java.nio.file.AtomicMoveNotSupportedException" '("java.nio.file.FileSystemException"))
 (jch-register-supers! "java.nio.file.FileSystemNotFoundException" '("java.lang.RuntimeException"))
@@ -828,9 +833,37 @@
 (jch-register-supers! "java.nio.file.ClosedWatchServiceException" '("java.lang.IllegalStateException"))
 (jch-register-supers! "java.nio.file.ReadOnlyFileSystemException" '("java.lang.UnsupportedOperationException"))
 (jch-register-supers! "java.nio.channels.ClosedChannelException" '("java.io.IOException"))
-(jch-register-supers! "java.nio.channels.SeekableByteChannel" '("java.nio.channels.Channel"))
-(jch-mark-interface! "java.nio.channels.SeekableByteChannel")
-(jch-register-supers! "java.nio.channels.FileChannel" '("java.nio.channels.SeekableByteChannel"))
+;; The channel interfaces and FileChannel's place among them, as java.base
+;; declares them; the channel FileChannel/open answers is the JDK's
+;; sun.nio.ch.FileChannelImpl.
+(jch-register-supers! "java.nio.channels.Channel" '("java.io.Closeable"))
+(jch-register-supers! "java.nio.channels.ReadableByteChannel" '("java.nio.channels.Channel"))
+(jch-register-supers! "java.nio.channels.WritableByteChannel" '("java.nio.channels.Channel"))
+(jch-register-supers! "java.nio.channels.ByteChannel" '("java.nio.channels.ReadableByteChannel" "java.nio.channels.WritableByteChannel"))
+(jch-register-supers! "java.nio.channels.SeekableByteChannel" '("java.nio.channels.ByteChannel"))
+(jch-register-supers! "java.nio.channels.GatheringByteChannel" '("java.nio.channels.WritableByteChannel"))
+(jch-register-supers! "java.nio.channels.ScatteringByteChannel" '("java.nio.channels.ReadableByteChannel"))
+(jch-register-supers! "java.nio.channels.InterruptibleChannel" '("java.nio.channels.Channel"))
+(for-each jch-mark-interface!
+          '("java.nio.channels.Channel" "java.nio.channels.ReadableByteChannel"
+            "java.nio.channels.WritableByteChannel" "java.nio.channels.ByteChannel"
+            "java.nio.channels.SeekableByteChannel" "java.nio.channels.GatheringByteChannel"
+            "java.nio.channels.ScatteringByteChannel" "java.nio.channels.InterruptibleChannel"))
+(jch-register-supers! "java.nio.channels.spi.AbstractInterruptibleChannel"
+                      '("java.nio.channels.Channel" "java.nio.channels.InterruptibleChannel"))
+(jch-register-supers! "java.nio.channels.FileChannel"
+                      '("java.nio.channels.spi.AbstractInterruptibleChannel" "java.nio.channels.SeekableByteChannel"
+                        "java.nio.channels.GatheringByteChannel" "java.nio.channels.ScatteringByteChannel"))
+(jch-register-supers! "sun.nio.ch.FileChannelImpl" '("java.nio.channels.FileChannel"))
+;; FileChannel.lock/tryLock (nio-file.ss): the lock is the JDK's FileLockImpl,
+;; and the channel and lock failures sit where the JDK puts them.
+(jch-register-supers! "java.nio.channels.FileLock" '("java.lang.AutoCloseable"))
+(jch-register-supers! "sun.nio.ch.FileLockImpl" '("java.nio.channels.FileLock"))
+(jch-register-supers! "java.nio.channels.OverlappingFileLockException" '("java.lang.IllegalStateException"))
+(jch-register-supers! "java.nio.channels.NonReadableChannelException" '("java.lang.IllegalStateException"))
+(jch-register-supers! "java.nio.channels.NonWritableChannelException" '("java.lang.IllegalStateException"))
+(jch-register-supers! "java.nio.channels.AsynchronousCloseException" '("java.nio.channels.ClosedChannelException"))
+(jch-register-supers! "java.nio.channels.FileLockInterruptionException" '("java.io.IOException"))
 (jch-register-supers! "java.net.JarURLConnection" '("java.net.URLConnection"))
 (jch-register-supers! "java.net.UnknownHostException" '("java.io.IOException"))
 (jch-register-supers! "java.net.SocketException" '("java.io.IOException"))
@@ -948,12 +981,14 @@
 (jch-register-supers! "java.io.PipedInputStream" '("java.io.InputStream"))
 (jch-register-supers! "java.io.FilterInputStream" '("java.io.InputStream"))
 (jch-register-supers! "java.io.BufferedInputStream" '("java.io.FilterInputStream"))
+(jch-register-supers! "java.io.DataInputStream" '("java.io.FilterInputStream" "java.io.DataInput"))
 (jch-register-supers! "java.io.PushbackInputStream" '("java.io.FilterInputStream"))
 (jch-register-supers! "java.io.SequenceInputStream" '("java.io.InputStream"))
 (jch-register-supers! "java.io.FileOutputStream" '("java.io.OutputStream"))
 (jch-register-supers! "java.io.ByteArrayOutputStream" '("java.io.OutputStream"))
 (jch-register-supers! "java.io.PipedOutputStream" '("java.io.OutputStream"))
 (jch-register-supers! "java.io.BufferedOutputStream" '("java.io.FilterOutputStream"))
+(jch-register-supers! "java.io.DataOutputStream" '("java.io.FilterOutputStream" "java.io.DataOutput"))
 (jch-register-supers! "java.io.Reader" '("java.io.Closeable" "java.lang.Readable"))
 (jch-register-supers! "java.lang.Readable" '())
 (jch-register-supers! "java.io.Writer" '("java.io.Closeable" "java.io.Flushable" "java.lang.Appendable"))
@@ -1514,7 +1549,8 @@
 (for-each (lambda (c) (jch-register-supers! c '("java.lang.Enum")))
           '("java.text.Normalizer$Form" "java.util.concurrent.TimeUnit" "java.math.RoundingMode"
             "java.nio.file.FileVisitResult" "java.nio.file.FileVisitOption"
-            "java.nio.file.attribute.PosixFilePermission"))
+            "java.nio.file.attribute.PosixFilePermission" "java.nio.file.attribute.AclEntryType"
+            "java.nio.file.attribute.AclEntryPermission" "java.nio.file.attribute.AclEntryFlag"))
 (jch-register-supers! "java.util.GregorianCalendar" '())
 (jch-register-supers! "java.util.Locale" '())
 (jch-register-supers! "java.util.TimeZone" '())
@@ -1542,6 +1578,40 @@
 (jch-register-supers! "java.nio.file.StandardOpenOption" '("java.lang.Enum" "java.nio.file.OpenOption"))
 (jch-register-supers! "java.nio.file.StandardCopyOption" '("java.lang.Enum" "java.nio.file.CopyOption"))
 (jch-register-supers! "java.nio.file.LinkOption" '("java.lang.Enum" "java.nio.file.OpenOption" "java.nio.file.CopyOption"))
+;; the attribute interfaces nio-file.ss's snapshots and principals implement
+(jch-register-supers! "java.nio.file.attribute.PosixFileAttributes" '("java.nio.file.attribute.BasicFileAttributes"))
+(jch-register-supers! "java.nio.file.attribute.UserPrincipal" '("java.security.Principal"))
+(jch-register-supers! "java.nio.file.attribute.GroupPrincipal" '("java.nio.file.attribute.UserPrincipal"))
+(jch-register-supers! "sun.nio.fs.UnixFileAttributes$UnixAsBasicFileAttributes" '("java.nio.file.attribute.BasicFileAttributes"))
+(jch-register-supers! "sun.nio.fs.UnixFileAttributes" '("java.nio.file.attribute.PosixFileAttributes"))
+(jch-register-supers! "sun.nio.fs.UnixUserPrincipals$User" '("java.nio.file.attribute.UserPrincipal"))
+(jch-register-supers! "sun.nio.fs.UnixUserPrincipals$Group"
+                      '("sun.nio.fs.UnixUserPrincipals$User" "java.nio.file.attribute.GroupPrincipal"))
+;; the dos:, acl: and user: views (nio-file.ss), each platform's classes
+(jch-register-supers! "java.nio.file.attribute.AttributeView" '())
+(jch-register-supers! "java.nio.file.attribute.FileAttributeView" '("java.nio.file.attribute.AttributeView"))
+(jch-register-supers! "java.nio.file.attribute.BasicFileAttributeView" '("java.nio.file.attribute.FileAttributeView"))
+(jch-register-supers! "java.nio.file.attribute.FileOwnerAttributeView" '("java.nio.file.attribute.FileAttributeView"))
+(jch-register-supers! "java.nio.file.attribute.DosFileAttributeView" '("java.nio.file.attribute.BasicFileAttributeView"))
+(jch-register-supers! "java.nio.file.attribute.AclFileAttributeView" '("java.nio.file.attribute.FileOwnerAttributeView"))
+(jch-register-supers! "java.nio.file.attribute.UserDefinedFileAttributeView" '("java.nio.file.attribute.FileAttributeView"))
+(jch-register-supers! "java.nio.file.attribute.DosFileAttributes" '("java.nio.file.attribute.BasicFileAttributes"))
+(jch-register-supers! "java.nio.file.attribute.UserPrincipalLookupService" '())
+(for-each (lambda (c) (jch-register-supers! c '("java.nio.file.attribute.DosFileAttributeView")))
+          '("sun.nio.fs.LinuxDosFileAttributeView" "sun.nio.fs.WindowsFileAttributeViews$Dos"))
+(for-each (lambda (c) (jch-register-supers! c '("java.nio.file.attribute.DosFileAttributes")))
+          '("sun.nio.fs.LinuxDosFileAttributeView$1" "sun.nio.fs.WindowsFileAttributes"))
+(for-each (lambda (c) (jch-register-supers! c '("java.nio.file.attribute.UserDefinedFileAttributeView")))
+          '("sun.nio.fs.LinuxUserDefinedFileAttributeView" "sun.nio.fs.BsdUserDefinedFileAttributeView"
+            "sun.nio.fs.WindowsUserDefinedFileAttributeView"))
+(jch-register-supers! "sun.nio.fs.WindowsAclFileAttributeView" '("java.nio.file.attribute.AclFileAttributeView"))
+(jch-register-supers! "sun.nio.fs.WindowsUserPrincipals$User" '("java.nio.file.attribute.UserPrincipal"))
+(jch-register-supers! "sun.nio.fs.WindowsUserPrincipals$Group"
+                      '("sun.nio.fs.WindowsUserPrincipals$User" "java.nio.file.attribute.GroupPrincipal"))
+(for-each (lambda (c) (jch-register-supers! c '("java.nio.file.attribute.UserPrincipalLookupService")))
+          '("sun.nio.fs.UnixFileSystem$LookupService$1" "sun.nio.fs.WindowsFileSystem$LookupService$1"))
+(jch-register-supers! "java.nio.file.attribute.AclEntry" '())
+(jch-register-supers! "java.nio.file.attribute.AclEntry$Builder" '())
 
 ;; ---- jhost value tag -> FQN (single value-discriminator registry) --------------
 ;; A value-layer shim value (make-jhost tag …) reports its JVM class by this map;
@@ -1676,6 +1746,12 @@
     ("time-unit" . "java.util.concurrent.TimeUnit")
     ;; Files/getLastModifiedTime and fs/last-modified-time (nio-file.ss)
     ("file-time" . "java.nio.file.attribute.FileTime")
+    ;; readAttributes' snapshots and the owners they name (nio-file.ss)
+    ("basic-attrs" . "sun.nio.fs.UnixFileAttributes$UnixAsBasicFileAttributes")
+    ("posix-attrs" . "sun.nio.fs.UnixFileAttributes")
+    ("file-key" . "sun.nio.fs.UnixFileKey")
+    ("user-principal" . "sun.nio.fs.UnixUserPrincipals$User")
+    ("group-principal" . "sun.nio.fs.UnixUserPrincipals$Group")
     ("normalizer-form" . "java.text.Normalizer$Form")
     ;; subprocess shims (process.ss), backing vendored babashka.process
     ("process-builder" . "java.lang.ProcessBuilder")

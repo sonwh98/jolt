@@ -74,6 +74,60 @@
   (let ((st (jhost-state x)))
     (and (vector? st) (fx>? (vector-length st) stream-class-slot)
          (vector-ref st stream-class-slot))))
+;; A stream whose bytes a procedure produces, where the JDK's class decodes as it
+;; reads (Base64.Decoder.wrap). State slot 11 holds #(fill available close check)
+;; over the stream's own state:
+;;   fill       (bv start len): the class's read(byte[],off,len) on a bytevector
+;;              range — the count, or -1 at the end. read with a buffer calls it
+;;              directly (after any bytes the port holds), so its count is the
+;;              JDK's, and so is how far it reads into the source.
+;;   available  the class's available(), an exact integer
+;;   close      the class's close()
+;;   check      raises the class's IOException when it has been closed
+;; The port in slot 0 is for everything else (read(), readAllBytes, a Reader over
+;; the stream). It refills through fill CHUNK bytes at most, so a read() never
+;; waits on the source for more than the JDK's would.
+(define in-stream-ops-slot 11)
+(define (in-stream-ops x)
+  (let ((st (and (jhost? x) (jhost-state x))))
+    (and (vector? st) (fx>? (vector-length st) in-stream-ops-slot)
+         (vector-ref st in-stream-ops-slot))))
+(define (make-ops-in-stream fill chunk available close check cls)
+  (let ((v (make-vector (fx+ in-stream-ops-slot 1) #f)))
+    (vector-set! v 0 (make-custom-binary-input-port
+                      "ops-source"
+                      (lambda (bv start n)
+                        (let ((k (fill bv start (fxmin n chunk)))) (if (fx<? k 0) 0 k)))
+                      ;; a Reader that closes the port it reads closes the class
+                      #f #f close))
+    (vector-set! v 2 0)
+    (vector-set! v stream-class-slot cls)
+    (vector-set! v in-stream-ops-slot (vector fill available close check))
+    (make-jhost "in-stream" v)))
+;; read(buf) / read(buf, off, len) on such a stream: the bytes the port already
+;; holds, then fill for the rest of the range. The array's own bytevector is
+;; filled where it has one, so the bytes a read stored before an error raised
+;; stay in the array, as they do on the JDK.
+(define (in-stream-ops-read self ops rest)
+  ((vector-ref ops 3))
+  (let* ((buf (car rest))
+         (_ (when (jolt-nil? buf) (raf-null-array!)))
+         (off (if (pair? (cdr rest)) (jnum->exact (cadr rest)) 0))
+         (len (if (pair? (cdr rest)) (jnum->exact (caddr rest)) (ja-len buf))))
+    (data-array-check! buf off len)
+    (if (fx=? len 0)
+        0
+        (let* ((v (jolt-array-vec buf))
+               (direct? (bytevector? v))
+               (bv (if direct? v (make-bytevector len)))
+               (start (if direct? off 0))
+               (port (in-stream-port self))
+               (k (fxmin len (port-buffered port)))
+               (k (if (fx>? k 0) (get-bytevector-n! port bv start k) 0))
+               (r (if (fx=? k len) 0 ((vector-ref ops 0) bv (fx+ start k) (fx- len k))))
+               (n (if (fx<? r 0) (if (fx=? k 0) -1 k) (fx+ k r))))
+          (when (and (not direct?) (fx>? n 0)) (ja-bv->bytes! bv 0 buf off n))
+          n))))
 ;; Two optional slots follow, each #f or absent on an ordinary stream: slot 3 is
 ;; a piped stream's shared pipe (piped-cell, below), slot 4 a
 ;; PushbackInputStream's pushback state (in-stream-pushback, below). Slot 5 is
@@ -154,15 +208,31 @@
 ;; predicates are not a promise: a port over a SOCKET descriptor answers #t to
 ;; both and then raises ESPIPE ("illegal seek") from port-position, so this asks
 ;; by trying rather than by asking.
+;; A custom port over a file (nio-file.ss fc-win32-port, a HANDLE on Windows)
+;; has no port-length of its own, so it registers how to ask its file's size
+;; here, the way Reader ports register a ready probe below.
+(define port-size-probes (make-weak-eq-hashtable))
+(define port-size-probes-mu (make-mutex))
+(define (port-size-probe! port size)
+  (jolt-with-mutex port-size-probes-mu (hashtable-set! port-size-probes port size))
+  port)
+;; The size of the file behind PORT, or #f when it is not a seekable file.
+(define (port-file-size port)
+  (cond ((jolt-with-mutex port-size-probes-mu (hashtable-ref port-size-probes port #f))
+         => (lambda (size) (size)))
+        ((port-has-port-length? port) (port-length port))
+        (else #f)))
 (define (port-remaining port)
   (guard (_ (#t #f))
-    (and (port-has-port-length? port)
-         (port-has-port-position? port)
-         (max 0 (- (port-length port) (port-position port))))))
+    (and (port-has-port-position? port)
+         (let ((size (port-file-size port)))
+           (and size (max 0 (- size (port-position port))))))))
 (define (in-stream-available self)
   (let ((port (in-stream-live-port self))
         (p (piped-pipe self)))
     (cond
+      ;; a stream a procedure fills answers its class's own count
+      ((in-stream-ops self) => (lambda (ops) ((vector-ref ops 1))))
       ;; a buffered stream's unread bytes, then the wrapped stream's own count
       ((in-stream-replay self)
        => (lambda (replay) (replay 'available #f)))
@@ -173,6 +243,10 @@
        => (lambda (pb)
             (+ (port-buffered port)
                (jnum->exact (record-method-dispatch (pushback-inner pb) "available" jolt-nil)))))
+      ;; a DataInputStream over a stream read through dispatch: what its port
+      ;; holds plus the wrapped stream's own count
+      ((in-stream-data-inner self)
+       (+ (port-buffered port) (dis-d-available self)))
       ;; a piped stream holds its bytes in two places: what the writer has queued
       ;; and what an earlier read already pulled into the port's buffer
       (p (+ (port-buffered port) (pipe-available p)))
@@ -242,6 +316,20 @@
                   (set-port-position! port target))
                 (->num n))))))
 
+;; Files/newInputStream's stream is a ChannelInputStream over a seekable channel,
+;; and its skip is the channel's (JDK 21): forward no further than the end of
+;; the file, back no further than its start, answering how far it moved. #f
+;; when the stream is some other kind or its port is not a seekable file (a
+;; directory's stream), which keeps the other two ways.
+(define (in-stream-skip-on-channel! self port n)
+  (and (equal? (stream-class self) "sun.nio.ch.ChannelInputStream")
+       (let ((pos (guard (_ (#t #f)) (and (port-has-port-position? port) (port-position port))))
+             (size (guard (_ (#t #f)) (port-file-size port))))
+         (and pos size
+              (let ((to (if (> n 0) (min (+ pos n) size) (max (+ pos n) 0))))
+                (set-port-position! port to)
+                (->num (- to pos)))))))
+
 ;; InputStream.skip by reading: n <= 0 is 0, and the bytes go through a bounded
 ;; buffer, so a count past the end (Long/MAX_VALUE) stops at end of stream.
 (define (in-stream-skip-by-reading! port n)
@@ -256,6 +344,24 @@
                     done
                     (loop (- left k) (+ done k)))))))))
 
+;; read(byte[]) and read(byte[],int,int)'s array, refused as the JDK refuses a
+;; nil one: InputStream.read(byte[]) and most read(byte[],int,int)s take its
+;; length first; FileInputStream's native read and PushbackInputStream's own
+;; null test throw with no message.
+(define (in-stream-native-null? self)
+  (or (in-stream-pushback self)
+      (equal? (stream-class self) "java.io.FileInputStream")
+      ;; a DataInputStream sharing such a stream's port hands the null on to it
+      (let ((st (jhost-state self)))
+        (and (fx>? (vector-length st) dis-native-null-slot)
+             (vector-ref st dis-native-null-slot)))))
+(define (in-stream-read-buf self rest)
+  (let ((buf (car rest)))
+    (when (jolt-nil? buf)
+      (if (and (pair? (cdr rest)) (in-stream-native-null? self))
+          (throw-jvm 'NullPointerException jolt-nil)
+          (raf-null-array!)))
+    buf))
 (register-host-methods! "in-stream"
   (list
    (cons "read"
@@ -281,7 +387,9 @@
                  ;; not "until the buffer is full": filling it first hung a read
                  ;; over a pipe or a terminal, where the rest of the buffer only
                  ;; arrives after whatever the program does with these bytes.
-                 (let* ((buf (car rest))
+                 (if (in-stream-ops self)
+                     (->num (in-stream-ops-read self (in-stream-ops self) rest))
+                 (let* ((buf (in-stream-read-buf self rest))
                         (off (if (>= (length rest) 3) (jnum->exact (cadr rest)) 0))
                         (len (if (>= (length rest) 3) (jnum->exact (caddr rest)) (ja-len buf)))
                         (v (and (jolt-array? buf) (jolt-array-vec buf))))
@@ -306,12 +414,13 @@
                       (let* ((tmp (make-bytevector (max len 1)))
                              (n (in-stream-read-some! self port tmp 0 len)))
                         (if (eof-object? n) -1
-                            (begin (ja-bv->bytes! tmp 0 buf off n) (->num n)))))))))))
+                            (begin (ja-bv->bytes! tmp 0 buf off n) (->num n))))))))))))
    (cons "readAllBytes" (lambda (self) (let ((bv (get-bytevector-all (in-stream-live-port self))))
                                          (na-byte-array (if (eof-object? bv) (make-bytevector 0) bv)))))
    (cons "skip" (lambda (self n)
                   (let ((port (in-stream-live-port self)) (n (jnum->exact n)))
-                    (or (in-stream-skip-by-seek! self port n)
+                    (or (in-stream-skip-on-channel! self port n)
+                        (in-stream-skip-by-seek! self port n)
                         (->num (in-stream-skip-by-reading! port n))))))
    (cons "available" (lambda (self) (->num (in-stream-available self))))
    ;; PushbackInputStream.unread — see the pushback section below. Any other
@@ -327,7 +436,13 @@
    ;; a read after close is the end of input on the JVM, not an IOException.
    (cons "close" (lambda (self)
                    (let ((p (piped-pipe self)) (sq (in-stream-sequence-close self)))
-                     (cond (p (pipe-close-read! p))
+                     (cond ((in-stream-ops self)
+                            ;; the class closes; the port stays open and empty, so
+                            ;; every later read reaches fill and its IOException
+                            => (lambda (ops)
+                                 ((vector-ref ops 2))
+                                 (set-port-input-size! (in-stream-port self) 0)))
+                           (p (pipe-close-read! p))
                            (sq (sq))
                            (else (close-port (in-stream-port self)))))
                    jolt-nil))
@@ -459,7 +574,11 @@
                    jolt-nil))
    (cons "connect" (lambda (self other) (pipe-connect! self other) jolt-nil))
    (cons "toByteArray" (lambda (self) (na-byte-array (bytevector-copy (baos-bytes self)))))
-   (cons "size" (lambda (self) (->num (bytevector-length (baos-bytes self)))))
+   (cons "size" (lambda (self)
+                  ;; a DataOutputStream counts what it was given; a
+                  ;; ByteArrayOutputStream holds it
+                  (cond ((out-stream-data-count self) => (lambda (c) (->num (unbox c))))
+                        (else (->num (bytevector-length (baos-bytes self)))))))
    (cons "reset" (lambda (self) (baos-bytes self) (vector-set! (jhost-state self) 2 (make-bytevector 0)) jolt-nil))
    (cons "toString" (lambda (self . cs) (decode-bytevector (baos-bytes self)
                                           (if (pair? cs) (list (jolt-str-render-one (car cs))) '()))))))
@@ -1322,14 +1441,12 @@
    (cons "toString" host-object-tostring)))
 
 ;; --- constructors -----------------------------------------------------------
-(define utf8-tx (make-transcoder (utf-8-codec)))
 
 ;; --- text over bytes in a named charset ----------------------------------------
 ;; What io/reader and io/writer build when given :encoding, and what the
 ;; InputStreamReader / OutputStreamWriter / FileReader / FileWriter constructors
 ;; build when given a charset. Every one of those used to accept the charset and
-;; read or write UTF-8 regardless. UTF-8 keeps the ports it always had; the
-;; charset is checked by name first, as the JVM does when the reader or writer is
+;; read or write UTF-8 regardless. The charset is checked by name first, as the JVM does when the reader or writer is
 ;; constructed.
 ;;
 ;; Writing: each block the port hands over is encoded through charset-encode-bv
@@ -1345,10 +1462,32 @@
 ;; REPORT? encodes as a CharsetEncoder does by default: a character the charset
 ;; cannot hold is UnmappableCharacterException when its block is encoded -- at a
 ;; flush or close, as the JDK's StreamEncoder raises it -- rather than "?".
+;;
+;; UTF-8 hands each block to string->utf8 and the bytes to bp. It was an R6RS
+;; transcoded-port, whose codec goes a character at a time through the
+;; transcoder's own buffer: a 500 KB (.write w s) to a FileWriter cost 2x what
+;; spit's string->utf8 + put-bytevector did, so (pr v) to a writer lost to
+;; (spit f (pr-str v)). A write longer than the port's buffer reaches the
+;; procedure whole, so a big write is one encode, as spit's is. A Chez string
+;; holds no surrogate (a lone unit is a jsurr, paired or replaced by sink-text
+;; before it gets here), so every character has a UTF-8 form and nothing is
+;; replaced.
+(define (utf8-output-port bp)
+  (parameterize ((custom-port-buffer-size 65536))
+    (make-custom-textual-output-port "utf8-writer"
+      (lambda (str start count)
+        (when (fx>? count 0)
+          (put-bytevector bp (string->utf8
+                               (if (and (fx=? start 0) (fx=? count (string-length str)))
+                                   str
+                                   (substring str start (fx+ start count))))))
+        count)
+      #f #f
+      (lambda () (close-port bp)))))
 (define (charset-output-port bp name . report?)
   (io-check-encoding! name)
   (if (io-utf8? name)
-      (transcoded-port bp utf8-tx)
+      (utf8-output-port bp)
       (let ((enc name) (utf16? (string=? (charset-canonical-down name) "utf-16"))
             (encode (if (and (pair? report?) (car report?)) charset-encode-report charset-encode-bv)))
         (make-custom-textual-output-port "charset-writer"
@@ -1532,6 +1671,550 @@
                                (let ((sub (make-bytevector len))) (bytevector-copy! bv off sub 0 len) sub))
                              bv)))
         "java.io.ByteArrayInputStream"))))
+;; --- java.io.DataInput / DataOutput --------------------------------------------
+;; DataInputStream, DataOutputStream and RandomAccessFile share one set of
+;; members, written once over two small functions: how to reach a binary input
+;; port, and how to put bytes out. Everything is big-endian, as the JDK's is.
+;;
+;; A short read is the JDK's EOFException with no message. The bytes it did get
+;; are consumed, as they are on the JVM, which reads them one at a time.
+(define (data-eof!) (throw-jvm 'EOFException jolt-nil))
+;; the JDK's Objects.checkFromIndexSize on a byte[]
+(define (data-array-check! arr off len)
+  (when (jolt-nil? arr) (raf-null-array!))
+  (when (or (< off 0) (< len 0) (> (+ off len) (ja-len arr)))
+    (throw-jvm 'IndexOutOfBoundsException
+               (string-append "Range [" (number->string off) ", " (number->string off) " + "
+                              (number->string len) ") out of bounds for length "
+                              (number->string (ja-len arr))))))
+;; exactly N bytes from PORT as a bytevector, or EOFException
+;; The three operations the readers are built on, as a vector #(read1 fill
+;; after-cr) of procedures over SELF:
+;;   read1     one byte 0..255, or -1 at the end (InputStream.read())
+;;   fill      (self array off len) reads up to LEN bytes into a byte array and
+;;             answers the count, or -1 at the end (read(byte[],int,int))
+;;   after-cr  consumes the \n that follows a \r, if one does
+;; A DataInputStream over a stream it reads through dispatch calls the wrapped
+;; stream's own read() and read(byte[],int,int) exactly where the JDK does:
+;; read() for readByte, readUnsignedByte, readBoolean and readLine, and
+;; read(byte[],int,int) for every multi-byte value, repeated until the value is
+;; complete. A fill that answers 0 is not the end.
+(define (data-fill-fully! fill self arr off len)
+  (let loop ((got 0))
+    (when (fx<? got len)
+      (let ((c (fill self arr (fx+ off got) (fx- len got))))
+        (when (< c 0) (data-eof!))
+        (loop (fx+ got c))))))
+(define (data-take fill self n)
+  (let ((arr (na-bv->bytearray (make-bytevector n))))
+    (data-fill-fully! fill self arr 0 n)
+    (na-bytearray->bv arr)))
+(define (data-read-fully! fill self buf off len)
+  (data-array-check! buf off len)
+  (data-fill-fully! fill self buf off len))
+;; Over a binary input port: RandomAccessFile's, or a DataInputStream's shared
+;; with the jolt stream it wraps.
+(define (data-ops-port port-of)
+  (vector
+   (lambda (self) (let ((b (get-u8 (port-of self)))) (if (eof-object? b) -1 b)))
+   (lambda (self arr off len)
+     (let* ((tmp (make-bytevector len))
+            (n (get-bytevector-n! (port-of self) tmp 0 len)))
+       (if (or (eof-object? n) (eqv? n 0))
+           -1
+           (begin (ja-bv->bytes! tmp 0 arr off n) n))))
+   (lambda (self)
+     (let ((p (port-of self)))
+       (when (eqv? (lookahead-u8 p) 10) (get-u8 p))))))
+
+;; The UTF-16 code units of S. A jolt string holds code points, so an astral one
+;; is the surrogate pair the JVM's string holds, and writeBytes, writeChars and
+;; writeUTF all see the two units.
+(define (data-string-units s)
+  (let loop ((i (fx- (string-length s) 1)) (acc '()))
+    (if (fx<? i 0)
+        acc
+        (let ((cp (char->integer (string-ref s i))))
+          (loop (fx- i 1)
+                (if (fx<? cp #x10000)
+                    (cons cp acc)
+                    (let ((v (fx- cp #x10000)))
+                      (cons (fx+ #xD800 (fxsrl v 10))
+                            (cons (fx+ #xDC00 (fxand v #x3FF)) acc)))))))))
+;; PARAM is the JDK method's parameter, which its helpful NPE names:
+;; writeUTF's is str, writeBytes' and writeChars' s.
+(define (data-need-string x param)
+  (when (jolt-nil? x)
+    (throw-jvm 'NullPointerException
+               (string-append "Cannot invoke \"String.length()\" because \"" param "\" is null")))
+  (if (string? x) x (jolt-str-render-one x)))
+
+;; writeUTF: modified UTF-8, a two-byte length and then the bytes. U+0000 is C0 80
+;; and an astral character is two three-byte surrogate units.
+(define (data-encode-utf s)
+  (let* ((units (data-string-units s))
+         (len (let loop ((us units) (n 0))
+                (if (null? us)
+                    n
+                    (loop (cdr us)
+                          (+ n (let ((u (car us)))
+                                 (cond ((and (fx>=? u 1) (fx<=? u #x7F)) 1)
+                                       ((fx>? u #x7FF) 3)
+                                       (else 2)))))))))
+    (when (> len 65535)
+      ;; the JDK names the first and last 8 UTF-16 units of the string
+      (let ((n (length units)))
+        (throw-jvm 'UTFDataFormatException
+                   (string-append "encoded string ("
+                                  (data-units->string (list-head units (min 8 n)))
+                                  "..."
+                                  (data-units->string (list-tail units (max 0 (- n 8))))
+                                  ") too long: " (number->string len) " bytes"))))
+    (let ((out (make-bytevector (+ 2 len))) (at 2))
+      (bytevector-u8-set! out 0 (fxsrl len 8))
+      (bytevector-u8-set! out 1 (fxand len #xFF))
+      (for-each
+       (lambda (u)
+         (define (put! b) (bytevector-u8-set! out at b) (set! at (fx+ at 1)))
+         (cond ((and (fx>=? u 1) (fx<=? u #x7F)) (put! u))
+               ((fx>? u #x7FF)
+                (put! (fxior #xE0 (fxand (fxsrl u 12) #x0F)))
+                (put! (fxior #x80 (fxand (fxsrl u 6) #x3F)))
+                (put! (fxior #x80 (fxand u #x3F))))
+               (else
+                (put! (fxior #xC0 (fxand (fxsrl u 6) #x1F)))
+                (put! (fxior #x80 (fxand u #x3F))))))
+       units)
+      out)))
+
+;; readUTF: DataInputStream.readUTF's decoder, with its messages. The units it
+;; produces are paired into code points, and a half with no partner becomes
+;; U+FFFD because a jolt string cannot hold one.
+(define (data-utf-malformed! at)
+  (throw-jvm 'UTFDataFormatException
+             (string-append "malformed input around byte " (number->string at))))
+(define (data-decode-utf bv)
+  (let ((n (bytevector-length bv)))
+    (define (cont? b) (fx=? (fxand b #xC0) #x80))
+    (let loop ((count 0) (units '()))
+      (if (fx>=? count n)
+          (data-units->string (reverse units))
+          (let* ((c (bytevector-u8-ref bv count)) (hi (fxsrl c 4)))
+            (cond
+              ((fx<=? hi 7) (loop (fx+ count 1) (cons c units)))
+              ((or (fx=? hi 12) (fx=? hi 13))
+               (let ((count (fx+ count 2)))
+                 (when (fx>? count n)
+                   (throw-jvm 'UTFDataFormatException "malformed input: partial character at end"))
+                 (let ((c2 (bytevector-u8-ref bv (fx- count 1))))
+                   (unless (cont? c2) (data-utf-malformed! count))
+                   (loop count (cons (fxior (fxsll (fxand c #x1F) 6) (fxand c2 #x3F)) units)))))
+              ((fx=? hi 14)
+               (let ((count (fx+ count 3)))
+                 (when (fx>? count n)
+                   (throw-jvm 'UTFDataFormatException "malformed input: partial character at end"))
+                 (let ((c2 (bytevector-u8-ref bv (fx- count 2)))
+                       (c3 (bytevector-u8-ref bv (fx- count 1))))
+                   (unless (and (cont? c2) (cont? c3)) (data-utf-malformed! (fx- count 1)))
+                   (loop count (cons (fxior (fxsll (fxand c #x0F) 12)
+                                            (fxsll (fxand c2 #x3F) 6)
+                                            (fxand c3 #x3F))
+                                     units)))))
+              (else (data-utf-malformed! count))))))))
+(define (data-units->string units)
+  (let loop ((us units) (acc '()))
+    (cond
+      ((null? us) (list->string (reverse acc)))
+      ((and (fx>=? (car us) #xD800) (fx<=? (car us) #xDBFF)
+            (pair? (cdr us)) (fx>=? (cadr us) #xDC00) (fx<=? (cadr us) #xDFFF))
+       (loop (cddr us)
+             (cons (integer->char (fx+ #x10000
+                                       (fxsll (fx- (car us) #xD800) 10)
+                                       (fx- (cadr us) #xDC00)))
+                   acc)))
+      ((and (fx>=? (car us) #xD800) (fx<=? (car us) #xDFFF))
+       (loop (cdr us) (cons #\xFFFD acc)))
+      (else (loop (cdr us) (cons (integer->char (car us)) acc))))))
+
+;; readLine: bytes taken as Latin-1, ended by \n, \r or \r\n; nil at the end of
+;; the input when nothing was read.
+;; Reads through OPS (see above).
+(define (data-read-line ops self)
+  (let ((read1 (vector-ref ops 0)) (after-cr (vector-ref ops 2)))
+    (let loop ((acc '()) (any? #f))
+      (let ((b (read1 self)))
+        (cond ((< b 0) (if any? (list->string (reverse acc)) jolt-nil))
+              ((fx=? b 10) (list->string (reverse acc)))
+              ((fx=? b 13) (after-cr self) (list->string (reverse acc)))
+              (else (loop (cons (integer->char b) acc) #t)))))))
+
+;; The DataInput members. OPS-OF answers the operations above for SELF. OK? says
+;; whether SELF really is a DataInput: the byte-stream tags serve every stream,
+;; so a plain InputStream answers a missing method as it always did.
+(define (data-input-members ops-of ok?)
+  (define (mk name read)
+    (cons name
+          (case-lambda
+            ((self) (if (ok? self)
+                        (read self (ops-of self))
+                        (dispatch-miss self name '()))))))
+  (define (fill-of ops) (vector-ref ops 1))
+  (define (bytes self ops n) (data-take (fill-of ops) self n))
+  (define (sint n)
+    (lambda (self ops) (->num (bytevector-sint-ref (bytes self ops n) 0 (endianness big) n))))
+  (define (uint n)
+    (lambda (self ops) (->num (bytevector-uint-ref (bytes self ops n) 0 (endianness big) n))))
+  (define (byte1 self ops)
+    (let ((b ((vector-ref ops 0) self)))
+      (when (< b 0) (data-eof!))
+      b))
+  (list
+   (mk "readBoolean" (lambda (self ops) (not (fx=? 0 (byte1 self ops)))))
+   (mk "readByte" (lambda (self ops) (->num (let ((b (byte1 self ops))) (if (fx>? b 127) (fx- b 256) b)))))
+   (mk "readUnsignedByte" (lambda (self ops) (->num (byte1 self ops))))
+   (mk "readShort" (sint 2))
+   (mk "readUnsignedShort" (uint 2))
+   (mk "readChar" (lambda (self ops)
+                    (jolt-code-point->char
+                     (bytevector-uint-ref (bytes self ops 2) 0 (endianness big) 2))))
+   (mk "readInt" (sint 4))
+   (mk "readLong" (sint 8))
+   (mk "readFloat" (lambda (self ops)
+                     (jolt-int-bits->float
+                      (bytevector-sint-ref (bytes self ops 4) 0 (endianness big) 4))))
+   (mk "readDouble" (lambda (self ops)
+                      (jolt-long-bits->double
+                       (bytevector-sint-ref (bytes self ops 8) 0 (endianness big) 8))))
+   (mk "readLine" (lambda (self ops) (data-read-line ops self)))
+   (mk "readUTF" (lambda (self ops)
+                   (let ((len (bytevector-uint-ref (bytes self ops 2) 0 (endianness big) 2)))
+                     (data-decode-utf (bytes self ops len)))))
+   (cons "readFully"
+         (case-lambda
+           ((self buf)
+            (if (ok? self)
+                (begin (when (jolt-nil? buf) (raf-null-array!))
+                       (data-read-fully! (fill-of (ops-of self)) self buf 0 (ja-len buf))
+                       jolt-nil)
+                (dispatch-miss self "readFully" (list buf))))
+           ((self buf off len)
+            (if (ok? self)
+                (begin (data-read-fully! (fill-of (ops-of self)) self buf
+                                         (jnum->exact off) (jnum->exact len))
+                       jolt-nil)
+                (dispatch-miss self "readFully" (list buf off len))))))))
+
+;; The DataOutput members. EMIT! (self bytevector) writes bytes the way the JDK's
+;; write(byte[],0,n) does and EMIT1! (self int) the way write(int) does: the JDK
+;; writes a boolean, a byte and each byte of writeBytes with write(int), and the
+;; rest as one write(byte[],0,n) per value (per char for writeChars). A write that
+;; fails must leave nothing behind, so neither one buffers.
+(define (data-output-members emit! emit1! ok?)
+  (define (mk name body)
+    (cons name
+          (case-lambda
+            ((self x) (if (ok? self)
+                          (begin (body self x) jolt-nil)
+                          (dispatch-miss self name (list x)))))))
+  (define (int-arg x)
+    (if (or (char? x) (jsurr? x)) (char-or-unit->integer x) (jnum->exact x)))
+  (define (uint-bytes n width)
+    (let ((bv (make-bytevector width)))
+      (bytevector-uint-set! bv 0 (bitwise-and n (- (expt 2 (* 8 width)) 1)) (endianness big) width)
+      bv))
+  (define (fixed width conv)
+    (lambda (self x) (emit! self (uint-bytes (conv x) width))))
+  (list
+   (mk "writeBoolean" (lambda (self x) (emit1! self (if (jolt-truthy? x) 1 0))))
+   (mk "writeByte" (lambda (self x) (emit1! self (int-arg x))))
+   (mk "writeShort" (fixed 2 int-arg))
+   (mk "writeChar" (fixed 2 int-arg))
+   (mk "writeInt" (fixed 4 int-arg))
+   (mk "writeLong" (fixed 8 int-arg))
+   (mk "writeFloat" (fixed 4 jolt-float->int-bits))
+   (mk "writeDouble" (fixed 8 jolt-double->long-bits))
+   (mk "writeBytes"
+       (lambda (self x)
+         (for-each (lambda (u)
+                     (let ((b (fxand u #xFF)))
+                       (emit1! self (if (fx>? b 127) (fx- b 256) b))))
+                   (data-string-units (data-need-string x "s")))))
+   (mk "writeChars"
+       (lambda (self x)
+         (for-each (lambda (u) (emit! self (uint-bytes u 2)))
+                   (data-string-units (data-need-string x "s")))))
+   (mk "writeUTF" (lambda (self x) (emit! self (data-encode-utf (data-need-string x "str")))))))
+
+;; DataInputStream. A jolt stream over a plain port is shared, which reads the
+;; same bytes without a dispatch per byte. Any other stream (a proxy, a reify, a
+;; replay or piped stream) is held in state slot 7 and called through its own
+;; read, as FilterInputStream does, with no buffer between: it never sees a read
+;; for bytes the caller has not asked for. Slot 8 holds the one byte readLine may
+;; have to give back after a \r, which the JDK keeps in a PushbackInputStream it
+;; swaps in. read, skip, available and close go to the wrapped stream (after that
+;; byte), where the port is only what readAllBytes, transferTo and a reader over
+;; the stream use.
+(define (in-stream-data-inner x)
+  (let ((st (and (jhost? x) (jhost-state x))))
+    (and (vector? st) (fx>? (vector-length st) 7) (vector-ref st 7))))
+(define (data-in-stream? x)
+  (and (in-stream? x)
+       (let ((c (stream-class x))) (and c (string=? c "java.io.DataInputStream")))))
+;; The stream a dispatched DataInputStream reads, or the JDK's NPE for a null
+;; one, which names the InputStream method it was about to call on this.in.
+(define (dis-inner self sig)
+  (let ((inner (in-stream-data-inner self)))
+    (if (jolt-nil? inner)
+        (throw-jvm 'NullPointerException
+                   (string-append "Cannot invoke \"java.io.InputStream." sig
+                                  "\" because \"this.in\" is null"))
+        inner)))
+;; Past the class slot, on a DataInputStream that shares its stream's port: #t
+;; when that stream refuses read(nil, off, len) with no message (in-stream-read-buf),
+;; which the JDK's DataInputStream reaches by handing the call on.
+(define dis-native-null-slot 10)
+(define (dis-pending self) (vector-ref (jhost-state self) 8))
+(define (dis-pending-set! self b) (vector-set! (jhost-state self) 8 b))
+;; read(): a byte 0..255, or -1
+(define (dis-d-read1 self)
+  (let ((p (dis-pending self)))
+    (if p
+        (begin (dis-pending-set! self #f) p)
+        (jnum->exact (record-method-dispatch (dis-inner self "read()") "read" jolt-nil)))))
+;; read(byte[],off,len): the count, or -1
+(define (dis-d-fill self arr off len)
+  (let ((p (dis-pending self)))
+    (define (call arr off len)
+      (jnum->exact (record-method-dispatch (dis-inner self "read(byte[], int, int)") "read"
+                     (list->cseq (list arr (->num off) (->num len))))))
+    (if (and p (fx>? len 0))
+        (begin
+          (dis-pending-set! self #f)
+          (let ((one (make-bytevector 1)))
+            (bytevector-u8-set! one 0 p)
+            (ja-bv->bytes! one 0 arr off 1))
+          (if (fx>? len 1)
+              (let ((n (call arr (fx+ off 1) (fx- len 1))))
+                (if (< n 0) 1 (fx+ n 1)))
+              1))
+        (call arr off len))))
+(define (dis-d-available self)
+  (+ (if (dis-pending self) 1 0)
+     (jnum->exact (record-method-dispatch (dis-inner self "available()") "available" jolt-nil))))
+(define (dis-d-skip self n)
+  (let ((inner (dis-inner self "skip(long)")))
+    (if (<= n 0)
+        0
+        (let* ((p (dis-pending self))
+               (from-pending (if p (begin (dis-pending-set! self #f) 1) 0))
+               (n (- n from-pending)))
+          (+ from-pending
+             (if (> n 0)
+                 (jnum->exact (record-method-dispatch inner "skip" (list->cseq (list (->num n)))))
+                 0))))))
+(define data-dis-dispatch-ops
+  (vector
+   dis-d-read1
+   dis-d-fill
+   (lambda (self)
+     (let ((c2 (dis-d-read1 self)))
+       (when (and (fx<>? c2 10) (fx<>? c2 -1)) (dis-pending-set! self c2))))))
+(define (fx<>? a b) (not (fx=? a b)))
+(define data-dis-port-ops (data-ops-port in-stream-live-port))
+(define (data-dis-ops self)
+  (if (in-stream-data-inner self) data-dis-dispatch-ops data-dis-port-ops))
+
+(define (make-data-in-stream inner)
+  (when (reader-jhost? inner)
+    (throw-jvm (quote IllegalArgumentException)
+               "DataInputStream wraps an InputStream, not a Reader (it is already decoded)"))
+  (stream-classed!
+    (if (and (in-stream? inner)
+             (not (in-stream-replay inner))
+             (not (piped-pipe inner))
+             (not (in-stream-sequence-close inner)))
+        (let ((v (make-vector (fx+ dis-native-null-slot 1) #f)))
+          (vector-set! v 0 (vector-ref (jhost-state inner) 0))
+          (vector-set! v 1 (vector-ref (jhost-state inner) 1))
+          (vector-set! v 2 (vector-ref (jhost-state inner) 2))
+          (vector-set! v dis-native-null-slot (and (in-stream-native-null? inner) #t))
+          (make-jhost "in-stream" v))
+        (let* ((self #f)
+               (port (make-custom-binary-input-port
+                       "data-source"
+                       (lambda (bv start count)
+                         (let* ((arr (na-bv->bytearray (make-bytevector count)))
+                                (n (dis-d-fill self arr 0 count)))
+                           (if (<= n 0)
+                               0
+                               (begin (ja-bytes->bv! arr 0 bv start n) n))))
+                       #f #f
+                       (lambda () #f))))
+          (set! self (make-jhost "in-stream" (vector port #f 0 #f #f #f #f inner #f)))
+          self))
+    "java.io.DataInputStream"))
+(reg-ctor! '("DataInputStream" "java.io.DataInputStream") make-data-in-stream)
+(register-class-statics! "java.io.DataInputStream"
+  (list (cons "readUTF" (lambda (in) (record-method-dispatch in "readUTF" jolt-nil)))))
+(register-host-methods! "in-stream"
+  (append
+   (data-input-members data-dis-ops data-in-stream?)
+   (list
+    ;; DataInputStream.skipBytes asks the wrapped stream's skip until it answers 0
+    (cons "skipBytes"
+          (lambda (self n)
+            (if (data-in-stream? self)
+                (let ((n (jnum->exact n)))
+                  (let loop ((total 0))
+                    (if (>= total n)
+                        (->num total)
+                        (let ((cur (jnum->exact
+                                     (record-method-dispatch self "skip"
+                                       (list->cseq (list (->num (- n total))))))))
+                          (if (> cur 0) (loop (+ total cur)) (->num total))))))
+                (dispatch-miss self "skipBytes" (list n))))))))
+;; The InputStream methods a DataInputStream over a dispatched stream hands on.
+(define (wrap-host-method! tag name wrap)
+  (let ((old (hashtable-ref (hashtable-ref host-methods-tbl tag #f) name #f)))
+    (register-host-methods! tag (list (cons name (wrap old))))))
+(wrap-host-method! "in-stream" "read"
+  (lambda (old)
+    (lambda (self . rest)
+      (if (in-stream-data-inner self)
+          (cond ((null? rest) (->num (dis-d-read1 self)))
+                ((null? (cdr rest))
+                 (when (jolt-nil? (car rest)) (raf-null-array!))
+                 (->num (dis-d-fill self (car rest) 0 (ja-len (car rest)))))
+                (else (->num (dis-d-fill self (car rest) (jnum->exact (cadr rest))
+                                         (jnum->exact (caddr rest))))))
+          (apply old self rest)))))
+(wrap-host-method! "in-stream" "skip"
+  (lambda (old)
+    (lambda (self n)
+      (if (in-stream-data-inner self)
+          (->num (dis-d-skip self (jnum->exact n)))
+          (old self n)))))
+(wrap-host-method! "in-stream" "available"
+  (lambda (old)
+    (lambda (self)
+      (if (in-stream-data-inner self)
+          (->num (dis-d-available self))
+          (old self)))))
+(wrap-host-method! "in-stream" "close"
+  (lambda (old)
+    (lambda (self)
+      (if (in-stream-data-inner self)
+          (begin (record-method-dispatch (dis-inner self "close()") "close" jolt-nil) jolt-nil)
+          (old self)))))
+;; FilterInputStream hands mark, reset and markSupported to this.in too; over a
+;; null one each is the JDK's NPE
+(define (dis-null-in-check! self sig)
+  (when (and (data-in-stream? self) (jolt-nil? (in-stream-data-inner self)))
+    (dis-inner self sig)))
+(wrap-host-method! "in-stream" "mark"
+  (lambda (old)
+    (lambda (self . args) (dis-null-in-check! self "mark(int)") (apply old self args))))
+(wrap-host-method! "in-stream" "reset"
+  (lambda (old) (lambda (self) (dis-null-in-check! self "reset()") (old self))))
+(wrap-host-method! "in-stream" "markSupported"
+  (lambda (old) (lambda (self) (dis-null-in-check! self "markSupported()") (old self))))
+
+;; DataOutputStream. Unbuffered, as the JDK's is: each write goes straight on to
+;; the wrapped stream through its own write, with the call the JDK makes, and is
+;; counted once that call has returned, so a write that fails leaves neither
+;; bytes nor count behind. State slot 6 is the count size() answers, slot 5 the
+;; wrapped stream flush and close go on to, and slot 7 whether close has run. The
+;; port in slot 0 is only for the code that writes to a stream's port directly
+;; (transferTo); it is emptied before each write here so the order holds.
+(define (out-stream-data-count self)
+  (let ((st (jhost-state self)))
+    (and (fx>? (vector-length st) 6) (vector-ref st 6))))
+(define (data-out-stream? x)
+  (and (out-stream? x) (out-stream-data-count x) #t))
+(define (data-out-count! self n)
+  (let ((c (out-stream-data-count self)))
+    (set-box! c (min 2147483647 (+ (unbox c) n)))))
+(define (data-out-inner self sig)
+  (let ((inner (out-stream-filter-inner self)))
+    (if (jolt-nil? inner)
+        (throw-jvm 'NullPointerException
+                   (string-append "Cannot invoke \"java.io.OutputStream." sig
+                                  "\" because \"this.out\" is null"))
+        inner)))
+(define (data-out-call! self args)
+  (data-out-inner self (if (null? (cdr args)) "write(int)" "write(byte[], int, int)"))
+  (let ((port (out-stream-port self)))
+    (unless (port-closed? port) (flush-output-port port))
+    (record-method-dispatch (out-stream-filter-inner self) "write" (list->cseq args))))
+(define (data-out-emit! self bv)
+  (data-out-call! self (list (na-bv->bytearray bv) (->num 0) (->num (bytevector-length bv))))
+  (data-out-count! self (bytevector-length bv)))
+(define (data-out-emit1! self b)
+  (data-out-call! self (list (->num b)))
+  (data-out-count! self 1))
+;; write(int) | write(byte[]) | write(byte[],off,len), as FilterOutputStream and
+;; DataOutputStream route them
+(define (data-out-write! self x rest)
+  (when (jolt-nil? x) (raf-null-array!))
+  ;; a jolt stream underneath refuses a range outside the array as the JDK's
+  ;; ByteArrayOutputStream does; any other stream is handed the arguments as given
+  (when (and (jolt-array? x) (pair? rest) (out-stream? (out-stream-filter-inner self)))
+    (data-array-check! x (jnum->exact (car rest)) (jnum->exact (cadr rest))))
+  (cond
+    ((number? x) (data-out-emit1! self x))
+    ((and (jolt-array? x) (eq? (jolt-array-kind x) 'byte))
+     (if (pair? rest)
+         (let ((len (jnum->exact (cadr rest))))
+           (data-out-call! self (list x (car rest) (cadr rest)))
+           (data-out-count! self len))
+         (let ((len (ja-len x)))
+           (data-out-call! self (list x (->num 0) (->num len)))
+           (data-out-count! self len))))
+    (else (throw-jvm (quote IllegalArgumentException) "OutputStream/write: unsupported argument")))
+  jolt-nil)
+;; FilterOutputStream.close: flush, and close the wrapped stream whether or not
+;; the flush failed, once only. The flush failure is rethrown after.
+(define (data-out-close! self)
+  (let ((st (jhost-state self)))
+    (unless (vector-ref st 7)
+      (vector-set! st 7 #t)
+      (let* ((inner (out-stream-filter-inner self)) (failed #f))
+        (guard (e (#t (set! failed (list e))))
+          (let ((port (out-stream-port self)))
+            (unless (port-closed? port) (flush-output-port port)))
+          (record-method-dispatch (data-out-inner self "flush()") "flush" jolt-nil))
+        (record-method-dispatch (data-out-inner self "close()") "close" jolt-nil)
+        (when failed (raise (car failed)))))
+    jolt-nil))
+(define (make-data-out-stream inner)
+  (when (writer-jhost? inner)
+    (throw-jvm (quote IllegalArgumentException)
+               "DataOutputStream wraps an OutputStream, not a Writer (it takes characters)"))
+  (stream-classed!
+    (make-jhost "out-stream"
+                (vector (out-stream-sink-port inner) #f #f #f #f inner (box 0) #f))
+    "java.io.DataOutputStream"))
+(reg-ctor! '("DataOutputStream" "java.io.DataOutputStream") make-data-out-stream)
+(register-host-methods! "out-stream"
+  (data-output-members data-out-emit! data-out-emit1! data-out-stream?))
+(wrap-host-method! "out-stream" "write"
+  (lambda (old)
+    (lambda (self x . rest)
+      (if (data-out-stream? self)
+          (data-out-write! self x rest)
+          (apply old self x rest)))))
+(wrap-host-method! "out-stream" "close"
+  (lambda (old)
+    (lambda (self)
+      (if (data-out-stream? self)
+          (data-out-close! self)
+          (old self)))))
+(wrap-host-method! "out-stream" "flush"
+  (lambda (old)
+    (lambda (self)
+      (when (data-out-stream? self) (data-out-inner self "flush()"))
+      (old self))))
+
 ;; --- java.io.RandomAccessFile -------------------------------------------------
 ;; state #(port writable?). One Chez file port serves both directions: "r" opens
 ;; an input port, "rw" (and "rws"/"rwd", which differ only in how eagerly the JDK
@@ -1595,7 +2278,19 @@
     (port-length port)))
 
 (hashtable-set! jhost-tag->fqn "random-access-file" "java.io.RandomAccessFile")
+(define (raf-data-emit! self bv)
+  (let ((port (raf-writable-port self)))
+    (put-bytevector port bv)
+    (flush-output-port port)))
+(define (raf-data-emit1! self b)
+  (let ((port (raf-writable-port self)))
+    (put-u8 port (bitwise-and b #xff))
+    (flush-output-port port)))
+(define raf-ops (data-ops-port raf-port))
 (register-host-methods! "random-access-file"
+  (append
+   (data-input-members (lambda (self) raf-ops) (lambda (self) #t))
+   (data-output-members raf-data-emit! raf-data-emit1! (lambda (self) #t))
   (list
    (cons "read"
          (lambda (self . args)
@@ -1652,8 +2347,8 @@
          (lambda (self)
            (let ((p (vector-ref (jhost-state self) 0)))
              (unless (port-closed? p) (close-port p)))
-           jolt-nil))))
-(jch-register-supers! "java.io.RandomAccessFile" '("java.io.Closeable"))
+           jolt-nil)))))
+(jch-register-supers! "java.io.RandomAccessFile" '("java.io.Closeable" "java.io.DataInput" "java.io.DataOutput"))
 (reg-ctor! '("RandomAccessFile" "java.io.RandomAccessFile")
   (lambda args
     (unless (= (length args) 2)
@@ -1950,6 +2645,73 @@
       (if (in-stream? v)
           (stdin-line-from-port v (in-stream-port v))
           (stdin-line-from-stream v)))))
+
+;; The characters of System/in that have already arrived, for a .read of *in*:
+;; the first one waits as a read does, then the rest come while the port says
+;; more is there without blocking. nil at end of input. It stops after the first
+;; line end, as __stdin-read-line does, so it never takes bytes past the line it
+;; is in and (.read System/in) after it still answers the next byte. A line end
+;; comes back as \n: \r\n and a lone \r are \n here, which is what the line
+;; seam hands *in* too, and a \r leaves stdin-pending-lf owed the same way.
+;; A character split across reads is finished before returning, so the decode
+;; never sees half of one. A stream System/setIn was handed reads one character,
+;; since it has no way to say more is there.
+(define stdin-chunk-cap 8192)
+(define (utf8-lead-len b)
+  (cond ((fx<? b #x80) 1)
+        ((fx=? (fxand b #xe0) #xc0) 2)
+        ((fx=? (fxand b #xf0) #xe0) 3)
+        ((fx=? (fxand b #xf8) #xf0) 4)
+        (else 1)))
+(define (stdin-chunk v get ready? crlf!)
+  (let ((buf (make-bytevector stdin-chunk-cap)))
+    (let loop ((b (stdin-first-byte v get)) (i 0) (need 0))
+      (cond
+        ((eof-object? b) (if (fx=? i 0) jolt-nil (stdin-line-string buf i)))
+        ((and (fx=? need 0) (or (fx=? b 10) (fx=? b 13)))
+         (when (fx=? b 13) (crlf!))
+         (bytevector-u8-set! buf i 10)
+         (stdin-line-string buf (fx+ i 1)))
+        (else
+          (bytevector-u8-set! buf i b)
+          (let ((i (fx+ i 1))
+                (need (if (fx>? need 0) (fx- need 1) (fx- (utf8-lead-len b) 1))))
+            (if (or (fx>? need 0)
+                    (and (fx<? i (fx- stdin-chunk-cap 4)) (ready?)))
+                (loop (get) i need)
+                (stdin-line-string buf i))))))))
+(def-var! "clojure.core" "__stdin-read-chunk"
+  (lambda ()
+    (let ((v (vector-ref stdin-cell 0)))
+      (if (in-stream? v)
+          (let ((port (in-stream-port v)))
+            (jolt-stdin-wait-ready! port)
+            (stdin-chunk v (lambda () (get-u8 port))
+                         (lambda () (and (unbox jolt-stdin-poll-ok)
+                                         (eq? (unbox jolt-stdin-poll-port) port)
+                                         (input-port-ready? port)))
+                         (lambda () (stdin-take-crlf! v port))))
+          (stdin-chunk v (lambda () (stream-read-byte v))
+                       (lambda () #f)
+                       (lambda () (set-box! stdin-pending-lf v)))))))
+
+;; Whether System/in has input a read would take without waiting: what .ready
+;; on *in* answers once *in*'s own buffer is empty. A stream System/setIn was
+;; handed, or a port that cannot say, answers false, as a Reader may.
+(def-var! "clojure.core" "__stdin-ready?"
+  (lambda ()
+    (let ((v (vector-ref stdin-cell 0)))
+      (and (in-stream? v)
+           (let ((port (in-stream-port v)))
+             ;; input-port-ready? is #t at end of input too; the JVM's ready
+             ;; goes through available(), which is 0 there, and a loop draining
+             ;; while .ready would never end. The lookahead cannot block once
+             ;; the port is ready.
+             (guard (_ (#t #f))
+               (and (input-port-ready? port)
+                    (not (eof-object? (if (binary-port? port)
+                                          (lookahead-u8 port)
+                                          (lookahead-char port)))))))))))
 
 ;; --- System/console: java.io.Console ------------------------------------------
 ;; The JVM hands out a Console only when standard input AND standard output are
@@ -2738,7 +3500,7 @@
 ;; tag. The io fns dispatch on the source themselves, so each calls this only
 ;; where it would otherwise raise "Cannot open". The impl takes OPTS as a map.
 (define (jio-extension x method)
-  (or (and (jrec? x) (find-protocol-method (jrdesc-tag (jrec-desc x)) "IOFactory" method))
+  (or (and (jrec? x) (find-protocol-method (jrec-rtag x) "IOFactory" method))
       (let loop ((tags (value-host-tags x)))
         (cond ((null? tags) #f)
               ((find-protocol-method (car tags) "IOFactory" method))
@@ -3174,36 +3936,463 @@
                                                  "Closeable" "AutoCloseable" "Flushable" "Appendable"))) #t)
         (else 'pass))))))
 
-;; --- pr / pr-str honor a user (defmethod print-method T …) -------------------
-;; On the JVM print-method IS the printer, so installing one changes what pr
-;; emits for that type. Here the printer is a list of native arms, and this hook
-;; (printing.ss consults it before that list) restores the JVM's precedence: a
-;; record renders through its method instead of the default #ns.Name{…} form, and
-;; a host class renders through its method instead of the arm the library that
-;; provided the class registered — for instance ring's session store, which
-;; round-trips a java.time.Instant through a custom print-method and edn reader.
+;; --- printing straight to a Writer ---------------------------------------------
+;; The streaming printer (printing.ss pr-to!) writes to a Chez textual port. A
+;; Writer whose text lands in a port is printed into that port directly: *out*
+;; and the other port-writers, and a char-writer (io/writer, FileWriter,
+;; OutputStreamWriter, BufferedWriter). Any other Writer -- a StringWriter, a
+;; proxy or reify, a PrintWriter shim -- gets a port of its own whose blocks go to
+;; the Writer's write method, so a proxy java.io.Writer sees the output through
+;; its own methods. A pending surrogate half (sink-text) keeps the plain write
+;; path, which knows how to pair it.
 ;;
-;; Two dispatch values are tried: the type tag the multimethod dispatches on
-;; itself (a record's class name, or the :jolt/… tag of a built-in), then the
-;; value's class, since a method written for a host type names the class —
-;; (defmethod print-method java.time.Instant …) — and jolt's tag for one of those
-;; is the catch-all :object.
+;; While a print is under way, pr-sink holds (port . writer): a user print-method
+;; reached mid-stream is handed that Writer, as on the JVM, with the port flushed
+;; first when the port is the Writer's own buffer, so its writes land in order.
+(define pr-sink (make-thread-parameter #f))
+(define (writer-direct-port w)
+  (and (jhost? w) (fx=? sink-pending-live 0)
+       (let ((tag (jhost-tag w)))
+         (cond ((string=? tag "port-writer") (port-writer-port w))
+               ((string=? tag "char-writer") (char-writer-live-port w))
+               (else #f)))))
+(define (writer-block-port w)
+  (parameterize ((custom-port-buffer-size 4096))
+   (make-custom-textual-output-port "print-method"
+    (lambda (s start count)
+      (record-method-dispatch w "write" (jolt-list (substring s start (fx+ start count))))
+      count)
+    #f #f #f)))
+;; *print-dup*, read by the print entries below and in the section further on
+(define pd-flag-cell (jolt-var "clojure.core" "*print-dup*"))
+(define (print-dup-on?) (jolt-truthy? (var-cell-deref pd-flag-cell)))
+;; Neither under *print-dup* nor inside a print that was: the plain print entries
+;; test this and nothing else. While nothing has ever bound the var and its root
+;; is false, no print can have set the thread's print-dup slot either, so the
+;; usual answer is two field reads.
+(define-syntax print-plain?
+  (syntax-rules ()
+    ((_) (if (or (var-cell-dyn-bound? pd-flag-cell)
+                 (jolt-truthy? (var-cell-root pd-flag-cell)))
+             (and (not (eq? (virtual-register jolt-vreg-print-dup) #t))
+                  (not (print-dup-on?)))
+             #t))))
+;; Print x to the Writer w with print (a procedure of port and value). Every
+;; built-in print-method writes through here, so this is where a print under
+;; *print-dup* starts sending elements to print-dup, and where one that binds it
+;; off again stops.
+(define (print-to-writer print w x)
+  (if (print-plain?)
+      (print-to-writer* print w x)
+      (with-print-dup-mode (print-dup-on?) (print-to-writer* print w x))))
+(define (print-to-writer* print w x)
+  (let ((direct (writer-direct-port w)))
+    (if direct
+        (parameterize ((pr-sink (cons direct w))) (print direct x))
+        (let ((p (writer-block-port w)))
+          (parameterize ((pr-sink (cons p w)))
+            (print p x)
+            (flush-output-port p))))))
+;; The Writer a user print-method is handed while printing into port p.
+(define (pr-sink-writer p)
+  (let ((s (pr-sink)))
+    (if (and s (eq? (car s) p))
+        (begin (unless (writer-direct-port (cdr s)) (flush-output-port p)) (cdr s))
+        (make-char-writer p))))
+
+;; pr and print of one value to *out*, and print-method's :default to a Writer,
+;; printing into the Writer as they go. A scalar is one small string, written as
+;; before. So is anything while *out* is clojure.pprint's pretty writer
+;; (jolt-write offers it each string, column-aware), or while a surrogate half
+;; waits to be paired.
+(define pr-out-cell #f)
+(define (pr-out-writer)
+  (unless pr-out-cell (set! pr-out-cell (jolt-var "clojure.core" "*out*")))
+  (var-cell-deref pr-out-cell))
+(define (stream-out write! x)
+  (and (not (pr-fast-type? x))
+       ;; the hook routes text only while *out* is a pretty writer, and says
+       ;; so: an empty string tells which, writing nothing
+       (or (jolt-nil? jolt-pprint-write-hook) (jolt-pprint-hook-suppressed)
+           (not (jolt-truthy? (jolt-invoke jolt-pprint-write-hook ""))))
+       (fx=? sink-pending-live 0)
+       (let ((w (pr-out-writer)))
+         (if (or (iface-method w "write" #f) (and (jhost? w) (not (out-port-writer? w))))
+             (print-to-writer write! w x)
+             (let ((p (current-output-port)))
+               (parameterize ((pr-sink (cons p w))) (write! p x))))
+         #t)))
+;; print: pr with *print-readably* off, as converters.ss jolt-print-one sets it
+(define (print-to! p x)
+  (let ((prev (virtual-register jolt-vreg-print-readably)) (lv (jolt-locks-held)))
+    (jolt-locks-enter!)
+    (dynamic-wind
+      (lambda () (set-virtual-register! jolt-vreg-print-readably #f))
+      (jolt-masked-body (lambda () (pr-to! p x)))
+      (jolt-masked-after lv (set-virtual-register! jolt-vreg-print-readably prev)))))
+;; --- *print-dup* -------------------------------------------------------------
+;; With *print-dup* on, pr, print, pr-str and a collection's str hand each value to
+;; the print-dup multimethod (50-io.clj), as the JVM's pr-on does; its methods
+;; that defer to print-method reach the built-in printer, which sends the
+;; elements back (printing.ss pr-to! while the thread's print-dup slot is set).
+;; Reading the var is one flag test until something binds it.
+(define pd-mf-cell #f)
+(define (pr-dup-to! p x)
+  (unless pd-mf-cell (set! pd-mf-cell (jolt-var "clojure.core" "print-dup")))
+  (jolt-invoke (var-cell-deref pd-mf-cell) x (pr-sink-writer p)))
+(set-pr-dup-write! (lambda (x p) (pr-dup-to! p x)))
+(define (pr-dup-string x)
+  (let ((p (open-output-string)))
+    (with-print-dup-mode #t (pr-dup-to! p x))
+    (get-output-string p)))
+;; pr's write of one value under *print-dup*; print's is the same, strings and
+;; chars printing readably under print-dup either way
+(define (pr-dup-out x)
+  (with-print-dup-mode #t
+    (unless (stream-out pr-dup-to! x) (jolt-write (pr-dup-string x)))))
+
+(define (pr-out-entry x)
+  (cond ((print-plain?) (unless (stream-out pr-to! x) (jolt-write (jolt-pr-str1 x))))
+        ((print-dup-on?) (pr-dup-out x))
+        (else (with-print-dup-mode #f
+                (unless (stream-out pr-to! x) (jolt-write (jolt-pr-str1 x))))))
+  jolt-nil)
+(define (print-out-entry x)
+  (cond ((print-plain?) (unless (stream-out print-to! x) (jolt-write (jolt-print-one x))))
+        ((print-dup-on?) (pr-dup-out x))
+        (else (with-print-dup-mode #f
+                (unless (stream-out print-to! x) (jolt-write (jolt-print-one x))))))
+  jolt-nil)
+(define (pr-str1-entry x)
+  (cond ((print-plain?) (jolt-pr-str1 x))
+        ((print-dup-on?) (pr-dup-string x))
+        (else (with-print-dup-mode #f (jolt-pr-str1 x)))))
+(def-var! "clojure.core" "__pr-out" pr-out-entry)
+(def-var! "clojure.core" "__print-out" print-out-entry)
+(def-var! "clojure.core" "__pr-str1" pr-str1-entry)
+;; print-method's :default prints x itself; its elements follow *print-dup*
+(def-var! "clojure.core" "__pr-to"
+  (lambda (x w) (print-to-writer pr-plain-to! w x) jolt-nil))
+;; A collection's toString is RT.printString, which prints through pr-on, so str
+;; of one under *print-dup* is its print-dup form (converters.ss jolt-str-one).
+(set-str-coll-render!
+  (lambda (v)
+    (cond ((print-plain?) (jolt-pr-readable v))
+          ((print-dup-on?) (pr-dup-string v))
+          (else (with-print-dup-mode #f (jolt-pr-readable v))))))
+
+;; --- print-method: the built-in printers and the user-method hook ----------------
+;; On the JVM print-method IS the printer: a multimethod on (type x) whose table
+;; holds a method for clojure.lang.IPersistentMap, ISeq, String, Number, Object
+;; and so on, resolved through isa? over the class hierarchy and prefer-method.
+;; Here the printer is native (printing.ss), and this section keeps the two
+;; views in step.
 ;;
-;; Only a DIRECT method counts — the multimethod's :default falls back to
-;; __pr-str1, which returns here, so a full resolve would recurse forever.
+;; The built-in methods. print-method's table carries one for each class key the
+;; JVM's does, with its prefer-method pairs, so (methods print-method) and
+;; get-method answer what they answer there. Libraries borrow them -- duratom
+;; prints its tag and then calls (get (methods print-method) IPersistentMap) on
+;; the map. Each is the printer for its type, writing to the Writer it is
+;; handed as it walks the value (printing.ss pr-builtin-to!: *print-meta*, then
+;; jolt's own rendering, with the elements going back through pr), except the nil
+;; method, which writes "nil" whatever it is handed, as the JVM's does.
+(define pm-builtin-class-names
+  '("clojure.core.Eduction" "clojure.lang.BigInt" "clojure.lang.IDeref" "clojure.lang.IPersistentMap"
+    "clojure.lang.IPersistentSet" "clojure.lang.IPersistentVector" "clojure.lang.IRecord"
+    "clojure.lang.ISeq" "clojure.lang.Keyword" "clojure.lang.ReaderConditional"
+    "clojure.lang.Symbol" "clojure.lang.TaggedLiteral" "clojure.lang.Var"
+    "java.lang.Boolean" "java.lang.Character" "java.lang.Class" "java.lang.Double"
+    "java.lang.Float" "java.lang.Number" "java.lang.Object" "java.lang.StackTraceElement"
+    "java.lang.String" "java.lang.Throwable" "java.math.BigDecimal" "java.sql.Timestamp"
+    "java.util.Calendar" "java.util.Date" "java.util.List" "java.util.Map"
+    "java.util.RandomAccess" "java.util.Set" "java.util.UUID" "java.util.regex.Pattern"))
+;; core_print.clj's prefer-method calls: preferred -> the keys it is preferred over
+(define pm-builtin-prefers
+  '(("clojure.lang.ISeq" "clojure.lang.IPersistentCollection" "java.util.Collection")
+    ("clojure.lang.IPersistentCollection" "java.util.Collection" "java.util.RandomAccess" "java.util.Map")
+    ("java.util.RandomAccess" "java.util.List")
+    ("clojure.lang.IRecord" "java.util.Map" "clojure.lang.IPersistentMap")))
+;; The built-in method fns, by identity. A user method replaces one under its key
+;; (and is honored, as on the JVM); re-installing a saved built-in restores it.
+(define pm-builtins (make-weak-eq-hashtable))
+(define (pm-builtin? m) (hashtable-contains? pm-builtins m))
+;; The keys whose method prints in its own shape (printing.ss pr-shape-to!), with
+;; gvec.clj's two, which call IPersistentVector's and ISeq's. The java.util ones
+;; write that shape only under *print-readably*; under print they write the
+;; #object form, as core_print.clj's print-object does.
+(define pm-builtin-shapes
+  '(("clojure.lang.IPersistentVector" vec) ("clojure.lang.ISeq" seq)
+    ("clojure.lang.IPersistentMap" map) ("clojure.lang.IPersistentSet" set)
+    ("java.util.RandomAccess" vec java) ("java.util.List" seq java)
+    ("java.util.Map" map java) ("java.util.Set" set java)))
+(define (pm-builtin-shape key)
+  (cond ((jclass? key)
+         (let ((row (assoc (jclass-name key) pm-builtin-shapes)))
+           (and row (cdr row))))
+        ((equal? key (keyword "clojure.core" "Vec")) '(vec))
+        ((equal? key (keyword "clojure.core" "VecSeq")) '(seq))
+        (else #f)))
+;; core_print.clj's print-object, as the java.util methods write a value under
+;; print: #object[Class 0xhash toString], where a Clojure collection's toString
+;; is its print form. (Its metadata would print first only readably.)
+(define (pm-print-object-to! p x)
+  (put-string p "#object[")
+  (put-string p (jolt-class-name x))
+  (put-string p " 0x")
+  (put-string p (jolt-identity-hex x))
+  (put-string p " ")
+  (pr-own-to! p x)
+  (put-string p "]"))
+(define (make-pm-builtin key)
+  (let* ((shape (pm-builtin-shape key))
+         (f (cond
+              ((jolt-nil? key)
+               (lambda (x w) (record-method-dispatch w "write" (jolt-list "nil")) jolt-nil))
+              ((not shape)
+               (lambda (x w) (print-to-writer pr-builtin-to! w x) jolt-nil))
+              ((null? (cdr shape))
+               (let ((s (car shape)))
+                 (lambda (x w) (print-to-writer (lambda (p x) (pr-shape-to! s p x)) w x) jolt-nil)))
+              (else
+               (let ((s (car shape)))
+                 (lambda (x w)
+                   (print-to-writer
+                     (lambda (p x)
+                       (if (jolt-pr-readable?)
+                           (pr-shape-to! s p x)
+                           (pm-print-object-to! p x)))
+                     w x)
+                   jolt-nil))))))
+    (hashtable-set! pm-builtins f #t)
+    f))
+;; clojure.core.Eduction: the JVM's print-method writes the seq it yields under
+;; pr, the elements as print-sequential writes them (the seq itself is not
+;; dispatched on), and Object's #object form under print.
+(define (eduction-value? x) (and (jrec? x) (equal? (jrec-tag x) "clojure.core.Eduction")))
+(define (eduction-write! p x)
+  (if (jolt-pr-readable?)
+      (let ((s (jolt-seq x)))
+        (cond ((jolt-nil? s) (pr-base-to! p jolt-empty-list))
+              ((cseq? s) (pr-base-to! p s))
+              (else (pr-own-to! p s))))
+      (put-string p (jolt-object-repr x #t))))
+;; Registered here, after records-coll.ss's deftype arm, which it refines.
+(register-pr-readable-arm! eduction-value? (lambda (x) (pr-to-string eduction-write! x)))
+(register-pr-stream-arm! eduction-value? eduction-write!)
+
+(register-multifn-seed! "clojure.core" "print-method"
+  (lambda (mf)
+    (let ((methods (jolt-multifn-methods mf))
+          (prefers (jolt-multifn-prefers mf))
+          ;; and gvec.clj's two, which print as a vector and as a seq
+          (keys (cons* jolt-nil (keyword "clojure.core" "Vec") (keyword "clojure.core" "VecSeq")
+                       (map jolt-class-for pm-builtin-class-names))))
+      ;; everything that allocates, interns a class (a lock of its own) or
+      ;; registers a built-in is done first; the lock covers the table stores
+      (let ((entries (map (lambda (k) (cons k (make-pm-builtin k))) keys))
+            (prefs (map (lambda (row) (map jolt-class-for row)) pm-builtin-prefers))
+            (subs (map (lambda (row) (new-mm-table)) pm-builtin-prefers)))
+        (jolt-with-mutex mm-tbl-mu
+          (for-each (lambda (e) (hashtable-set! methods (car e) (cdr e))) entries)
+          (for-each
+            (lambda (row fresh)
+              (let ((sub (or (hashtable-ref prefers (car row) #f)
+                             (begin (hashtable-set! prefers (car row) fresh) fresh))))
+                (for-each (lambda (b) (hashtable-set! sub b #t)) (cdr row))))
+            prefs subs)
+          (mm-epoch-bump!))))))
+
+;; The hook. printing.ss consults it before its native arms, so a user method IS
+;; the printer for its type: it fires from pr/prn/pr-str and nested inside
+;; collections, and a record or host class renders through it instead of the
+;; arm the library that provided the class registered -- ring's session store,
+;; for one, round-trips a java.time.Instant through a custom print-method.
 ;;
-;; jolt's own print-method entries are all keyed by type tag, so resolving a
-;; class per printed value would be dead weight until a library installs a
-;; class-keyed method. Whether any exists is settled once per multimethod epoch.
-(define pm-class-keys-epoch -1)
-(define pm-has-class-keys? #f)
-(define (pm-class-keys? tbl)
-  (unless (fx= pm-class-keys-epoch jolt-mm-epoch)
-    (set! pm-class-keys-epoch jolt-mm-epoch)
-    (set! pm-has-class-keys?
-          (let loop ((ks (vector->list (hashtable-keys tbl))))
-            (and (pair? ks) (or (jclass? (car ks)) (loop (cdr ks)))))))
-  pm-has-class-keys?)
+;; Two lookups. First the type tag the multimethod dispatches on (a record's
+;; class name, or the :jolt/... tag of a built-in). Then the value's class,
+;; resolved the way the JVM resolves print-method: a direct key, else every key
+;; the class isa? (supers, and keywords it was derived from), the dominant one by
+;; isa? and prefer-method, and an ambiguity raises as there. So a method on
+;; IPersistentMap prints sorted maps but not records (IRecord is preferred), and
+;; one on IPersistentCollection reaches a queue but not a vector
+;; (IPersistentVector is more specific). A built-in answer means jolt's native
+;; printer, which is what keeps ordinary printing on the fast path; only a user's
+;; method is handed back. :default is never consulted -- it falls back to
+;; __pr-str1, which returns here.
+;;
+;; The class lookup has to stay off the cost of printing. Resolving a class per
+;; printed value -- its name, a class token, a scan of the table -- printed a
+;; vector of 200k longs 3x slower once any class-keyed method existed. So:
+;;  - The answer is memoized by class name, per generation of everything it
+;;    depends on: the multimethod epoch (defmethod/prefer-method), the hierarchy
+;;    value (derive), and the class graph's epoch (a library grafting supers).
+;;  - With no user method a class can reach (no non-built-in class key, and no
+;;    class derived from anything in the hierarchy), nothing is resolved at all.
+;;  - The runtime's own values -- numbers, strings, keywords, symbols, chars,
+;;    booleans, vectors, hash maps, hash sets and seqs -- have a fixed set of
+;;    classes each (host-class.ss jolt-class-base; class-fast-name answers for
+;;    exactly these). Per generation each such kind is decided once, by resolving
+;;    all its classes; a kind no user method reaches skips the class lookup
+;;    entirely, so a UUID printer costs a 10k-entry map of keywords and vectors
+;;    one predicate chain and a vector-ref per value.
+;;
+;; The tag lookup does not probe the method table itself either: with the
+;; built-ins' class keys in it, a keyword tag colliding with a class token in a
+;; bucket paid jolt='s arm walk, and printing ran 3-4x slower. It probes a copy
+;; of the table's user entries taken per generation, leaving out the built-ins,
+;; :default and every class key: a class key is the class lookup's to find, and
+;; a tag only names a class when :type metadata says so, which is checked apart.
+;;
+;; The state is one immutable vector published whole, so a reader never pairs a
+;; new generation with an old answer:
+;;   #(mm-epoch methods-table hierarchy graph-epoch user-keys? names kinds direct
+;;     answers)
+;; direct is that copy of the user entries. names maps a class name to the user
+;; method or #f; a miss copies the table and publishes the copy, so a reader never
+;; sees a table another thread is resizing. kinds holds per kind whether a user
+;; method reaches one of its classes: 'unknown, #t (resolve per value) or #f.
+;;
+;; answers settles a value of a runtime kind whole, tag and class together. A
+;; value of one of those kinds with no metadata has a fixed tag (pm-kind-tags; a
+;; map's is its :jolt/type entry when it has one, checked per map), so per
+;; generation each kind is answered once: the tag's user method, else #t when
+;; its class lookup is live, else #f. Such a value then costs the kind test, a
+;; metadata read and a vector-ref -- no jolt-type, whose arm walk and base cond
+;; were most of what a single tag-keyed method added to printing a map of
+;; vectors. A value with metadata (:type can name anything) takes the full path.
+;; Filling a slot in kinds or answers is idempotent, so two threads deciding one
+;; kind write one answer.
+(define pm-kind-classes
+  (vector
+    '("java.lang.Double" "java.lang.Long" "clojure.lang.BigInt" "clojure.lang.Ratio" "java.lang.Number")
+    '("java.lang.String")
+    '("clojure.lang.Keyword")
+    '("clojure.lang.Symbol")
+    '("java.lang.Character")
+    '("java.lang.Boolean")
+    '("clojure.lang.MapEntry" "clojure.lang.APersistentVector$SubVector" "clojure.lang.PersistentVector")
+    '("clojure.lang.PersistentArrayMap" "clojure.lang.PersistentHashMap")
+    '("clojure.lang.PersistentHashSet")
+    (cons* "clojure.lang.LazySeq" "clojure.lang.PersistentList$EmptyList"
+           (vector->list seq-kind-class-v))))
+(define (pm-kind x)
+  (cond ((number? x) 0) ((string? x) 1) ((keyword? x) 2) ((symbol-t? x) 3)
+        ((char? x) 4) ((boolean? x) 5) ((pvec? x) 6) ((pmap? x) 7) ((pset? x) 8)
+        ((or (cseq? x) (empty-list-t? x) (jolt-lazyseq? x)) 9)
+        (else #f)))
+(define pm-kind-tags
+  (vector (keyword #f "number") (keyword #f "string") (keyword #f "keyword")
+          (keyword #f "symbol") (keyword #f "char") (keyword #f "boolean")
+          (keyword #f "vector") (keyword #f "map") (keyword #f "set") (keyword #f "seq")))
+(define pm-state (vector -1 #f #f -1 #f #f #f #f #f))
+(define pm-hier-cell #f)
+(define (pm-hierarchy mf)
+  (let ((h (jolt-multifn-hierarchy mf)))
+    (if h
+        (mm-hierarchy-value h)
+        ;; the global one is an atom in a var nothing binds: its root, then the
+        ;; atom's value, two field reads on every printed value
+        (begin
+          (unless pm-hier-cell (set! pm-hier-cell (jolt-var "clojure.core" "global-hierarchy")))
+          (let ((a (var-cell-root pm-hier-cell)))
+            (if (jolt-atom? a) (jolt-atom-val a) (mm-hierarchy-value a)))))))
+;; Does the hierarchy derive any class from anything? A keyword key reaches a
+;; class only through such a derivation.
+(define (pm-hier-derives-class? hier)
+  (let ((ps (if (pmap? hier) (jolt-get hier (keyword #f "parents") jolt-nil) hier)))
+    (if (pmap? ps)
+        (pmap-fold ps (lambda (k v a) (or a (jclass? k))) #f)
+        #t)))
+(define (pm-user-entries mf tbl)
+  (let-values (((ks vs) (jolt-with-mutex mm-tbl-mu (hashtable-entries tbl))))
+    (let ((direct (new-mm-table))
+          (default (jolt-multifn-default mf)))
+      (let loop ((i 0) (class-keys? #f))
+        (if (fx< i (vector-length ks))
+            (let ((k (vector-ref ks i)) (m (vector-ref vs i)))
+              (cond ((or (pm-builtin? m) (jolt= k default)) (loop (fx+ i 1) class-keys?))
+                    ((jclass? k) (loop (fx+ i 1) #t))
+                    (else (hashtable-set! direct k m) (loop (fx+ i 1) class-keys?))))
+            (values class-keys? direct))))))
+(define (pm-current-state mf tbl)
+  (let* ((st pm-state)
+         (e (let ((e jolt-mm-epoch)) (memory-order-acquire) e))
+         (hier (pm-hierarchy mf))
+         (g jch-graph-epoch))
+    (if (and (fx= (vector-ref st 0) e) (eq? (vector-ref st 1) tbl)
+             (eq? (vector-ref st 2) hier) (fx= (vector-ref st 3) g))
+        st
+        (let-values (((class-keys? direct) (pm-user-entries mf tbl)))
+          (let ((st2 (vector e tbl hier g (or class-keys? (pm-hier-derives-class? hier))
+                             (make-hashtable string-hash string=?)
+                             (make-vector (vector-length pm-kind-classes) 'unknown)
+                             direct
+                             (make-vector (vector-length pm-kind-classes) 'unknown))))
+            (memory-order-release)
+            (set! pm-state st2)
+            st2)))))
+;; the method print-method resolves for the class named cname, built-in or not;
+;; #f when none, and an ambiguity raises as dispatch does
+(define (pm-resolve-class mf tbl cname)
+  (let ((c (jolt-class-for cname)))
+    (or (hashtable-ref tbl c #f) (mm-find-isa mf c))))
+(define (pm-user-answer m) (and m (not (pm-builtin? m)) m))
+(define (pm-kind-live? mf tbl st k)
+  (let* ((kinds (vector-ref st 6))
+         (v (vector-ref kinds k)))
+    (if (eq? v 'unknown)
+        (let ((live (let loop ((cs (vector-ref pm-kind-classes k)))
+                      (and (pair? cs)
+                           (or (guard (e (#t #t))   ; ambiguous: let the value's own lookup raise
+                                 (and (pm-user-answer (pm-resolve-class mf tbl (car cs))) #t))
+                               (loop (cdr cs)))))))
+          (vector-set! kinds k live)
+          live)
+        v)))
+;; the answer for a value of kind k that carries no metadata: its tag's user
+;; method, #t to resolve its class, or #f when no user method reaches it
+(define (pm-kind-answer mf tbl st k)
+  (let* ((answers (vector-ref st 8))
+         (v (vector-ref answers k)))
+    (if (eq? v 'unknown)
+        (let ((a (or (hashtable-ref (vector-ref st 7) (vector-ref pm-kind-tags k) #f)
+                     (and (vector-ref st 4) (pm-kind-live? mf tbl st k)))))
+          (vector-set! answers k a)
+          a)
+        v)))
+;; does x, of kind k, print by its kind's fixed tag? Numbers, strings, keywords,
+;; chars and booleans hold no metadata; the rest must have none, and a map no
+;; :jolt/type entry while some tag key could match one.
+(define-syntax pm-plain?
+  (syntax-rules ()
+    ((_ k* x* direct*)
+     (let ((k k*) (x x*))
+       (or (fx<? k 3) (fx=? k 4) (fx=? k 5)
+           (and (jolt-nil? (jolt-meta x))
+                (or (not (fx=? k 7))
+                    (fx=? 0 (hashtable-size direct*))
+                    (jolt-nil? (jolt-get x pm-jtype-kw jolt-nil)))))))))
+(define pm-jtype-kw (keyword "jolt" "type"))
+(define (pm-class-method mf tbl st x)
+  (and (vector-ref st 4)
+       (let ((k (pm-kind x)))
+         (and (or (not k) (pm-kind-live? mf tbl st k))
+              (let ((c (jolt-class-name x)))
+                (and (string? c)
+                     (let* ((names (vector-ref st 5))
+                            (hit (hashtable-ref names c 'miss)))
+                       (if (eq? hit 'miss)
+                           (let ((m (pm-user-answer (pm-resolve-class mf tbl c)))
+                                 (names2 (hashtable-copy names #t)))
+                             (hashtable-set! names2 c m)
+                             (memory-order-release)
+                             ;; only over the state this read: a newer generation wins
+                             (when (eq? pm-state st)
+                               (let ((st2 (vector-copy st)))
+                                 (vector-set! st2 5 names2)
+                                 (set! pm-state st2)))
+                             m)
+                           hit))))))))
 
 ;; Resolved once: var-deref rebuilds "clojure.core/print-method" and hashes it on
 ;; every call, which this pays per printed value. The cell is stable — def-var!
@@ -3213,12 +4402,25 @@
   (unless pm-cell (set! pm-cell (jolt-var "clojure.core" "print-method")))
   (let ((mf (var-cell-deref pm-cell)))
     (and (jolt-multifn? mf)
-         (let ((tbl (jolt-multifn-methods mf)))
-           (or (hashtable-ref tbl (jolt-type x) #f)
-               (and (pm-class-keys? tbl)
-                    (let ((c (jolt-class-name x)))
-                      (and (string? c)
-                           (hashtable-ref tbl (jolt-class-for c) #f)))))))))
+         (let* ((tbl (jolt-multifn-methods mf))
+                (st (pm-current-state mf tbl)))
+           ;; with no user entry at all -- the usual table, where every entry is
+           ;; a built-in -- there is nothing to look up
+           (if (and (fx=? 0 (hashtable-size (vector-ref st 7))) (not (vector-ref st 4)))
+               #f
+               (let ((k (pm-kind x)))
+                 (if (and k (pm-plain? k x (vector-ref st 7)))
+                     (let ((a (pm-kind-answer mf tbl st k)))
+                       (if (eq? a #t) (pm-class-method mf tbl st x) a))
+                     (let ((t (jolt-type x)))
+                       (or (hashtable-ref (vector-ref st 7) t #f)
+                           ;; (with-meta x {:type SomeClass}) dispatches on that class
+                           (and (not (keyword? t)) (jclass? t) (pm-user-answer (hashtable-ref tbl t #f)))
+                           (pm-class-method mf tbl st x))))))))))
+(set-pr-user-method-write!
+  (lambda (x p)
+    (let ((m (user-print-method x)))
+      (and m (begin (jolt-invoke m x (pr-sink-writer p)) #t)))))
 (set-pr-user-method-render!
   (lambda (x)
     (let ((m (user-print-method x)))

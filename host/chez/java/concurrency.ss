@@ -202,6 +202,9 @@
            (adopt-interrupt-box! ibox)
            (dyn-binding-stack snap)
            (chez-current-ns-param ns)
+           ;; who is running the body, for a load's cycle walk (locks.ss
+           ;; jolt-blocked-on): until it settles the payload holds the runner
+           (jolt-future-payload-set! f (make-future-runner (get-thread-id)))
            (let* ((slot (agent-pool-take! 'send-off))
                   (_ (jolt-thread-name-set! (get-thread-id) (agent-pool-thread-name 'send-off slot)))
                   (r (guard (e (#t (cons #f e))) (cons #t (jolt-invoke thunk)))))
@@ -295,10 +298,29 @@
 (define (jolt-future-deref f)
   (unless (begin (task-spin-until (lambda () (jolt-future-done? f)))
                  (jolt-future-settled? f))
-    (jolt-cv-wait-interruptibly "future deref" (jolt-future-mu f) (jolt-future-cv f) #f
-      (lambda (_timed-out?)
-        (if (jolt-future-done? f) #t jolt-cv-again))))
+    (jolt-call-blocked-on f
+      (lambda ()
+        (jolt-cv-wait-interruptibly "future deref" (jolt-future-mu f) (jolt-future-cv f) #f
+          (lambda (_timed-out?)
+            (if (jolt-future-done? f) #t jolt-cv-again))))))
   (jolt-future-finish f))
+
+;; A running future's payload slot names its runner until the body settles it.
+;; Nothing reads the payload of an unsettled future, and the cycle walk reads
+;; this one only to follow the edge: a stale read is a settled future, whose
+;; waiter is about to be woken anyway.
+(define-record-type future-runner (fields ctx) (nongenerative jolt-future-runner-v1))
+(let ((prior jolt-block-releaser))
+  (set! jolt-block-releaser
+    (lambda (obj)
+      (cond ((jolt-future? obj)
+             (let ((r (jolt-future-payload obj)))
+               (and (not (jolt-future-done? obj)) (future-runner? r)
+                    (cons (future-runner-ctx r) "a future"))))
+            ((and (jhost? obj) (equal? (jhost-tag obj) "user-thread"))
+             (let ((id (jthread-running-id (jhost-state obj))))
+               (and id (cons id "a thread it joins"))))
+            (else (prior obj))))))
 
 ;; (deref f timeout-ms timeout-val): wait up to timeout-ms; return timeout-val if
 ;; it has not settled by the absolute deadline.
@@ -1224,8 +1246,8 @@
       ;; method with the value itself as the leading `this`. The timed arity
       ;; passes its opts through — (deref r ms val) reaches the IBlockingDeref
       ;; 3-arity method. A deref method that exists only at the other arity is
-      ;; the JVM's failed interface cast: throw ClassCastException naming the
-      ;; interface the requested arity belongs to.
+      ;; the JVM's fall-through to deref-future: a ClassCastException to
+      ;; java.util.concurrent.Future.
       ((and (jrec? x)
             (jrec-method-arity x "deref" (if (null? opts) 1 3)))
        ;; the arity lookup falls back to any same-name method, so verify the
@@ -1267,12 +1289,14 @@
     ((x ms val) (%conc-deref-general x ms val))
     ((x . opts) (apply %conc-deref-general x opts))))
 
+;; clojure.core/deref tries the interface the arity belongs to (IDeref, or
+;; IBlockingDeref for the timed one) and falls through to deref-future for
+;; anything that is not, so the cast that fails is always the Future one.
 (define (deref-cast-error x opts)
   (jolt-host-throwable
    "java.lang.ClassCastException"
    (string-append "class " (guard (e (#t "?")) (jolt-class-name x))
-                  " cannot be cast to class "
-                  (if (null? opts) "clojure.lang.IDeref" "clojure.lang.IBlockingDeref"))))
+                  " cannot be cast to class java.util.concurrent.Future")))
 
 ;; realized? for a future/promise/delay. Wrapped over the overlay version in
 ;; post-prelude.ss.
@@ -2297,6 +2321,14 @@
 ;; that was never started is not waited for at all (JVM: isAlive is false before
 ;; .start, so join returns at once).
 (define (jthread-alive? st) (and (vector-ref st 5) (not (vector-ref st 1))))
+(define (jthread-join-wait st ms)
+  (jolt-cv-wait-interruptibly "Thread.join"
+                (vector-ref st 2) (vector-ref st 3)
+                (and ms (not (= ms 0)) (ms->timeout ms))
+    (lambda (timed-out?)
+      (cond ((not (jthread-alive? st)) #t)
+            (timed-out? #f)
+            (else jolt-cv-again)))))
 ;; Under st's mutex: the thread is done. The object takes the name, priority and
 ;; daemon status the id-keyed tables held, is marked done and its joiners woken,
 ;; in that order (jthread-attr relies on it) — ONCE. The body's end and the exit
@@ -2373,10 +2405,15 @@
                (adopt-interrupt-box! (vector-ref st 4))
                ;; publish the name under this thread's id, so .getName agrees
                ;; whether it is asked of the Thread object or of the handle
-               ;; Thread/currentThread (and getAllStackTraces) hands out
-               (vector-set! st 7 (get-thread-id))
-               (jolt-thread-name-set! (get-thread-id) (unbox (vector-ref st 6)))
-               (jolt-thread-priority-set! (get-thread-id) (vector-ref st 9))
+               ;; Thread/currentThread (and getAllStackTraces) hands out.
+               ;; Under st's mutex, as setName/setPriority write: once slot 7
+               ;; is set the parent's setPriority writes the table, and a copy
+               ;; read before it and written after put the old value back
+               ;; (CI: (.setPriority t 7) right after .start read back 5).
+               (jolt-with-mutex (vector-ref st 2)
+                 (vector-set! st 7 (get-thread-id))
+                 (jolt-thread-name-set! (get-thread-id) (unbox (vector-ref st 6)))
+                 (jolt-thread-priority-set! (get-thread-id) (vector-ref st 9)))
                (register-thread-object! (get-thread-id) self)
                (thread-handle-cell (cons (get-thread-id) self))
                ;; Thread.start conveys NOTHING: the new thread begins with no
@@ -2407,14 +2444,16 @@
                   ;; Nothing is registered for a thread that has already
                   ;; finished: its exit hook has run, and an entry made now
                   ;; would outlive it (ids are never reused).
-                  (jolt-with-mutex thread-handles-mutex
-                    (when (jolt-started-thread? id)
-                      (unless (hashtable-contains? thread-names-by-id id)
-                        (hashtable-set! thread-names-by-id id (unbox (vector-ref st 6)))
-                        (unless (eqv? 5 (vector-ref st 9))
-                          (hashtable-set! thread-priorities-by-id id (vector-ref st 9))))
-                      (hashtable-set! thread-handles-by-id id self)))
+                  ;; st's mutex first, then the tables', the order every
+                  ;; holder of both takes them (jthread-finish!, setName).
                   (jolt-with-mutex (vector-ref st 2)
+                    (jolt-with-mutex thread-handles-mutex
+                      (when (jolt-started-thread? id)
+                        (unless (hashtable-contains? thread-names-by-id id)
+                          (hashtable-set! thread-names-by-id id (unbox (vector-ref st 6)))
+                          (unless (eqv? 5 (vector-ref st 9))
+                            (hashtable-set! thread-priorities-by-id id (vector-ref st 9))))
+                        (hashtable-set! thread-handles-by-id id self)))
                     (unless (vector-ref st 7) (vector-set! st 7 id)))))))
             jolt-nil)))
         (cons "run" (lambda (self) (let ((th (vector-ref (jhost-state self) 0))) (when th (jolt-invoke th))) jolt-nil))
@@ -2435,13 +2474,11 @@
             ;; is LEFT of the timeout rather than restarting it. A joining FIBER
             ;; parks: blocking its carrier would stop every other fiber on it until
             ;; the thread it joins exits.
-            (jolt-cv-wait-interruptibly "Thread.join"
-                          (vector-ref st 2) (vector-ref st 3)
-                          (and ms (not (= ms 0)) (ms->timeout ms))
-              (lambda (timed-out?)
-                (cond ((not (jthread-alive? st)) #t)
-                      (timed-out? #f)
-                      (else jolt-cv-again)))))
+            ;; a thread that has finished is joined without being recorded as a
+            ;; wait (the read is a hint; the wait's decide is the answer)
+            (if (jthread-alive? st)
+                (jolt-call-blocked-on self (lambda () (jthread-join-wait st ms)))
+                (jthread-join-wait st ms)))
           jolt-nil))
         (cons "isAlive" (lambda (self) (jthread-alive? (jhost-state self))))
         ;; flag then poke, so a wait already parked on a condition this thread
@@ -2463,8 +2500,10 @@
         ;; spellings of the same thread's name disagree.
         (cons "setName" (lambda (self nm)
           (let* ((st (jhost-state self)) (s (jolt-final-str nm)))
-            (set-box! (vector-ref st 6) s)
-            (when (jthread-running-id st) (jolt-thread-name-set! (jthread-id st) s)))
+            ;; under st's mutex, so it can't interleave with the start's publish
+            (jolt-with-mutex (vector-ref st 2)
+              (set-box! (vector-ref st 6) s)
+              (when (jthread-running-id st) (jolt-thread-name-set! (jthread-id st) s))))
           jolt-nil))
         ;; refused while the thread is ALIVE, as Thread.setDaemon checks isAlive():
         ;; before start and after it has finished the flag can still be set.
@@ -2494,8 +2533,9 @@
         (cons "setPriority" (lambda (self p)
           (let ((st (jhost-state self)) (p (jolt-thread-priority-arg p)))
             (unless (jthread-fiber st)
-              (vector-set! st 9 p)
-              (when (jthread-running-id st) (jolt-thread-priority-set! (jthread-id st) p))))
+              (jolt-with-mutex (vector-ref st 2)
+                (vector-set! st 9 p)
+                (when (jthread-running-id st) (jolt-thread-priority-set! (jthread-id st) p)))))
           jolt-nil))
         (cons "isVirtual" (lambda (self) (and (jthread-fiber (jhost-state self)) #t)))
         ;; its group while it lives; nil once it has terminated, as on the JVM
@@ -4432,7 +4472,7 @@
 
 ;; Class tests on a stored throwable, by the class graph like a catch clause.
 (define (cf-exc-isa? x simple)
-  (and (jolt-ex-info-record? x) (exception-isa? (last-dot (ex-info-class x)) simple)))
+  (and (jolt-ex-info-record? x) (exception-isa? (ex-info-class x) simple)))
 (define (cf-cancellation? x) (cf-exc-isa? x "CancellationException"))
 (define (cf-completion? x) (cf-exc-isa? x "CompletionException"))
 (define (cf-cause x) (if (jolt-ex-info-record? x) (jolt-ex-info-record-cause x) jolt-nil))
@@ -4695,8 +4735,8 @@
 
 ;; whenComplete: the action sees what handle's function sees; the dependent
 ;; keeps the source's result, unless the action throws over a NORMAL result,
-;; which then fails the dependent. (The JVM also records the action's throw as
-;; suppressed on an earlier failure; jolt throwables carry no suppressed list.)
+;; which then fails the dependent. Over a failure the action's throw is added to
+;; that failure as suppressed, as the JDK does.
 (define (cf-when-complete src exec f)
   (cf-require! f)
   (let ((d (make-cf)))
@@ -4709,6 +4749,9 @@
                                 (cf-fn-call f "accept" jolt-nil (cf-alt-ex r))
                                 (cf-fn-call f "accept" r jolt-nil))
                             cf-pending)))
+              (when (and (cf-alt? r) (not (eq? thrown cf-pending))
+                         (not (eq? thrown (cf-alt-ex r))))
+                (throwable-add-suppressed! (cf-alt-ex r) thrown))
               (cf-settle! d
                           (if (or (eq? thrown cf-pending) (cf-alt? r))
                               (cf-encode-relay r)
@@ -5334,6 +5377,157 @@
           (restore)
           (apply values vals)))))
 
+;; --- a blocking call on a helper thread, ended by interrupt or close ---------
+;; A kernel wait that a JVM thread makes in place (FileChannel.lock's F_SETLKW,
+;; a blocking LockFileEx) would pin a fiber's carrier here, and nothing could end
+;; it when the waiter is interrupted or its channel closed. So the call runs on a
+;; thread of its own, the way process.ss's output pumps do (proc-pump): the
+;; caller waits on a condition the helper wakes when the call returns, which
+;; parks a fiber and blocks a thread, and an interrupt reaches that wait through
+;; the interrupt registry like any other (locks.ss). The helper runs no jolt
+;; code, so it forks dormant (lazy-bridge.ss).
+;;
+;; Ending the call is the JDK's NativeThread.signal: on POSIX the helper is sent
+;; a signal whose handler does nothing and is installed without SA_RESTART, so
+;; the call returns EINTR (chez-patches/0011; the signal relay installs with
+;; SA_RESTART, which would restart it). Linux uses SIGRTMAX-2 and macOS SIGIO,
+;; the JDK's choices. On Windows the helper's synchronous call is cancelled with
+;; CancelSynchronousIo. A cancel is only a request: the helper may be between
+;; its check and the call when the signal lands, so the canceller repeats it
+;; until the helper says it is done, as NativeThreadSet.signalAndWait does.
+;;
+;; Without the patched kernel (a stock Chez) there is no way to end the call, so
+;; jolt-offload-available? answers #f and the caller keeps its own fallback.
+;;
+;; An op is #(mu cv done? result cancel? thread abandoned? after): THREAD is the
+;; helper's pthread_t or Windows thread HANDLE while it can still be signalled,
+;; set and cleared under mu, so a signal never reaches a thread that has moved
+;; on. ABANDONED is set when a cancel gave up (Windows, below); AFTER is what the
+;; helper runs once its call has returned (jolt-offload-handoff!).
+(define jolt-thread-interrupt-signal
+  (case (sa-os-family) ((linux) 62) ((macos) 23) (else #f)))
+(define jsig-interrupt-init
+  (jolt-foreign-proc-safe "(cs)jolt_signal_interrupt_init" '(int) 'int))
+(define c-pthread-self (jolt-foreign-proc-safe "pthread_self" '() 'uptr))
+(define c-pthread-kill (jolt-foreign-proc-safe "pthread_kill" '(uptr int) 'int))
+(define-win32-proc win32-get-current-thread-id
+  "kernel32.dll" "GetCurrentThreadId" () unsigned-32)
+(define-win32-proc win32-open-thread
+  "kernel32.dll" "OpenThread" (unsigned-32 int unsigned-32) iptr)
+(define-win32-proc win32-cancel-synchronous-io
+  "kernel32.dll" "CancelSynchronousIo" (iptr) int)
+(define win32-THREAD-TERMINATE 1)          ; the right CancelSynchronousIo needs
+;; The handler is installed once, the first time it is needed; the answer is
+;; remembered with the mark in one store (define-win32-memo's reason).
+(define jolt-offload-ready 'unresolved)
+(define jolt-offload-ready-mu (make-mutex))
+(define jolt-offload-signal-set #f)
+(define (jolt-offload-available?)
+  (when (eq? jolt-offload-ready 'unresolved)
+    (jolt-with-mutex jolt-offload-ready-mu
+      (when (eq? jolt-offload-ready 'unresolved)
+        (set! jolt-offload-ready
+              (if (win32?)
+                  (and (win32-get-current-thread-id) (win32-open-thread)
+                       (win32-cancel-synchronous-io) (win32-close-handle) #t)
+                  (and jolt-thread-interrupt-signal jsig-interrupt-init
+                       c-pthread-self c-pthread-kill jolt-sigmask-ok?
+                       (= 0 (jsig-interrupt-init jolt-thread-interrupt-signal))
+                       (begin
+                         (set! jolt-offload-signal-set
+                               (jolt-make-sigset (list jolt-thread-interrupt-signal)))
+                         #t)))))))
+  jolt-offload-ready)
+;; The helper's own identity, for the canceller: the signal unblocked first (a
+;; thread jolt forks is born with the watcher's signals blocked, and SIGIO is
+;; one of them on macOS), then pthread_self. On Windows a HANDLE to itself with
+;; the right to cancel its I/O, closed when it is done.
+(define (jolt-offload-self)
+  (if (win32?)
+      ((win32-open-thread) win32-THREAD-TERMINATE 0 ((win32-get-current-thread-id)))
+      (begin
+        (c-pthread-sigmask jolt-sig-unblock-how jolt-offload-signal-set 0)
+        (c-pthread-self))))
+(define (jolt-offload-poke t)
+  (if (win32?)
+      ((win32-cancel-synchronous-io) t)
+      (c-pthread-kill t jolt-thread-interrupt-signal)))
+
+;; (jolt-offload-start! body) -> op. BODY gets the op and runs on the helper; it
+;; makes the blocking call, checks (jolt-offload-cancelled? op) before it and
+;; after an interrupted return, and answers the result. A raise is kept and
+;; re-raised in the waiter.
+(define (jolt-offload-start! body)
+  (let ((op (vector (make-mutex) (jolt-make-cv) #f #f #f #f #f #f)))
+    (fork-thread-dormant
+      (lambda ()
+        (let ((me (jolt-offload-self)))
+          (jolt-with-mutex (vector-ref op 0) (vector-set! op 5 me))
+          (let* ((r (guard (e (#t (cons jolt-offload-start! e))) (body op)))
+                 (after (jolt-with-mutex (vector-ref op 0)
+                          (vector-set! op 3 r)
+                          (vector-set! op 2 #t)
+                          (vector-set! op 5 #f)
+                          (jolt-cv-wake! (vector-ref op 1))
+                          (vector-ref op 7))))
+            (when (win32?) ((win32-close-handle) me))
+            (when after (guard (e (#t #f)) (after)))))))
+    op))
+;; (jolt-offload-handoff! op thunk) — run THUNK once the helper's call has
+;; returned: now if it has, else on the helper as it finishes. For what has to
+;; wait for the call to give its resource back (a HANDLE a cancel could not
+;; free, below).
+(define (jolt-offload-handoff! op thunk)
+  (when (jolt-with-mutex (vector-ref op 0)
+          (or (vector-ref op 2) (begin (vector-set! op 7 thunk) #f)))
+    (thunk)))
+(define (jolt-offload-cancelled? op) (vector-ref op 4))
+(define (jolt-offload-result op)
+  (let ((r (vector-ref op 3)))
+    (if (and (pair? r) (eq? (car r) jolt-offload-start!)) (raise (cdr r)) r)))
+;; (jolt-offload-await op ibox) -> 'done once the call has returned,
+;; 'abandoned when a cancel gave up on it, or 'interrupted when IBOX's flag is
+;; set first (left set; the caller decides what an interrupt means). A fiber
+;; parks.
+(define (jolt-offload-await op ibox)
+  (let ((mu (vector-ref op 0)) (cv (vector-ref op 1)))
+    (let ((entry (cons mu cv)))
+      (jolt-interrupt-wait-add! ibox entry)
+      ;; not dynamic-wind: a fiber's park leaves through the winders, which would
+      ;; take the registration away while it waits
+      (let ((r (guard (e (#t (jolt-interrupt-wait-remove! ibox entry) (raise e)))
+                 (jolt-cv-wait mu cv #f
+                   (lambda (_) (cond ((vector-ref op 2) 'done)
+                                     ((vector-ref op 6) 'abandoned)
+                                     ((unbox ibox) 'interrupted)
+                                     (else jolt-cv-again)))))))
+        (jolt-interrupt-wait-remove! ibox entry)
+        r))))
+;; (jolt-offload-cancel! op) — end the call and wait until the helper is done:
+;; #t then. On POSIX the signal always ends it, so this waits as long as it
+;; takes. On Windows CancelSynchronousIo is tried for a while (about 200 ms) and
+;; then given up on with #f: not every Windows ends a synchronous lock that way
+;; (Wine never does). The op is marked abandoned, which ends its waiter's wait,
+;; and the caller hands what still needs the call to be over (closing the
+;; HANDLE, which would block behind the pending call on a synchronous handle) to
+;; jolt-offload-handoff!. The helper never touches the HANDLE again on its own:
+;; it reads the cancel flag before every retry.
+(define (jolt-offload-cancel! op)
+  (let ((mu (vector-ref op 0)) (cv (vector-ref op 1)))
+    (let loop ((rounds (if (win32?) 40 -1)))
+      (cond ((jolt-with-mutex mu
+               (vector-set! op 4 #t)
+               (or (vector-ref op 2)
+                   (begin (let ((t (vector-ref op 5))) (when t (jolt-offload-poke t))) #f)))
+             #t)
+            ((= rounds 0)
+             (jolt-with-mutex mu (vector-set! op 6 #t) (jolt-cv-wake! cv))
+             #f)
+            (else
+             (jolt-cv-wait mu cv (mono-deadline 5)
+               (lambda (timed-out?) (if (or timed-out? (vector-ref op 2)) #t jolt-cv-again)))
+             (loop (- rounds 1)))))))
+
 ;; Per-thread SIGINT mask. A worker thread parked in a foreign call (the nREPL
 ;; accept loop in c-accept, or a conn handler) can't run Chez's keyboard-interrupt
 ;; handler on ^C, so if SIGINT is delivered there the process hangs — which the
@@ -5621,6 +5815,34 @@
                  "TRAP" "ABRT" "CHLD" "CONT" "TSTP" "PIPE" "STKFLT" "EMT" "INFO"))))
 (define jolt-watched-sigset
   (and jolt-sigmask-ok? (jolt-make-sigset (append jolt-shutdown-signals jolt-user-signals))))
+
+;; Every collection runs with all of those blocked on the collecting thread. Chez's
+;; parallel collector starts its sweeper threads from inside a collection, and a
+;; new thread takes the mask of the thread that made it: the fork guard below
+;; never sees them. A collection run while that thread had a signal unblocked (a
+;; spawn under jolt-with-empty-sigmask, the watcher re-raising a signal nobody
+;; handles, park-until-interrupt's SIGINT, the primordial before arming) left
+;; sweepers that never block it, for the life of the process. Without the relay
+;; the kernel could hand one of the watcher's signals to a sweeper at SIG_DFL and
+;; end the process (a program's own Signal/raise USR2 killed it, exit 140); with
+;; it, a ^C landing there reached Chez's SIGINT handler on a thread that is not
+;; the main one, which drops it. A sweeper never runs jolt code, so it takes no
+;; signal at all. All of them, not jolt-signal-sigset: a sweeper started before
+;; arming outlives the arming that decides which signals are the watcher's.
+;; The mask to put back is per call: sa-gc-collect's direct attempt runs on
+;; whichever thread asked, and two of them can be inside it at once.
+;; A refused attempt raises out of COLLECT!, so the buffer is freed on the way out.
+(define (jolt-collect-with-signals-blocked collect!)
+  (let ((old #f))
+    (dynamic-wind
+      (lambda ()
+        (set! old (sa-foreign-alloc 128))
+        (c-pthread-sigmask jolt-sig-block-how jolt-watched-sigset old))
+      collect!
+      (lambda ()
+        (c-pthread-sigmask jolt-sig-setmask-how old 0)
+        (sa-foreign-free old)))))
+(when jolt-sigmask-ok? (sa-gc-set-collect-guard! jolt-collect-with-signals-blocked))
 ;; #t once the entry point has claimed the user signals (jolt-arm-signals!). Read
 ;; by the fork guard and by arming, both of which then use jolt-watched-sigset.
 (define jolt-user-signals-taken (box #f))
@@ -6055,12 +6277,14 @@
 ;; The mask is emptied on THIS thread for the length of the spawn and put back
 ;; exactly as it was, so the whole of jolt's private masking is undone at once
 ;; rather than a named subset of it. That leaves one fork+exec in which jolt
-;; itself is unmasked: a SIGTERM landing there kills it without running hooks, as
-;; it did before there were hooks, and a ^C landing there may be taken by this
-;; thread instead of the parked one. Both are pre-existing behavior. The
-;; window-free alternative, posix_spawnattr with POSIX_SPAWN_SETSIGMASK, reaches
-;; only one of the two paths — Chez's fork takes no attributes — and two
-;; mechanisms for one rule is worse than one honest window.
+;; itself is unmasked: a SIGTERM landing there kills it without running hooks,
+;; and any watched signal still PENDING for the process (a Signal/raise the
+;; watcher has not taken yet) is delivered to this thread at its default action.
+;; So the posix_spawn path (process.ss proc-spawn-fd-level), which is every
+;; ProcessBuilder / jolt.process spawn where posix_spawn resolves, gives the
+;; child its empty mask through POSIX_SPAWN_SETSIGMASK and never opens the
+;; window. This one is left for the spawns Chez's own fork makes (system,
+;; process), which take no attributes.
 (define jolt-empty-sigset (and jolt-sigmask-ok? (jolt-make-sigset '())))
 (define (jolt-with-empty-sigmask thunk)
   (jolt-with-sigmask jolt-sig-setmask-how jolt-empty-sigset thunk))

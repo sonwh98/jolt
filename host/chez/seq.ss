@@ -706,6 +706,16 @@
 (define (register-seq-arm! pred handler)
   (seq-arm-reject-fast-type! 'register-seq-arm! pred)
   (set! jolt-seq-arms (cons (cons pred handler) jolt-seq-arms)))
+;; The host collection a program seqs most, answered ahead of the arm walk: the
+;; arms run newest-registration-first, and the java.util.ArrayList family's arm
+;; is registered early (host-static-classes.ss), so a (seq list) paid one
+;; predicate call per arm registered after it -- ~75 ns, which clojure.tools.
+;; reader pays on every character it reads, as (seq pending-forms) of an empty
+;; LinkedList. A host runtime sets this to a procedure answering such a value's
+;; seq, or #f for any other value, which then walks the arms. No other arm may
+;; claim what it answers.
+(define jolt-seq-host-first (lambda (x) #f))
+(define (set-jolt-seq-host-first! f) (set! jolt-seq-host-first f))
 ;; At the END of the walk, for a family of rare values (the arms run newest first).
 (define (register-seq-arm-last! pred handler)
   (seq-arm-reject-fast-type! 'register-seq-arm-last! pred)
@@ -731,64 +741,161 @@
 ;; representation.
 (define (pmap-seq-sel mode k v)
   (cond ((fx=? mode 0) (make-map-entry k v)) ((fx=? mode 1) k) (else v)))
+;; pmap-seq-sel spliced into the HAMT walk's per-entry step (one call less per
+;; entry; key and val are read only when the mode wants them)
+(define-syntax pmap-seq-pick
+  (syntax-rules ()
+    ((_ mode arr i)
+     (let ((md mode) (a arr) (j i))
+       (cond ((fx=? md 1) (vector-ref a j))
+             ((fx=? md 0) (make-map-entry (vector-ref a j) (vector-ref a (fx+ j 1))))
+             (else (vector-ref a (fx+ j 1))))))))
 (define (pmap-view-seq m mode kind)
   (let ((n (pmap-cnt m)))
     (cond
       ((fx=? n 0) jolt-nil)
-      ((hnode? (pmap-root m)) (hamt-chunk-seq m mode '(0)))
+      ((hnode? (pmap-root m)) (hamt-chunk-seq m mode))
       (else
        (let ((v (make-vector n)))
          (pmap-fold m (lambda (k val i) (vector-set! v i (pmap-seq-sel mode k val)) (fx- i 1)) (fx- n 1))
          (cseq-vec (vector-ref v 0) (make-pvec v #f) 0 kind))))))
 ;; --- the lazy HAMT walk -------------------------------------------------------
-;; Each chunk is up to 32 leaves, read depth-first in exactly the order the
-;; vector fill above produced: a node's slots ascending, a child node's leaves in
-;; place of its slot, and a collision bucket's alist REVERSED (node-fold visits it
-;; forward, and the view reverses the visit). A chunk is a ChunkedCons cell of the
-;; map's own flavor whose after-chunk rest is a lazy cell for the next chunk, so
-;; walking within a chunk allocates nothing beyond the cell, and the walk as a
-;; whole stays O(n).
+;; Each chunk is up to 32 entries, read depth-first in exactly the order the
+;; vector fill above produced: a node's fragments ascending, a branch's entries
+;; in place of its fragment, and a collision bucket's alist in order (its
+;; insertion order, the JVM's HashCollisionNode order). A chunk is a ChunkedCons
+;; cell of the map's own flavor whose after-chunk rest is a lazy cell for the
+;; next chunk, so walking within a chunk allocates nothing beyond the cell, and
+;; the walk as a whole stays O(n).
 ;;
-;; Where the next chunk starts is a PATH of slot indices from the root — data,
-;; so the lazy cell is a lazy-src over (map, mode . path) and travels in a state
-;; image like any other producer. Resuming re-descends the path: O(depth) per
-;; chunk, i.e. O(log32 n), the same as NodeSeq's first.
-(define (hamt-slot-vec x)              ; a branch's slots, as a vector to index
-  (if (hnode? x) (hnode-arr x) (list->vector (reverse (hcoll-alist x)))))
+;; The walk keeps a stack of where it is, one frame per level (a 32-bit hash
+;; spans at most 7 levels below the root, so 8 frames), four slots each in one
+;; vector. A frame above the level being read is a node positioned ON the
+;; branch being read below it: node, rem (its fragments not yet passed, that
+;; branch's included), di and ni (the next entry's slot counting up, the next
+;; branch's counting down from the end). When a chunk fills, the level being
+;; read is written as the top frame -- a node and its position, a branch-free
+;; node and its next key slot (rem 'leaf), or a bucket's remaining alist (rem
+;; 'bucket) -- and the next chunk's lazy cell holds the stack itself, so the
+;; next chunk resumes where this one stopped instead of re-descending from the
+;; root. A cell is realized once (a lazy-src runs under its cell's claim), so
+;; the next chunk may reuse the stack. The stack is nodes, alists and fixnums:
+;; data, so the cell travels in a state image like any other producer.
+;;
+;; Images written before format 16 hold 'hamt-chunk cells instead: a path from
+;; the root of RANKS (a fragment's index among its node's occupied ones, an
+;; index into a bucket's alist), which that name still resumes by descending.
+(define-syntax hamt-frag-of                    ; the fragment a single bit stands for
+  (syntax-rules () ((_ low) (hamt-popcount (hamt-sub low 1)))))
 (define (hamt-mode-kind mode)
   (cond ((fx=? mode 0) sk-hashmap-seq) ((fx=? mode 1) sk-key-seq) (else sk-val-seq)))
+(define lz-hamt-chunk-resume
+  (register-lazy-src! 'hamt-chunk-resume
+    (lambda (m mode+state)
+      (let ((stack (cadr mode+state)) (d (cddr mode+state)))
+        (hamt-walk-resume m (car mode+state) (make-vector seq-chunk-size) stack d)))))
 (define lz-hamt-chunk
   (register-lazy-src! 'hamt-chunk
-    (lambda (m mode+path) (hamt-chunk-seq m (car mode+path) (cdr mode+path)))))
-(define (hamt-chunk-seq m mode path)
-  (let ((buf (make-vector seq-chunk-size)))
-    ;; descend PATH: every index but the last names the branch being walked
-    (let descend ((vec (hnode-arr (pmap-root m))) (path path) (parents '()))
-      (if (pair? (cdr path))
-          (descend (hamt-slot-vec (vector-ref vec (car path))) (cdr path)
-                   (cons (cons vec (car path)) parents))
-          (let walk ((vec vec) (i (car path)) (parents parents) (n 0))
-            (cond
-              ((fx>=? i (vector-length vec))     ; this branch is done: pop it
-               (if (null? parents)
-                   (hamt-chunk-cell m mode buf n #f)
-                   (walk (caar parents) (fx+ (cdar parents) 1) (cdr parents) n)))
-              ((fx=? n seq-chunk-size)           ; full, and more follows: resume here
-               (hamt-chunk-cell m mode buf n
-                 (let up ((ps parents) (acc (list i)))
-                   (if (null? ps) acc (up (cdr ps) (cons (cdar ps) acc))))))
-              (else
-               (let ((x (vector-ref vec i)))
-                 (if (pair? x)
-                     (begin (vector-set! buf n (pmap-seq-sel mode (car x) (cdr x)))
-                            (walk vec (fx+ i 1) parents (fx+ n 1)))
-                     (walk (hamt-slot-vec x) 0 (cons (cons vec i) parents) n))))))))))
+    (lambda (m mode+path) (hamt-chunk-seq-ranks m (car mode+path) (cdr mode+path)))))
+
+(define (hamt-walk-push! stack d node rem di ni)
+  (let ((o (fx* 4 d)))
+    (vector-set! stack o node) (vector-set! stack (fx+ o 1) rem)
+    (vector-set! stack (fx+ o 2) di) (vector-set! stack (fx+ o 3) ni)))
+;; the chunk is full: the level being read becomes the top frame and the next
+;; chunk's cell carries the stack
+(define (hamt-walk-stop m mode buf stack d node rem di ni)
+  (hamt-walk-push! stack d node rem di ni)
+  (hamt-chunk-cell m mode buf seq-chunk-size (cons stack d)))
+;; continue at the top frame (d), as the stop above left it
+(define (hamt-walk-resume m mode buf stack d)
+  (let* ((o (fx* 4 d)) (node (vector-ref stack o)) (rem (vector-ref stack (fx+ o 1))))
+    (cond ((eq? rem 'leaf) (hamt-walk-leaf m mode buf stack node (vector-ref stack (fx+ o 2)) d 0))
+          ((eq? rem 'bucket) (hamt-walk-bucket m mode buf stack node d 0))
+          (else (hamt-walk m mode buf stack node rem (vector-ref stack (fx+ o 2)) (vector-ref stack (fx+ o 3)) d 0)))))
+;; back up a level, stepping past the branch that frame is on
+(define (hamt-walk-pop m mode buf stack d n)
+  (if (fx=? d 0)
+      (hamt-chunk-cell m mode buf n #f)
+      (let* ((o (fx* 4 (fx- d 1))) (rem (vector-ref stack (fx+ o 1))))
+        (hamt-walk m mode buf stack (vector-ref stack o) (hamt-and rem (hamt-sub rem 1))
+                   (vector-ref stack (fx+ o 2)) (fx- (vector-ref stack (fx+ o 3)) 1) (fx- d 1) n))))
+;; start reading branch b at depth d
+(define (hamt-walk-enter m mode buf stack b d n)
+  (cond ((not (hnode? b)) (hamt-walk-bucket m mode buf stack (hcoll-alist b) d n))
+        ((hamt=? 0 (hnode-nmap b)) (hamt-walk-leaf m mode buf stack b 0 d n))
+        (else (let ((bdm (hnode-dmap b)))
+                (hamt-walk m mode buf stack b (hamt-ior bdm (hnode-nmap b)) 0 (fx- (vector-length (hnode-arr b)) 1) d n)))))
+;; a node with no branches (most leaves, and the big nodes of a small map): its
+;; entries in slot order, from key slot i
+(define (hamt-walk-leaf m mode buf stack node i d n)
+  (let* ((arr (hnode-arr node)) (len (vector-length arr)))
+    (let run ((i i) (n n))
+      (cond ((fx=? i len) (hamt-walk-pop m mode buf stack d n))
+            ((fx=? n seq-chunk-size) (hamt-walk-stop m mode buf stack d node 'leaf i 0))
+            (else (vector-set! buf n (pmap-seq-pick mode arr i))
+                  (run (fx+ i 2) (fx+ n 1)))))))
+(define (hamt-walk m mode buf stack node rem di ni d n)
+  ;; the entries in a run stay in this loop, and so does a leaf that fits in the
+  ;; chunk -- most branches near the bottom of a trie are such leaves
+  (let ((arr (hnode-arr node)) (dm (hnode-dmap node)))
+    (let run ((rem rem) (di di) (ni ni) (n n))
+      (cond
+        ((hamt-u=? 0 rem) (hamt-walk-pop m mode buf stack d n))
+        ((fx=? n seq-chunk-size) (hamt-walk-stop m mode buf stack d node rem di ni))
+        (else
+         (let ((low (hamt-ulow-bit rem)))
+           (if (hamt-uentry? dm low)
+               (begin
+                 (vector-set! buf n (pmap-seq-pick mode arr di))
+                 (run (hamt-uxor rem low) (fx+ di 2) ni (fx+ n 1)))
+               (let ((b (vector-ref arr ni)))
+                 (if (and (hnode? b) (hamt-u=? 0 (hnode-nmap b))
+                          (fx<=? (fx+ n (fxsra (vector-length (hnode-arr b)) 1)) seq-chunk-size))
+                     ;; a leaf that fits in this chunk is read in place: no frame
+                     (let* ((barr (hnode-arr b)) (len (vector-length barr)))
+                       (let copy ((i 0) (n n))
+                         (if (fx=? i len)
+                             (run (hamt-uxor rem low) di (fx- ni 1) n)
+                             (begin
+                               (vector-set! buf n (pmap-seq-pick mode barr i))
+                               (copy (fx+ i 2) (fx+ n 1))))))
+                     (begin
+                       (hamt-walk-push! stack d node rem di ni)
+                       (hamt-walk-enter m mode buf stack b (fx+ d 1) n)))))))))))
+(define (hamt-walk-bucket m mode buf stack al d n)
+  (cond ((null? al) (hamt-walk-pop m mode buf stack d n))
+        ((fx=? n seq-chunk-size) (hamt-walk-stop m mode buf stack d al 'bucket 0 0))
+        (else (vector-set! buf n (pmap-seq-sel mode (caar al) (cdar al)))
+              (hamt-walk-bucket m mode buf stack (cdr al) d (fx+ n 1)))))
+;; the first chunk of a hash-mode map's walk
+(define (hamt-chunk-seq m mode)
+  (hamt-walk-enter m mode (make-vector seq-chunk-size) (make-vector 32) (pmap-root m) 0 0))
+;; a pre-format-16 'hamt-chunk cell's path of ranks: descend it, framing each
+;; level, and read on from the last
+(define (hamt-chunk-seq-ranks m mode path)
+  (let ((buf (make-vector seq-chunk-size)) (stack (make-vector 32)))
+    (let descend ((node (pmap-root m)) (path path) (d 0))
+      (let ((dm (hnode-dmap node)))
+        (let skip ((rem (hamt-ior dm (hnode-nmap node))) (di 0) (ni (fx- (vector-length (hnode-arr node)) 1)) (j (car path)))
+          (cond
+            ((and (fx>? j 0) (not (hamt=? 0 rem)))
+             (if (hamt=? 0 (hamt-and dm (hamt-low-bit rem)))
+                 (skip (hamt-and rem (hamt-sub rem 1)) di (fx- ni 1) (fx- j 1))
+                 (skip (hamt-and rem (hamt-sub rem 1)) (fx+ di 2) ni (fx- j 1))))
+            ((null? (cdr path)) (hamt-walk m mode buf stack node rem di ni d 0))
+            (else
+             (let ((b (vector-ref (hnode-arr node) ni)))
+               (hamt-walk-push! stack d node rem di ni)
+               (if (hnode? b)
+                   (descend b (cdr path) (fx+ d 1))
+                   (hamt-walk-bucket m mode buf stack (list-tail (hcoll-alist b) (cadr path)) (fx+ d 1) 0))))))))))
 (define (hamt-chunk-cell m mode buf n next)
   (if (fx=? n 0)
       jolt-nil
       (cseq-chunked/k (make-pvec (if (fx=? n seq-chunk-size) buf (vec-copy-range buf 0 n)))
                       0
-                      (if next (jolt-make-lazy-src lz-hamt-chunk m (cons mode next)) jolt-nil)
+                      (if next (jolt-make-lazy-src lz-hamt-chunk-resume m (cons mode next)) jolt-nil)
                       (hamt-mode-kind mode))))
 (define (jolt-seq x)
   (cond
@@ -810,6 +917,7 @@
     ;; a plain defrecord's entries, ahead of the arm walk (records-coll.ss
     ;; jrec-plain?, loaded later — resolved at call time)
     ((and (jrec? x) (jrec-plain? x)) (list->cseq (jrec-plain-entries x)))
+    ((jolt-seq-host-first x) => (lambda (s) s))
     (else (let loop ((as jolt-seq-arms))
             (cond ((null? as) (jolt-throw (jolt-host-throwable "java.lang.IllegalArgumentException"
                                           (string-append "Don't know how to create ISeq from: "
@@ -993,6 +1101,12 @@
                                   " cannot be cast to class java.lang.Number")))))
 (define (jolt-div0-throw)
   (jolt-throw (jolt-host-throwable "java.lang.ArithmeticException" "Divide by zero")))
+;; Java's own integer division by zero: quot and rem over primitive longs
+;; (Numbers.quotient(long, long) is Java's /), the unchecked int ops and
+;; Math.floorDiv/floorMod. Everything that goes through Numbers' Object
+;; overloads, mod and / included, says "Divide by zero" above.
+(define (jolt-l-div0-throw)
+  (jolt-throw (jolt-host-throwable "java.lang.ArithmeticException" "/ by zero")))
 
 ;; Checked coercions for host operations that would otherwise hand a wrong-typed
 ;; value straight to a Chez primitive. The condition Chez raises carries no class,
@@ -1013,11 +1127,15 @@
                    "java.lang.ClassCastException"
                    (string-append "class " (jolt-class-name x)
                                   " cannot be cast to class " target)))))
-;; A Float (a jfloat) is taken as the double it widens to.
+;; A Float (a jfloat) is taken as the double it widens to, and a number outside
+;; Chez's tower (a BigDecimal) as its doubleValue, through the hook (double) uses
+;; (converters.ss, extended by java/bigdec.ss): a host method's double or long
+;; parameter receives the Number's doubleValue/longValue, so (Math/sqrt 4M) is
+;; 2.0. Anything else is still the ClassCastException.
 (define (jolt-need-num x)
   (cond ((number? x) x)
         ((jfloat? x) (jfloat-fl x))
-        (else (jolt-num-cast-throw x))))
+        (else (jolt-double-slow x))))
 ;; A number as a JVM long: the truncating coercion the host-method arms
 ;; (records-dispatch.ss compareTo) and compile-eval.ss read through. Here, in
 ;; the shared tier, because those files are shared — it used to sit in
@@ -1030,14 +1148,26 @@
 ;; A numeric shim (java/bigdec.ss) set!-extends them; the base case is the JVM's:
 ;; not a number -> ClassCastException. The hooks are BINARY and never re-enter
 ;; the variadic shims, so extension order can't recurse.
-(define (jolt-add-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
-(define (jolt-sub-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
-(define (jolt-mul-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
-(define (jolt-div-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
+;;
+;; WHICH operand is named follows the reference's order of operations.
+;; Numbers.add/minus/multiply and the comparisons are
+;; ops(x).combine(ops(y)).op(x, y): ops() calls getClass() on both operands
+;; before anything casts one, so a nil ANYWHERE is the NullPointerException
+;; ((+ "a" nil) included), and only then is the first non-number the
+;; ClassCastException. divide/quotient/remainder look at the divisor first,
+;; ops(y) and a (Number) cast for the zero test, then ops(x): so (/ nil "a") is
+;; the ClassCastException and (/ "a" nil) the NullPointerException.
+(define (jolt-num2-throw a b)
+  (jolt-num-cast-throw (cond ((jolt-nil? a) a) ((jolt-nil? b) b) ((number? a) b) (else a))))
+(define (jolt-num2-throw-divisor-first a b)
+  (jolt-num-cast-throw (if (number? b) a b)))
+(define (jolt-add-slow a b) (jolt-num2-throw a b))
+(define (jolt-sub-slow a b) (jolt-num2-throw a b))
+(define (jolt-mul-slow a b) (jolt-num2-throw a b))
+(define (jolt-div-slow a b) (jolt-num2-throw-divisor-first a b))
 ;; comparison of operands outside the Chez tower: numeric shims extend this to a
 ;; 3-way compare; anything left over is not a number.
-(define (jolt-num-cmp-slow a b)
-  (jolt-num-cast-throw (if (number? a) b a)))
+(define (jolt-num-cmp-slow a b) (jolt-num2-throw a b))
 
 ;; A Float (a jfloat) meeting a double or another Float is double arithmetic,
 ;; as on the JVM, so it is answered here: through the slow hooks it cost a
@@ -1113,9 +1243,9 @@
 ;; sign). A zero divisor throws ArithmeticException in both worlds (JVM double
 ;; quot/rem check the divisor before dividing). Non-tower operands hit the
 ;; set!-extensible slow hooks.
-(define (jolt-quot-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
-(define (jolt-rem-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
-(define (jolt-mod-slow a b) (jolt-num-cast-throw (if (number? a) b a)))
+(define (jolt-quot-slow a b) (jolt-num2-throw-divisor-first a b))
+(define (jolt-rem-slow a b) (jolt-num2-throw-divisor-first a b))
+(define (jolt-mod-slow a b) (jolt-num2-throw-divisor-first a b))
 (define (jolt-quot a b)
   (cond ((not (and (number? a) (number? b))) (jolt-quot-slow a b))
         ((or (flonum? a) (flonum? b))
@@ -1142,6 +1272,13 @@
         ((eqv? b 0) (jolt-div0-throw))
         ((and (integer? a) (integer? b)) (remainder a b))
         (else (- a (* b (truncate (/ a b)))))))
+;; quot/rem whose operands the JVM types as primitive longs where jolt's numeric
+;; pass does not prove :long (a let-bound literal, (count xs); jolt.passes.numeric
+;; jvm-long-expr?): the generic op, but a zero divisor is Java's "/ by zero".
+(define-syntax jolt-pquot
+  (syntax-rules () ((_ ea eb) (let ((a ea) (b eb)) (if (eq? b 0) (jolt-l-div0-throw) (jolt-quot a b))))))
+(define-syntax jolt-prem
+  (syntax-rules () ((_ ea eb) (let ((a ea) (b eb)) (if (eq? b 0) (jolt-l-div0-throw) (jolt-rem a b))))))
 (define (jolt-mod a b)
   (cond ((not (and (number? a) (number? b))) (jolt-mod-slow a b))
         ((and (integer? a) (integer? b) (not (flonum? a)) (not (flonum? b)))
@@ -1381,14 +1518,29 @@
           x
           (let ((m (bitwise-and (if (and (number? x) (exact? x) (integer? x)) x (exact (floor x))) unc-mask64)))
             (if (>= m unc-2^63) (- m unc-2^64) m)))))
-;; unchecked-* only WRAP integer (long) math; on a flonum OR ratio operand they
-;; are an ordinary numeric op, since *unchecked-math* never wraps a non-long —
-;; Clojure's unchecked-add falls back to regular arithmetic for non-primitives:
-;; (unchecked-multiply 1.5 2.0) => 3.0, (unchecked-add 2/3 2/3) => 4/3, not a
-;; truncated long. (test.check's rand-double is (* double-unit shifted), and
-;; gen/ratio sums ratios, both under *unchecked-math*.) Wrap iff both are exact
-;; integers.
-(define (unc-int? x) (or (fixnum? x) (and (exact? x) (integer? x))))
+;; unchecked-* only WRAP long/long math. On the JVM they are Numbers.unchecked_*
+;; over Objects, which dispatch by operand category like + does: a Long pair
+;; wraps at 64 bits, and anything else is the ordinary op of the wider
+;; category. A BigInt operand gives a BigInt ((unchecked-add 9223372036854775808N
+;; 1) is 9223372036854775809N, not a wrapped long), a BigDecimal a BigDecimal,
+;; a double or Float a double, a ratio a ratio. test.check's rand-double and
+;; gen/ratio lean on the double and ratio arms under *unchecked-math*.
+;;
+;; jolt has one exact integer type and classes an exact integer by its range
+;; (protocols.ss): inside signed 64 bits it is a Long, past it a BigInt. So a
+;; pair wraps iff both are integers inside that range (unc-long?), and every
+;; other pair goes to the checked binary op (jolt-add2 and friends), which
+;; already carries the category rules, the BigDecimal and Float hooks, and the
+;; JVM's errors for nil and non-numbers.
+;; fixnum? first, as everywhere here: it is the whole hot path, and a Chez
+;; fixnum (61 bits; 62 on Gambit) is always inside the long range. A bignum asks
+;; the host adapter, which on Chez reads the answer off its bigits rather than
+;; paying two bignum compares.
+(define-syntax unc-long?
+  (syntax-rules ()
+    ((_ e) (let ((x e))
+             (or (fixnum? x)
+                 (and (bignum? x) (sa-bignum-s64? x)))))))
 ;; Two fixnum operands are the whole of the hot path (loop counters, char code
 ;; points, accumulators). A fixnum is 61 bits on Chez (62 on Gambit), so the sum
 ;; or difference of two is at most 63 bits: always a signed long, never a wrap,
@@ -1401,14 +1553,14 @@
 ;; are #f and the exact op and jolt-wrap64 answer the same value.
 (define-syntax unc-wide2
   (syntax-rules ()
-    ((_ op prim x y)
-     (if (and (unc-int? x) (unc-int? y))
+    ((_ op checked prim x y)
+     (if (and (unc-long? x) (unc-long? y))
          (if prim (prim x y) (jolt-wrap64 (op x y)))
-         (op x y)))))
+         (checked x y)))))
 (define (jolt-uncadd2 a b)
-  (if (and (fixnum? a) (fixnum? b)) (+ a b) (unc-wide2 + jolt-s64-add-wrap a b)))
+  (if (and (fixnum? a) (fixnum? b)) (+ a b) (unc-wide2 + jolt-add2 jolt-s64-add-wrap a b)))
 (define (jolt-uncsub2 a b)
-  (if (and (fixnum? a) (fixnum? b)) (- a b) (unc-wide2 - jolt-s64-sub-wrap a b)))
+  (if (and (fixnum? a) (fixnum? b)) (- a b) (unc-wide2 - jolt-sub2 jolt-s64-sub-wrap a b)))
 ;; Two fixnum factors whose product is plainly inside the fixnum range multiply
 ;; with no wrap: both under 2^30 in magnitude (the cheapest test, and the usual
 ;; case), or a flonum estimate of the product under 1e18 (2^60 is 1.15e18, so
@@ -1417,68 +1569,125 @@
 ;; exact bignum product is never built. The tests only pick the path: the
 ;; kernel op is exact for any operands. fxlength would be tighter, but it is a
 ;; call on Chez, not an inline op, and costs the small product 5 ns.
+;; jolt-mul2, not a bare *, for the rest: (* 0 1.5) is an exact 0 on Chez, and
+;; the JVM's (unchecked-multiply 0 1.5) is 0.0.
 (define (jolt-uncmul2 a b)
   (if (and (fixnum? a) (fixnum? b))
       (if (or (and (fx< -1073741824 a 1073741824) (fx< -1073741824 b 1073741824))
               (fl< (flabs (fl* (fixnum->flonum a) (fixnum->flonum b))) 1e18))
           (* a b)
           (if jolt-s64-mul-wrap (jolt-s64-mul-wrap a b) (jolt-wrap64 (* a b))))
-      (unc-wide2 * jolt-s64-mul-wrap a b)))
-(define (jolt-uncinc x) (if (fixnum? x) (+ x 1) (unc-wide2 + jolt-s64-add-wrap x 1)))
-(define (jolt-uncdec x) (if (fixnum? x) (- x 1) (unc-wide2 - jolt-s64-sub-wrap x 1)))
-;; Not (unc-wide2 - prim 0 x): on a flonum that is (- 0 0.0) = 0.0, where
-;; negate must answer -0.0.
+      (unc-wide2 * jolt-mul2 jolt-s64-mul-wrap a b)))
+;; jolt-inc/jolt-dec are inc and dec themselves: they carry the BigDecimal arm
+;; and raise for nil and non-numbers as the JVM's do.
+(define (jolt-uncinc x)
+  (cond ((fixnum? x) (+ x 1))
+        ((unc-long? x) (if jolt-s64-add-wrap (jolt-s64-add-wrap x 1) (jolt-wrap64 (+ x 1))))
+        (else (jolt-inc x))))
+(define (jolt-uncdec x)
+  (cond ((fixnum? x) (- x 1))
+        ((unc-long? x) (if jolt-s64-sub-wrap (jolt-s64-sub-wrap x 1) (jolt-wrap64 (- x 1))))
+        (else (jolt-dec x))))
+;; A flonum is negated in place, not as (- 0 x): that is 0.0 on 0.0, where
+;; negate must answer -0.0. A Float negates to the double it widens to (the
+;; JVM's Float is in the double category). Anything else outside Chez's tower
+;; (a BigDecimal, nil, a non-number) is 0 minus it through the checked op.
 (define (jolt-uncneg x)
   (cond ((fixnum? x) (- x))
-        ((unc-int? x) (if jolt-s64-sub-wrap (jolt-s64-sub-wrap 0 x) (jolt-wrap64 (- x))))
-        (else (- x))))
+        ((unc-long? x) (if jolt-s64-sub-wrap (jolt-s64-sub-wrap 0 x) (jolt-wrap64 (- x))))
+        ((number? x) (- x))
+        ((jfloat? x) (fl- (jfloat-fl x)))
+        (else (jolt-sub2 0 x))))
 (define (jolt-unchecked-add . xs) (if (null? xs) 0 (fold-left jolt-uncadd2 (car xs) (cdr xs))))
 (define (jolt-unchecked-mul . xs) (if (null? xs) 1 (fold-left jolt-uncmul2 (car xs) (cdr xs))))
 (define (jolt-unchecked-sub . xs)
   (cond ((null? xs) 0) ((null? (cdr xs)) (jolt-uncneg (car xs))) (else (fold-left jolt-uncsub2 (car xs) (cdr xs)))))
-(define (jolt-unchecked-div a b) (quotient (jolt-wrap64 a) (jolt-wrap64 b)))
-(define (jolt-unchecked-rem a b) (remainder (jolt-wrap64 a) (jolt-wrap64 b)))
-;; The -int family wraps to a signed 32-bit int. Each op has a fixed arity and a
-;; fixnum fast path that folds the exact result to 32 bits in place. Any other
-;; operand (flonum, char, bignum long, ratio) takes the long op, then the int cast.
-(define (unc-i32 r)
-  (let ((m (if (fixnum? r) (fxand r #xffffffff) (bitwise-and r #xffffffff))))
-    (if (fx>=? m #x80000000) (fx- m #x100000000) m)))
-(define (jolt-uncaddi2 a b)
-  (if (and (fixnum? a) (fixnum? b))
-      (unc-i32 (+ a b))
-      (jolt-unchecked-int (jolt-uncadd2 a b))))
-(define (jolt-uncsubi2 a b)
-  (if (and (fixnum? a) (fixnum? b))
-      (unc-i32 (- a b))
-      (jolt-unchecked-int (jolt-uncsub2 a b))))
+;; The -int family is Numbers.unchecked_int_add(int, int) and its siblings: the
+;; compiler casts EACH operand to int before the op, and only the op wraps. So
+;; (unchecked-add-int 1/2 1/2) is 0 + 0 and (unchecked-add-int 1.5 1.5) is 2.
+;;
+;; The operand cast is the one the compiler emits for an Object passed where an
+;; int is wanted: a checkcast to Number, then RT.intCast(Object) — so nil is a
+;; NullPointerException, a char or any other non-Number a ClassCastException,
+;; a long outside int range the ArithmeticException "integer overflow", and a
+;; value outside long range the IllegalArgumentException jolt-int-cast raises.
+;; A ^long operand reaches RT.intCast(long), the same check. Under
+;; *unchecked-math* the compiler emits uncheckedIntCast instead, which wraps;
+;; the analyzer sends those calls to the -w twins below (clojure.core's
+;; __unchecked-*-int natives). The var itself was compiled without it, so a
+;; call through the var or apply is always the checked one.
+;;
+;; Each op keeps a fixnum fast path, and the op bodies are macros so a fast
+;; path is one procedure, not three: two int-range fixnums need no cast. The
+;; -w twins wrap every fixnum alike (the low 32 bits of a sum, difference or
+;; product depend only on the operands' low 32 bits), so theirs is the old
+;; fixnum? test; divide and remainder are not like that, and cast first.
+(define-syntax unc-int-fx?
+  (syntax-rules ()
+    ((_ e) (let ((x e)) (and (fixnum? x) (fx>=? x -2147483648) (fx<=? x 2147483647))))))
+(define (unc-int-arg x)
+  (if (or (char? x) (jsurr? x)) (jolt-num-cast-throw x) (jolt-int-cast x)))
+(define (unc-int-arg-w x)
+  (if (or (char? x) (jsurr? x)) (jolt-num-cast-throw x) (jolt-unchecked-int x)))
+(define-syntax unc-i32
+  (syntax-rules ()
+    ((_ e) (let* ((r e)
+                  (m (if (fixnum? r) (fxand r #xffffffff) (bitwise-and r #xffffffff))))
+             (if (fx>=? m #x80000000) (fx- m #x100000000) m)))))
 ;; Two int-range factors can overflow a fixnum product. The low 32 bits of x*y
 ;; only need x*(y low 16) plus ((x*(y high)) low 16) shifted up, and every
 ;; partial product stays a fixnum.
-(define (jolt-uncmuli2 a b)
-  (if (and (fixnum? a) (fixnum? b))
-      (if (and (fx>=? a -2147483648) (fx<=? a 2147483647)
-               (fx>=? b -2147483648) (fx<=? b 2147483647))
-          (unc-i32 (+ (* a (fxand b #xffff))
-                      (* (fxand (* a (fxsra b 16)) #xffff) 65536)))
-          (unc-i32 (* a b)))
-      (jolt-unchecked-int (jolt-uncmul2 a b))))
-(define (jolt-uncinci x)
-  (if (fixnum? x) (unc-i32 (+ x 1)) (jolt-unchecked-int (jolt-uncinc x))))
-(define (jolt-uncdeci x)
-  (if (fixnum? x) (unc-i32 (- x 1)) (jolt-unchecked-int (jolt-uncdec x))))
-(define (jolt-uncnegi x)
-  (if (fixnum? x) (unc-i32 (- x)) (jolt-unchecked-int (jolt-uncneg x))))
-;; A zero divisor takes the slow path, which raises. MIN_VALUE / -1 is 2^31 here
-;; and folds back to MIN_VALUE, as on the JVM.
-(define (jolt-uncdivi2 a b)
-  (if (and (fixnum? a) (fixnum? b) (not (eq? b 0)))
-      (unc-i32 (quotient a b))
-      (jolt-unchecked-int (jolt-unchecked-div a b))))
-(define (jolt-uncremi2 a b)
-  (if (and (fixnum? a) (fixnum? b) (not (eq? b 0)))
-      (unc-i32 (remainder a b))
-      (jolt-unchecked-int (jolt-unchecked-rem a b))))
+(define-syntax unc-muli
+  (syntax-rules ()
+    ((_ ea eb) (let ((a ea) (b eb))
+                 (unc-i32 (+ (* a (fxand b #xffff))
+                             (* (fxand (* a (fxsra b 16)) #xffff) 65536)))))))
+;; A zero divisor raises, and MIN_VALUE / -1 is 2^31 here and folds back to
+;; MIN_VALUE, as on the JVM.
+(define-syntax unc-divi
+  (syntax-rules ()
+    ((_ ea eb) (let ((a ea) (b eb)) (if (eq? b 0) (jolt-l-div0-throw) (unc-i32 (quotient a b)))))))
+(define-syntax unc-remi
+  (syntax-rules ()
+    ((_ ea eb) (let ((a ea) (b eb)) (if (eq? b 0) (jolt-l-div0-throw) (unc-i32 (remainder a b)))))))
+(define-syntax unc-addi (syntax-rules () ((_ a b) (unc-i32 (+ a b)))))
+(define-syntax unc-subi (syntax-rules () ((_ a b) (unc-i32 (- a b)))))
+(define-syntax unc-inci (syntax-rules () ((_ a) (unc-i32 (+ a 1)))))
+(define-syntax unc-deci (syntax-rules () ((_ a) (unc-i32 (- a 1)))))
+(define-syntax unc-negi (syntax-rules () ((_ a) (unc-i32 (- a)))))
+;; One definer per arity, so a checked op and its wrapping twin share a body.
+;; let*, not the call's own argument list: the left operand is cast first, so
+;; (unchecked-add-int Long/MAX_VALUE nil) is the overflow, not the NPE.
+(define-syntax define-unc-int2
+  (syntax-rules ()
+    ((_ name fast? cast body)
+     (define (name a b)
+       (if (and (fast? a) (fast? b))
+           (body a b)
+           (let* ((x (cast a)) (y (cast b))) (body x y)))))))
+(define-syntax define-unc-int1
+  (syntax-rules ()
+    ((_ name fast? cast body)
+     (define (name a)
+       (if (fast? a) (body a) (body (cast a)))))))
+(define-unc-int2 jolt-uncaddi2 unc-int-fx? unc-int-arg unc-addi)
+(define-unc-int2 jolt-uncsubi2 unc-int-fx? unc-int-arg unc-subi)
+(define-unc-int2 jolt-uncmuli2 unc-int-fx? unc-int-arg unc-muli)
+(define-unc-int2 jolt-uncdivi2 unc-int-fx? unc-int-arg unc-divi)
+(define-unc-int2 jolt-uncremi2 unc-int-fx? unc-int-arg unc-remi)
+(define-unc-int1 jolt-uncinci unc-int-fx? unc-int-arg unc-inci)
+(define-unc-int1 jolt-uncdeci unc-int-fx? unc-int-arg unc-deci)
+(define-unc-int1 jolt-uncnegi unc-int-fx? unc-int-arg unc-negi)
+;; Any fixnum product is exact, so the -w multiply needs the partial-product
+;; trick only for int-range factors; a wider one wraps first.
+(define-unc-int2 jolt-uncaddi2w fixnum? unc-int-arg-w unc-addi)
+(define-unc-int2 jolt-uncsubi2w fixnum? unc-int-arg-w unc-subi)
+(define-unc-int2 jolt-uncmuli2w unc-int-fx? unc-int-arg-w unc-muli)
+(define-unc-int2 jolt-uncdivi2w unc-int-fx? unc-int-arg-w unc-divi)
+(define-unc-int2 jolt-uncremi2w unc-int-fx? unc-int-arg-w unc-remi)
+(define-unc-int1 jolt-uncinciw fixnum? unc-int-arg-w unc-inci)
+(define-unc-int1 jolt-uncdeciw fixnum? unc-int-arg-w unc-deci)
+(define-unc-int1 jolt-uncnegiw fixnum? unc-int-arg-w unc-negi)
 ;; the clojure.core/unchecked-* vars are def-var!'d in natives-seq.ss (def-var! is
 ;; defined after this file loads).
 
@@ -1525,9 +1734,24 @@
 (define-l-binop jolt-l=  fx=?  =)
 (define-l-binop jolt-l-min fxmin min)
 (define-l-binop jolt-l-max fxmax max)
-(define-l-binop jolt-l-quot fxquotient quotient)
-(define-l-binop jolt-l-rem  fxremainder remainder)
-(define-l-binop jolt-l-mod  fxmodulo modulo)
+;; The division ops test the divisor too: Chez's fx ops raise their own
+;; condition on a zero, where each of these raises the JVM's message. quot and
+;; rem over primitive longs are Java's / and %; mod is a clojure.core fn taking
+;; Objects, so its zero goes through Numbers' "Divide by zero" even on longs;
+;; Math.floorMod is Java's again.
+(define-syntax define-l-divop
+  (syntax-rules ()
+    ((_ name fxop genop div0)
+     (define-syntax name
+       (syntax-rules ()
+         ((_ a b) (let ((x a) (y b))
+                    (if (and (fixnum? x) (fixnum? y) (not (eq? y 0)))
+                        (fxop x y)
+                        (if (eqv? y 0) (div0) (genop x y))))))))))
+(define-l-divop jolt-l-quot fxquotient quotient jolt-l-div0-throw)
+(define-l-divop jolt-l-rem  fxremainder remainder jolt-l-div0-throw)
+(define-l-divop jolt-l-mod  fxmodulo modulo jolt-div0-throw)
+(define-l-divop jolt-l-floor-mod fxmodulo modulo jolt-l-div0-throw)
 ;; java.lang.Math over proven-:long operands (jolt.passes.numeric math-lng-ops).
 ;; Most members reuse the ops above — Math.floorMod IS Scheme's modulo, and the
 ;; Exact family is the checked +/-/* whose overflow arm raises ArithmeticException,
@@ -1539,6 +1763,7 @@
 ;; Gambit unit (which includes this file and shims the fx spellings to generic
 ;; arithmetic) with no new shim.
 (define (jolt-floor-quotient a b)
+  (when (eqv? b 0) (jolt-l-div0-throw))
   (let ((q (quotient a b)))
     (if (and (not (eqv? 0 (remainder a b)))
              (if (negative? b) (positive? a) (negative? a)))
@@ -1552,6 +1777,15 @@
 ;; emitted head cannot be shadowed by a user local.
 (define-syntax jolt-l-abs
   (syntax-rules () ((_ a) (abs a))))
+;; Math.pow over proven doubles. Java's pow is not C's: a NaN exponent is NaN
+;; even for a base of 1.0, and so is a base of magnitude 1.0 to an infinite
+;; power, where flexpt (C's pow) answers 1.0. Every other special case agrees.
+(define-syntax jolt-fl-pow
+  (syntax-rules ()
+    ((_ ea eb) (let ((a ea) (b eb))
+                 (if (or (nan? b) (and (infinite? b) (fl= (flabs a) 1.0)))
+                     +nan.0
+                     (flexpt a b))))))
 (define-syntax jolt-l-inc (syntax-rules () ((_ a) (jolt-l-checked (+ a 1)))))
 (define-syntax jolt-l-dec (syntax-rules () ((_ a) (jolt-l-checked (- a 1)))))
 
@@ -1596,9 +1830,12 @@
 ;; --- arity pre-check: throw typed ArityException BEFORE applying a proc or
 ;; invokable, so the site is classified structurally, not by matching Chez's
 ;; error message text after the fact.
+;; ArityException names the fn by its class, demunged as Compiler.demunge does
+;; (my.ns/mk/fn--123 for a literal in mk, my.ns/f for a defn): host-class.ss
+;; procedure-class-name.
 (define (jolt-proc-arity-name f)
-  (let ((p (proc-name-of f)))
-    (if p (string-append (car p) "/" (cdr p)) "fn")))
+  (let ((c (procedure-class-name f)))
+    (if c (compiler-demunge c) "fn")))
 ;; ArityException's count: the number, or "> 20" past twenty (CLJ-2739).
 (define (jvm-arity-count n)
   (if (and (number? n) (> n 20)) "> 20" (if (number? n) (number->string n) (jolt-str-render-one n))))
@@ -1627,6 +1864,25 @@
        (unless (fx=? n 1)
          (jolt-arity-error-name name n))))))
 
+;; (jolt-nil-invoke-error sig): the NullPointerException for calling nil
+;; through the IFn method SIG ("invoke(Object)", "applyTo(clojure.lang.ISeq)").
+;; The JVM's helpful-NPE text goes on to name the local the fn came in
+;; (because "g" is null); the runtime does not know it, so the message stops
+;; at the method, which is also how the JVM words it when there is no local.
+(define (jolt-nil-invoke-error sig)
+  (jolt-throw (jolt-host-throwable "java.lang.NullPointerException"
+                (string-append "Cannot invoke \"clojure.lang.IFn." sig "\""))))
+;; IFn's invoke overload for N arguments: N Objects, past twenty the variadic
+;; overload's twenty and an Object[] rest.
+(define (jolt-ifn-invoke-sig n)
+  (let loop ((i (fxmin n 20)) (acc '()))
+    (if (fx>? i 0)
+        (loop (fx- i 1) (cons "Object" acc))
+        (let ((ps (if (fx>? n 20) (append acc '("Object[]")) acc)))
+          (string-append "invoke("
+                         (if (null? ps) ""
+                             (fold-left (lambda (a b) (string-append a ", " b)) (car ps) (cdr ps)))
+                         ")")))))
 (define (jolt-invoke f . args)
   (cond
     ((procedure? f) (let ((n (length args)))
@@ -1660,7 +1916,7 @@
                            (apply jolt-get f args)))             ; a transient vec/map/set is callable on the JVM
     ;; a record/reify implementing clojure.lang.IFn is callable: dispatch to its
     ;; inline `invoke` method with the value itself as the leading `this`.
-    ((and (jrec? f) (find-method-any-protocol (jrec-tag f) "invoke"))
+    ((and (jrec? f) (find-method-any-protocol (jrec-rtag f) "invoke"))
      => (lambda (m) (apply jolt-invoke m f args)))
     ((reify-method-ref f "invoke")
      => (lambda (m) (apply jolt-invoke m f args)))
@@ -1674,6 +1930,10 @@
      (jolt-throw (jolt-host-throwable "java.lang.IllegalStateException"
                   (string-append "Attempting to call unbound fn: #'"
                                  (jolt-var-unbound-ns f) "/" (jolt-var-unbound-name f)))))
+    ;; calling nil: the JVM's call goes through a null IFn reference, so it is a
+    ;; NullPointerException, never a cast error, naming the invoke overload for
+    ;; the arity.
+    ((jolt-nil? f) (jolt-nil-invoke-error (jolt-ifn-invoke-sig (length args))))
     ;; calling a non-fn: a ClassCastException naming the operator's CLASS (like
     ;; the JVM's "class clojure.lang.LazySeq cannot be cast to ... IFn" — never
     ;; the value, whose printed form may be unbounded: ((range)) must throw, not
@@ -1693,8 +1953,14 @@
 ;; set callable) delegates to the full variadic jolt-invoke above, which after the
 ;; prefix-arm collapse is one lambda, one rest-list, no re-apply. The back end
 ;; picks jolt-invokeN by arg count (N<=4); apply/variadic cases keep jolt-invoke.
-;; Each embeds an arity pre-check — one fxlogbit? test, predicted taken — so a
-;; wrong-arity call throws a typed ArityException BEFORE Chez raises a raw condition.
+;; None of them checks the arity first. Chez's own entry check already refuses
+;; a wrong-arity application, and the raw condition it raises -- "incorrect
+;; number of arguments" with the count and the procedure as irritants -- is an
+;; ArityException by the time any catch or report sees it (host-faults.ss
+;; fault-class, and fault-message, which renders the JVM's "Wrong number of
+;; args (n) passed to: ns/fn" from those irritants). The pre-check was
+;; procedure-arity-mask, an out-of-line library call: ~4 of the ~5.5 ns
+;; jolt-invoke-t2 added to every var-routed call (#1713).
 ;;
 ;; Past the procedure? test they also answer the LOOKUP-SHAPED callables — a
 ;; keyword, symbol, map, set or vector in head position — instead of dropping to
@@ -1712,15 +1978,18 @@
 ;; is not a pmap and a multifn is not a keyword — so no predicate here can claim a
 ;; value a prefix arm would have. Everything else, records/reifies implementing
 ;; IFn, transients, sorted maps, unbound vars, still falls through unchanged.
+;; A multifn is answered here too, by the fixed-arity entry the prefix arm would
+;; have chosen, without the rest list and the arm walk that reach it (#1713).
 ;;
 ;; Only the arities each type actually accepts are answered here. A vector or set
 ;; takes exactly one argument and a map or keyword takes one or two, so
 ;; jolt-invoke2 answers fewer types than jolt-invoke1 and the rest fall through to
 ;; get their typed ArityException from jolt-invoke, unchanged.
-(define (jolt-invoke-t0 f) (if (procedure? f) (if (fxlogbit? 0 (procedure-arity-mask f)) (f) (jolt-proc-arity-error f 0)) (jolt-invoke f)))
+(define (jolt-invoke-t0 f) (if (procedure? f) (f) (jolt-invoke f)))
 (define (jolt-invoke-t1 f a)
   (cond
-    ((procedure? f) (if (fxlogbit? 1 (procedure-arity-mask f)) (f a) (jolt-proc-arity-error f 1)))
+    ((procedure? f) (f a))
+    ((jolt-multifn? f) (multifn-dispatch1 f a))
     ((keyword? f) (jolt-get a f))            ; (:k m) -> (get m :k)
     ((pmap? f) (jolt-get f a))               ; (m k)  -> (get m k)
     ((jolt-symbol? f) (jolt-get a f))        ; ('s m) -> (get m 's)
@@ -1730,13 +1999,17 @@
     (else (jolt-invoke f a))))
 (define (jolt-invoke-t2 f a b)
   (cond
-    ((procedure? f) (if (fxlogbit? 2 (procedure-arity-mask f)) (f a b) (jolt-proc-arity-error f 2)))
+    ((procedure? f) (f a b))
+    ((jolt-multifn? f) (multifn-dispatch2 f a b))
     ((keyword? f) (jolt-get a f b))          ; (:k m d) -> (get m :k d)
     ((pmap? f) (jolt-get f a b))             ; (m k d)  -> (get m k d)
     ((jolt-symbol? f) (jolt-get a f b))      ; ('s m d) -> (get m 's d)
     (else (jolt-invoke f a b))))
-(define (jolt-invoke-t3 f a b c) (if (procedure? f) (if (fxlogbit? 3 (procedure-arity-mask f)) (f a b c) (jolt-proc-arity-error f 3)) (jolt-invoke f a b c)))
-(define (jolt-invoke-t4 f a b c d) (if (procedure? f) (if (fxlogbit? 4 (procedure-arity-mask f)) (f a b c d) (jolt-proc-arity-error f 4)) (jolt-invoke f a b c d)))
+(define (jolt-invoke-t3 f a b c)
+  (cond ((procedure? f) (f a b c))
+        ((jolt-multifn? f) (multifn-dispatch3 f a b c))
+        (else (jolt-invoke f a b c))))
+(define (jolt-invoke-t4 f a b c d) (if (procedure? f) (f a b c d) (jolt-invoke f a b c d)))
 
 ;; jolt-invoke0..4: the same calls, from code that is not traced -- clojure.core,
 ;; the runtime's own Scheme -- calling a fn value that may be. A traced fn's tail
@@ -1753,38 +2026,34 @@
 ;; jolt-invoke-tN there and these only at an untraced non-tail site.
 (define (jolt-invoke0 f)
   (if (procedure? f)
-      (if (fxlogbit? 0 (procedure-arity-mask f))
-          (jolt-site-kept (f))
-          (jolt-proc-arity-error f 0))
+      (jolt-site-kept (f))
       (jolt-site-kept (jolt-invoke-t0 f))))
 (define (jolt-invoke1 f a)
   (cond
     ((procedure? f)
-     (if (fxlogbit? 1 (procedure-arity-mask f))
-         (jolt-site-kept (f a))
-         (jolt-proc-arity-error f 1)))
+     (jolt-site-kept (f a)))
     ;; (v i) with an in-range fixnum index can't throw or call out, so it skips
     ;; the site bookkeeping
     ((and (pvec? f) (fixnum? a) (fx>=? a 0) (fx<? a (pvec-cnt f)))
      (pvec-nth-in-range f a))
+    ;; a map or a keyword as the fn -- (m k), (map :k xs) -- straight to the
+    ;; lookup jolt-invoke-t1 and jolt-get would reach two calls later (#1713)
+    ((pmap? f) (jolt-site-kept (pmap-fast-get f a jolt-nil)))
+    ((keyword-t? f) (jolt-site-kept (jolt-get a f)))
     (else (jolt-site-kept (jolt-invoke-t1 f a)))))
 (define (jolt-invoke2 f a b)
-  (if (procedure? f)
-      (if (fxlogbit? 2 (procedure-arity-mask f))
-          (jolt-site-kept (f a b))
-          (jolt-proc-arity-error f 2))
-      (jolt-site-kept (jolt-invoke-t2 f a b))))
+  (cond
+    ((procedure? f) (jolt-site-kept (f a b)))
+    ((pmap? f) (jolt-site-kept (pmap-fast-get f a b)))
+    ((keyword-t? f) (jolt-site-kept (jolt-get a f b)))
+    (else (jolt-site-kept (jolt-invoke-t2 f a b)))))
 (define (jolt-invoke3 f a b c)
   (if (procedure? f)
-      (if (fxlogbit? 3 (procedure-arity-mask f))
-          (jolt-site-kept (f a b c))
-          (jolt-proc-arity-error f 3))
+      (jolt-site-kept (f a b c))
       (jolt-site-kept (jolt-invoke-t3 f a b c))))
 (define (jolt-invoke4 f a b c d)
   (if (procedure? f)
-      (if (fxlogbit? 4 (procedure-arity-mask f))
-          (jolt-site-kept (f a b c d))
-          (jolt-proc-arity-error f 4))
+      (jolt-site-kept (f a b c d))
       (jolt-site-kept (jolt-invoke-t4 f a b c d))))
 
 ;; ============================================================================
@@ -2182,6 +2451,10 @@
     ((or (pvec? to) (pmap? to) (pset? to))
      (meta-carry to
        (jolt-persistent! (into-fold (lambda (t x) (jolt-conj! t x)) (jolt-transient-new to) from))))
+    ;; a sorted coll takes the whole source in one :conj call, which sorts and
+    ;; bulk-loads it (host-table.ss "many entries at once") instead of walking
+    ;; the tree once per element; the result is the same as conj after conj
+    ((htable-sorted? to) (sorted-into to #f from))
     ;; into nil is (reduce conj nil from): the first conj onto nil starts a
     ;; list, and an empty source leaves nil, as on the JVM.
     ((jolt-nil? to)
@@ -2217,31 +2490,48 @@
 ;; record, a sorted map, a host map arm) folds over its keys, the reference's
 ;; IPersistentMap arm. nil folds to init.
 (define (kv-step f) (if (procedure? f) (lambda (acc k v) (jolt-site-kept (f acc k v))) (lambda (acc k v) (jolt-invoke3 f acc k v))))
+;; Keep kv-step in the ordinary walker's compilation scope so the host can
+;; specialize its procedure and IFn arms. The confined path already has a
+;; Scheme step and uses the same array, trie and collision traversal.
+(define-syntax walk-pmap-kv
+  (syntax-rules ()
+    ((_ m step init)
+     (let ((root (pmap-root m)))
+       (if (not (hnode? root))
+           (let ((n (vector-length root)))
+             (let loop ((i 0) (acc init))
+               (cond ((jolt-reduced? acc) acc)
+                     ((fx>=? i n) acc)
+                     (else (loop (fx+ i 2) (step acc (vector-ref root i) (vector-ref root (fx+ i 1))))))))
+           ;; hash mode walks the trie in the seq view's order (hamt-kv-reduce
+           ;; below), stopping at a reduced accumulator anywhere
+           (hamt-kv-reduce root step init))))))
 (define (pmap-kv-reduce m f init)
-  (let ((step (kv-step f)) (root (pmap-root m)))
-    (if (not (hnode? root))
-        (let ((n (vector-length root)))
-          (let loop ((i 0) (acc init))
-            (cond ((jolt-reduced? acc) acc)
-                  ((fx>=? i n) acc)
-                  (else (loop (fx+ i 2) (step acc (vector-ref root i) (vector-ref root (fx+ i 1))))))))
-        ;; hash mode walks the trie in the seq view's order (ascending slots,
-        ;; children in place), stopping at a reduced accumulator at any leaf
-        (let walk ((node root) (acc init))
-          (let ((arr (hnode-arr node)))
-            (let loop ((i 0) (acc acc))
-              (cond ((jolt-reduced? acc) acc)
-                    ((fx>=? i (vector-length arr)) acc)
-                    (else
-                     (let ((child (vector-ref arr i)))
-                       (loop (fx+ i 1)
-                             (cond ((hnode? child) (walk child acc))
-                                   ((hcoll? child)
-                                    (let cl ((al (hcoll-alist child)) (acc acc))
-                                      (cond ((jolt-reduced? acc) acc)
-                                            ((null? al) acc)
-                                            (else (cl (cdr al) (step acc (caar al) (cdar al)))))))
-                                   (else (step acc (car child) (cdr child))))))))))))))
+  (let ((step (kv-step f)))
+    (walk-pmap-kv m step init)))
+;; collections.ss node-fold-fwd's walk with a stop at a reduced accumulator.
+;; Here, not there, so jolt-reduced? (this file's record predicate) is open-coded
+;; rather than called per entry.
+(define (hamt-kv-reduce node step acc)
+  (let* ((dm (hnode-dmap node)) (nm (hnode-nmap node)) (arr (hnode-arr node))
+         (base (fx* 2 (hamt-popcount dm))))
+    (if (hamt-u=? 0 nm)
+        (let run ((i 0) (acc acc))
+          (if (or (fx=? i base) (jolt-reduced? acc)) acc
+              (run (fx+ i 2) (step acc (vector-ref arr i) (vector-ref arr (fx+ i 1))))))
+        (let loop ((rem (hamt-ior dm nm)) (di 0) (ni (fx- (vector-length arr) 1)) (acc acc))
+          (if (or (hamt-u=? 0 rem) (jolt-reduced? acc))
+              acc
+              (let ((low (hamt-ulow-bit rem)))
+                (if (hamt-uentry? dm low)
+                    (loop (hamt-uxor rem low) (fx+ di 2) ni (step acc (vector-ref arr di) (vector-ref arr (fx+ di 1))))
+                    (let ((b (vector-ref arr ni)))
+                      (loop (hamt-uxor rem low) di (fx- ni 1)
+                            (if (hnode? b)
+                                (hamt-kv-reduce b step acc)
+                                (let cl ((al (hcoll-alist b)) (acc acc))
+                                  (if (or (jolt-reduced? acc) (null? al)) acc
+                                      (cl (cdr al) (step acc (caar al) (cdar al)))))))))))))))
 (define (vec-kv-reduce v f init)
   (let ((step (kv-step f)) (n (pvec-count v)))
     (let outer ((i 0) (acc init))
@@ -2319,6 +2609,9 @@
                              (else (loop (step acc (jolt-nth (car es) 0) (jolt-nth (car es) 1))
                                          (cdr es))))))))
              ((iface-method coll "kvreduce" 3) => (lambda (m) (jolt-invoke m coll f init)))
+             ;; a sorted map walks its tree's leaves, as PersistentTreeMap.kvreduce
+             ;; walks its nodes, stopping at a reduced value (host-table.ss)
+             ((htable-sorted-map? coll) (sc-reduce-kv coll (kv-step f) init))
              ((jolt-map? coll)
               (let ((step (kv-step f)))
                 (reduce-seq (lambda (acc k) (step acc k (jolt-get coll k))) init (jolt-seq (jolt-keys coll)))))
@@ -2758,7 +3051,7 @@
 ;; call with 3+ arguments to (apply f args), so no SCI-evaluated call to a
 ;; variadic core fn could carry more than 21 arguments.
 (define (jolt-apply-to-method f)
-  (cond ((jrec? f) (find-method-any-protocol (jrec-tag f) "applyTo"))
+  (cond ((jrec? f) (find-method-any-protocol (jrec-rtag f) "applyTo"))
         ((jreify? f) (reify-method-ref f "applyTo"))
         (else #f)))
 (define (jolt-apply f . args)
@@ -2782,6 +3075,8 @@
                      (append head
                              (list (make-lazy-rest
                                     (fold-right cseq-realized (cdr peeled) spill))))))))
+      ;; apply of nil reaches IFn.applyTo on a null reference
+      ((jolt-nil? f) (jolt-nil-invoke-error "applyTo(clojure.lang.ISeq)"))
       ;; a type's own applyTo takes ONE seq of every argument (nil when there are
       ;; none), so the tail is not realized here either.
       ((jolt-apply-to-method f)

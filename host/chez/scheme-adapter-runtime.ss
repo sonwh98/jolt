@@ -38,6 +38,27 @@
 (define (sa-run-process cmd transcoder)
   (open-process-ports cmd (buffer-mode block) transcoder))
 
+;; (sa-gc-set-collect-guard! guard): GUARD is called with a thunk that runs one
+;; collection, and must call it exactly once. Every collection jolt starts runs
+;; through it: the collect-request handler's and sa-gc-collect's direct one.
+;; Chez's parallel collector starts its sweeper threads from inside a
+;; collection, and a new thread takes the mask of the thread that made it, so
+;; the guard is where the host gives them the mask every other thread is forked
+;; with (concurrency.ss jolt-collect-with-signals-blocked). The direct path can
+;; be entered by two threads at once (one of them then loses the race and
+;; joins the rendezvous), so a guard may not keep per-collection state in a
+;; shared place. A process that never installs jolt's handler (source mode
+;; without a devcache, an embedder that skips the policy) would otherwise
+;; collect through Chez's default one, outside the guard, so setting a guard
+;; then puts in a handler that does what the default does, through it.
+;; sa-gc-install-after-collect! replaces that one with its own.
+(define sa-collect-handler-installed? #f)
+(define sa-gc-collect-guard (lambda (collect!) (collect!)))
+(define (sa-gc-set-collect-guard! guard)
+  (set! sa-gc-collect-guard guard)
+  (unless sa-collect-handler-installed?
+    (collect-request-handler (lambda () (sa-gc-collect-guard collect)))))
+
 ;; (sa-gc-collect) -> void
 ;; A full collection hint (every generation) — what the Runtime.gc /
 ;; System.gc callers mean: weak references clear and guardians fire.
@@ -57,7 +78,6 @@
 ;; handler, retry over a short window and degrade to a no-op, because
 ;; System.gc must hint, never throw. Any other collector error still raises.
 (define sa-full-collect-requested? #f)
-(define sa-collect-handler-installed? #f)
 (define (sa-gc-collect)
   (let loop ((tries (if sa-collect-handler-installed? 0 100)))
     (let ((r (guard (e (#t (if (and (message-condition? e)
@@ -65,7 +85,7 @@
                                               "cannot collect when multiple threads are active"))
                                'busy
                                (raise e))))
-               (collect (collect-maximum-generation))
+               (sa-gc-collect-guard (lambda () (collect (collect-maximum-generation))))
                'ok)))
       (case r
         ;; no collect-request-handler ran, so undo the pins of arrays this one
@@ -188,6 +208,12 @@
 (define (sa-epoch-ms)
   (let ((t (current-time 'time-utc)))
     (+ (* (time-second t) 1000) (quotient (time-nanosecond t) 1000000))))
+
+;; (sa-process-id) -> exact integer
+;; The operating-system id of this process. Contract: differs between two
+;; processes alive at the same time -- with sa-epoch-ms, the salt that keeps ids
+;; one process compiled from colliding with another's. Degradation: none.
+(define (sa-process-id) (get-process-id))
 
 ;; ---- records: open-coded predicates, accessors, mutators, constructors -------
 ;;
@@ -712,6 +738,37 @@
 (define sa-flonum-hi-disp
   (if (eq? (native-endianness) (endianness little)) (fx+ sa-flonum-disp 4) sa-flonum-disp))
 (define (sa-flonum-hi32 x) (#%$object-ref 'unsigned-32 x sa-flonum-hi-disp))
+;; and the low word, the payload's other half (number-print.ss reads both)
+(define sa-flonum-lo-disp
+  (if (eq? (native-endianness) (endianness little)) sa-flonum-disp (fx+ sa-flonum-disp 4)))
+(define (sa-flonum-lo32 x) (#%$object-ref 'unsigned-32 x sa-flonum-lo-disp))
+;; (sa-bignum-s64? x): whether a BIGNUM (the caller has asked bignum?) lies in
+;; signed 64 bits, [-2^63, 2^63). jolt classes an exact integer by that range
+;; (a Long inside, a BigInt past it), and the unchecked ops ask it of every
+;; non-fixnum operand. Two generic compares against the bignum bounds cost
+;; 14 ns there, longer than the wrapped op itself, so the answer is read off
+;; the object: a bignum that fits has at most two 32-bit bigits, and with two
+;; the top one decides (below 2^31, or exactly 2^31 over a zero low bigit for
+;; -2^63). Bigits are stored most significant first; the payload's offset from
+;; the tagged pointer is found once at load by probing a two-bigit bignum for
+;; its own words, counting up from the header so no probe reads outside it.
+(define sa-bignum-data-disp
+  (let ((x (+ #x5A5A5A5AA5C3A5C3 0)))
+    (let loop ((d 1))
+      (cond ((fx> d 17) (error 'sa-bignum-data-disp "no bignum payload"))
+            ((and (= (#%$object-ref 'unsigned-32 x d) #x5A5A5A5A)
+                  (= (#%$object-ref 'unsigned-32 x (fx+ d 4)) #xA5C3A5C3)) d)
+            (else (loop (fx+ d 1)))))))
+(define-syntax sa-bignum-s64?
+  (syntax-rules ()
+    ((_ e) (let* ((x e) (n (#%$bignum-length x)))
+             (or (fx= n 1)
+                 (and (fx= n 2)
+                      (let ((hi (#%$object-ref 'unsigned-32 x sa-bignum-data-disp)))
+                        (or (< hi #x80000000)
+                            (and (= hi #x80000000) (not (#%$bigpositive? x))
+                                 (eqv? 0 (#%$object-ref 'unsigned-32 x
+                                                        (fx+ sa-bignum-data-disp 4))))))))))))
 ;; Built arithmetically, exactly: (1 + m/2^20) * 2^(e-1023) for a normal field,
 ;; m * 2^-1042 for a subnormal one, each power of two from a table.
 (define sa-pow2-base 1100)
@@ -1437,21 +1494,23 @@
                  (collect (collect-maximum-generation)))))))
     (collect-request-handler
       (lambda ()
-        (if sa-full-collect-requested?
-            ;; sa-gc-collect's full collection, run here because another thread
-            ;; was active: what its direct path does, and no more -- it is not a
-            ;; young collection for the nursery's time share to count
-            (begin
-              (set! sa-full-collect-requested? #f)
-              (collect (collect-maximum-generation))
-              (sa-pin-drain-after-collect!))
-            (let ((t0 (sa-monotonic-ns)))
-              (sa-collect-young!)
-              (maintain collect-full!)
-              (sa-pin-drain-after-collect!)
-              (let ((t1 (sa-monotonic-ns)))
-                (observe (- t1 t0) (- t1 last-end))
-                (set! last-end t1)))))))
+        (sa-gc-collect-guard
+          (lambda ()
+            (if sa-full-collect-requested?
+                ;; sa-gc-collect's full collection, run here because another thread
+                ;; was active: what its direct path does, and no more -- it is not a
+                ;; young collection for the nursery's time share to count
+                (begin
+                  (set! sa-full-collect-requested? #f)
+                  (collect (collect-maximum-generation))
+                  (sa-pin-drain-after-collect!))
+                (let ((t0 (sa-monotonic-ns)))
+                  (sa-collect-young!)
+                  (maintain collect-full!)
+                  (sa-pin-drain-after-collect!)
+                  (let ((t1 (sa-monotonic-ns)))
+                    (observe (- t1 t0) (- t1 last-end))
+                    (set! last-end t1)))))))))
   (set! sa-collect-handler-installed? #t)
   #t)
 ;; A tight full collection within ROOM free bytes: every generation from 1 up
@@ -1904,6 +1963,24 @@
 (define (sa-current-winders) (#%$current-winders))
 (define (sa-current-winders-set! w) (#%$current-winders w))
 
+;; The pieces of a handler installation that runs its body INLINE, for jolt's
+;; try (rt.ss jolt-guard). with-exception-handler takes the body as a thunk,
+;; and a thunk is a closure over every free variable of the body -- in emitted
+;; code, every hoisted constant it names -- allocated on each entry: ~650 bytes
+;; a try in tools.reader's read*. These set the handler stack and push the
+;; winder that restores it on an escape, exactly what with-exception-handler's
+;; parameterize does around its thunk, with the body left where it is. Syntax,
+;; so each is a load or a store at the site. NOT contract names: only the Chez
+;; back end's try emission uses them.
+(define-syntax sa-handler-stack (syntax-rules () ((_) (#%$current-handler-stack))))
+(define-syntax sa-handler-stack-set! (syntax-rules () ((_ v) (#%$current-handler-stack v))))
+(define-syntax sa-winders (syntax-rules () ((_) (#%$current-winders))))
+(define-syntax sa-winders-set! (syntax-rules () ((_ w) (#%$current-winders w))))
+(define sa-winder-make
+  (and sa-winder-rtd (record-constructor (make-record-constructor-descriptor sa-winder-rtd #f #f))))
+(define-syntax sa-make-winder
+  (syntax-rules () ((_ in out) (sa-winder-make in out (#%$current-attachments)))))
+
 ;; (sa-record-cas! r i old new): compare-and-swap field i (0-based) of record r,
 ;; answering whether it swapped. What lets a lazy cell be claimed for forcing
 ;; with no lock in the way and nothing allocated (seq.ss force-claimed!). A
@@ -2132,14 +2209,87 @@
 ;; carries its own range proof; here each is the #3% primitive — what the
 ;; whole runtime would be at optimize-level 3, applied to the one loop that
 ;; has proven it.
+;; (sa-foreign-call-chain) -> this thread's chain of C-call frames, a list Chez
+;; extends when C calls back into Scheme and restores, the same object, when the
+;; callback returns. The fiber scheduler compares it with the chain its drain
+;; started under to tell that the running fiber is inside a foreign callback
+;; (fibers.ss jolt-fiber-preempt-handler). Not a CONTRACT.txt name: only the
+;; Chez scheduler asks it, and Gambit has no fibers.
+(define (sa-foreign-call-chain) (#%$tc-field 'cchain (#%$tc)))
+;; (sa-record-rtd x) -> x's exact record-type descriptor, or #f when x is not a
+;; record. (sa-record-slot r i) -> field I of record R, inherited fields first,
+;; unchecked: the caller has proven R's type has that field (by an eq? on the
+;; descriptor sa-record-rtd answered). Both open-code to a load or two, where
+;; record? against a parent type is a library call; the protocol PIC uses them to
+;; recognise the record family by its few concrete descriptors (rt.ss
+;; jrec-pic-desc/i). Not CONTRACT.txt names: only the Chez runtime's own
+;; emitted-code macros use them, never shared host code, so no other target has
+;; to provide them.
+(define-syntax sa-record-rtd
+  (syntax-rules ()
+    ((_ x) (let ((v x)) (if (#3%$record? v) (#3%$record-type-descriptor v) #f)))))
+(define-syntax sa-record-slot (syntax-rules () ((_ r i) (#3%$record-ref r i))))
+;; (sa-record-slot-set! r i v): the store, under the same proof as the read.
+(define-syntax sa-record-slot-set! (syntax-rules () ((_ r i v) (#3%$record-set! r i v))))
+;; (sa-define-inlinable! sym expr) -> the value. Defines SYM at top level to
+;; EXPR's value, and on a kernel carrying chez-patches/0010 records EXPR's
+;; inlining information as a library export's is recorded, so that code
+;; compiled AFTERWARD that calls SYM gets SYM's body inlined by cp0 (Chez's own
+;; cross-library inliner, Keep and Dybvig 2013). The caller keeps the call
+;; behind a guard of its own -- (if (eq? f SYM) (SYM x) (f x)) -- so the inlined
+;; body runs only when SYM's procedure is the one the caller would have called.
+;; On a stock kernel SYM is defined and nothing is recorded: the guarded call is
+;; a plain call.
+;;
+;; The definition is the promise a library export carries by construction: SYM
+;; is defined once and never assigned. A caller compiled against one body
+;; compares against SYM's current value, so a second definition would run the
+;; old body behind a guard that passes; that is why a symbol already defined
+;; through here is refused. A specialization takes a fresh symbol for each
+;; version. Its references to other top-level variables stay inlinable:
+;; interaction-environment labels are gensyms, which the inliner would take for
+;; library exports needing invoke requirements, and
+;; expand-omit-library-invocations says there are none.
+;;
+;; SCORE is the size cp0 may record a body up to (cp0-score-limit, 20 by
+;; default): how much code to copy into each caller is the specializer's call,
+;; which knows the site is hot.
+(define sa-define-inlinable!
+  (case-lambda
+    ((sym expr) (sa-define-inlinable! sym expr (cp0-score-limit)))
+    ((sym expr score)
+     (when (#%$sgetprop sym '*clo* #f)
+       (error 'sa-define-inlinable! "already defined once" sym))
+     (#%$sputprop sym '*clo* (box '()))
+     ;; a definition that raises defined nothing, so it leaves SYM unmarked
+     (guard (e (#t (#%$sremprop sym '*clo*) (raise e)))
+       (parameterize ([expand-omit-library-invocations #t] [cp0-score-limit score])
+         (eval `(define ,sym ,expr))))
+     (top-level-value sym))))
+;; (sa-inline-recorded? sym) -> whether SYM's definition recorded an inlinable
+;; body for every one of its clauses: #t on a patched kernel for a procedure cp0
+;; can inline (within its size limit, no free lexical variable), #f on a stock
+;; kernel or for one it cannot. The box holds, per target machine, cp0's
+;; #(procedure all-clauses? single-valued?) (cp0.ss make-cte-info).
+(define (sa-inline-recorded? sym)
+  (let* ((b (#%$sgetprop sym '*clo* #f))
+         (a (and (box? b) (assq (machine-type) (unbox b)))))
+    (and a (vector? (cdr a)) (vector-ref (cdr a) 1) #t)))
 (define-syntax sa-ufx+ (syntax-rules () ((_ a b) (#3%fx+ a b))))
 (define-syntax sa-ufx- (syntax-rules () ((_ a b) (#3%fx- a b))))
 (define-syntax sa-ufx<? (syntax-rules () ((_ a b) (#3%fx<? a b))))
 (define-syntax sa-ufx>=? (syntax-rules () ((_ a b) (#3%fx>=? a b))))
 (define-syntax sa-ufx=? (syntax-rules () ((_ a b) (#3%fx=? a b))))
+(define-syntax sa-ufxand (syntax-rules () ((_ a b) (#3%fxand a b))))
+(define-syntax sa-ufxxor (syntax-rules () ((_ a b) (#3%fxxor a b))))
+(define-syntax sa-ufx* (syntax-rules () ((_ a b) (#3%fx* a b))))
+(define-syntax sa-ufxior (syntax-rules () ((_ a b) (#3%fxior a b))))
+(define-syntax sa-ufxsra (syntax-rules () ((_ a b) (#3%fxsra a b))))
+(define-syntax sa-ufxsll (syntax-rules () ((_ a b) (#3%fxsll a b))))
 (define-syntax sa-uvector-ref (syntax-rules () ((_ v i) (#3%vector-ref v i))))
 (define-syntax sa-uvector-set! (syntax-rules () ((_ v i x) (#3%vector-set! v i x))))
 (define-syntax sa-ustring-ref (syntax-rules () ((_ s i) (#3%string-ref s i))))
+(define-syntax sa-ustring-set! (syntax-rules () ((_ s i c) (#3%string-set! s i c))))
 (define-syntax sa-uflvector-ref (syntax-rules () ((_ v i) (#3%flvector-ref v i))))
 (define-syntax sa-uflvector-set! (syntax-rules () ((_ v i x) (#3%flvector-set! v i x))))
 (define-syntax sa-ubytevector-ieee-single-native-ref

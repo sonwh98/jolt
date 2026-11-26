@@ -172,7 +172,10 @@
 (define jrdesc-ifc-mutex (make-mutex))
 (define (jrdesc-ifc d) (hashtable-ref jrdesc-ifc-tbl d #f))
 (define (jrdesc-ifc-set! d v) (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! jrdesc-ifc-tbl d v)))
-(define (jrdesc-ifc-epoch) (fx+ jch-graph-epoch jolt-proto-epoch))
+;; A macro, not a procedure: every record op's derived-vector hit compares it,
+;; and the call was a third of that hit (9 ns, #1713). Two global reads.
+(define-syntax jrdesc-ifc-epoch
+  (syntax-rules () ((_) (fx+ jch-graph-epoch jolt-proto-epoch))))
 ;; The shape order is the JVM's print-method precedence, verified against it: ISeq
 ;; outranks IPersistentVector / IPersistentSet / IPersistentMap, and IRecord
 ;; outranks IPersistentMap (prefer-method), so a defrecord has no shape at all.
@@ -185,7 +188,10 @@
 ;; — a stale entry that revalidation could never catch. Reading it first can only
 ;; understamp, which costs one re-derivation.
 (define (jrdesc-derive-ifc d record?)
+  ;; TAG is the type's place in the class graph; RTAG where its impls are filed,
+  ;; which differs for a redefined type's old instances (records.ss jrdesc-rtag)
   (let ((tag (jrdesc-tag d))
+        (rtag (jrdesc-rtag d))
         (epoch (jrdesc-ifc-epoch)))
     (vector epoch
             (and (not record?)
@@ -204,12 +210,12 @@
                        (else #f)))
             (jch-isa? tag "java.lang.CharSequence")
             record?
-            (and (not record?) (tag-declares-coll-iface? tag))
+            (and (not record?) (tag-declares-coll-iface? rtag))
             ;; slot 5: declares clojure.lang.Sequential. Derived here with the
             ;; rest because it is asked on the EQUALITY path — every (= record x)
             ;; consults it for both operands — and answering it from the protocol
             ;; table meant a mutex and a key-vector allocation per comparison.
-            (and (not record?) (tag-declares-sequential? tag))
+            (and (not record?) (tag-declares-sequential? rtag))
             ;; slot 6: a bare deftype's DECLARED ILookup, as (3-arity . 2-arity);
             ;; either half may be #f. The JVM gives a bare deftype no key lookup
             ;; of its own, so a declared valAt IS the lookup and answers for
@@ -221,8 +227,8 @@
             ;; Derived here, so the get path pays the vector-ref it already pays
             ;; for the flags above rather than two string hashes per lookup.
             (and (not record?)
-                 (let ((m3 (find-method-any-protocol-arity tag "valAt" 3))
-                       (m2 (find-method-any-protocol-arity tag "valAt" 2)))
+                 (let ((m3 (find-method-any-protocol-arity rtag "valAt" 3))
+                       (m2 (find-method-any-protocol-arity rtag "valAt" 2)))
                    ;; -arity falls back to ANY same-named impl when no arity
                    ;; matches, so each half is confirmed against the procedure
                    ;; before it is kept — a type declaring only (valAt [_ k])
@@ -253,12 +259,12 @@
             ;; a java.util.Map that is not an IPersistentMap or also declares
             ;; MapEquivalence (APersistentMap.equiv's test — flatland's ordered
             ;; map passes it, a defrecord does not), a java.util.Set.
-            (let ((equiv (find-method-any-protocol tag "equiv")))
+            (let ((equiv (find-method-any-protocol rtag "equiv")))
               (vector equiv
-                      (find-method-any-protocol tag "equals")
+                      (find-method-any-protocol rtag "equals")
                       (and (or record? equiv (jch-isa? tag "clojure.lang.IPersistentCollection")) #t)
                       (and (not record?)
-                           (or (tag-declares-sequential? tag) (jch-isa? tag "java.util.List")) #t)
+                           (or (tag-declares-sequential? rtag) (jch-isa? tag "java.util.List")) #t)
                       (and (jch-isa? tag "java.util.Map")
                            (or (not (jch-isa? tag "clojure.lang.IPersistentMap"))
                                (jch-isa? tag "clojure.lang.MapEquivalence"))
@@ -269,12 +275,22 @@
             ;; slot 14: a PLAIN record — see jrec-plain? below
             (and record?
                  (not (jch-isa? tag "java.lang.CharSequence"))
-                 (not (exists (lambda (nm) (find-method-any-protocol tag nm))
+                 (not (exists (lambda (nm) (find-method-any-protocol rtag nm))
                               jrec-map-method-names)))
             ;; slot 15: the type's ^double field flags (chez-record-dbl-tbl), or
             ;; #f — what assoc widens a replaced field by, read here rather than
             ;; through a string-keyed lookup on every assoc
-            (hashtable-ref chez-record-dbl-tbl tag #f))))
+            (hashtable-ref chez-record-dbl-tbl tag #f)
+            ;; slot 16: the type's own IObj, as (meta-impl . withMeta-impl), or
+            ;; #f when it declares neither -- what meta and with-meta ask on
+            ;; every call (natives-meta.ss, through jrec-iobj/i), so a record that keeps its
+            ;; meta in the slot answers with one vector-ref instead of two
+            ;; by-name lookups. Not the plain flag: a type is plain only when
+            ;; it declares none of a long list of names (rewrite-clj's nodes
+            ;; declare a protocol method named length, which is CharSequence's).
+            (let ((m (find-method-any-protocol rtag "meta"))
+                  (w (find-method-any-protocol rtag "withMeta")))
+              (and (or m w) (cons m w))))))
 ;; The derived vector of the descriptor asked last, as (desc . vector). Every
 ;; record op opens with jrdesc-ifc-of, and a weak-table probe is most of what a
 ;; plain record's count or contains? costs; a loop over one record type asks the
@@ -320,6 +336,19 @@
     "kvreduce" "reduce" "iterator" "nth" "peek" "pop" "first" "next" "more"
     "length" "charAt" "size" "isEmpty" "containsValue" "keySet" "values" "entrySet"))
 (define (jrec-plain? x) (and (jrec? x) (vector-ref (jrdesc-ifc-of x) 14)))
+;; A record's own IObj impls (slot 16): (meta . withMeta), either #f, or #f,
+;; with the last-descriptor hit open-coded (#1713): meta and with-meta ask it
+;; for every record, and through jrdesc-ifc-of -> jrdesc-ifc-epoch a hit was
+;; procedure calls (~7 ns). A miss is jrdesc-ifc-of's whole path.
+(define-syntax jrec-iobj/i
+  (syntax-rules ()
+    ((_ x0)
+     (let* ((x x0) (l jrdesc-ifc-last))
+       (vector-ref (if (and (eq? (car l) (jrec-desc x))
+                            (fx=? (vector-ref (cdr l) 0) (fx+ jch-graph-epoch jolt-proto-epoch)))
+                       (cdr l)
+                       (jrdesc-ifc-of x))
+                   16)))))
 ;; The impl a record type declares for METHOD (any protocol), or #f. Every
 ;; collection op on a record asks this first — equality asks it for equiv and
 ;; equals on both operands, hashing for hasheq and hashCode, meta/assoc/nth/count
@@ -332,7 +361,7 @@
   (let* ((t (vector-ref (jrdesc-ifc-of x) 7))
          (hit (hashtable-ref t method 'none)))
     (if (eq? hit 'none)
-        (let ((m (find-method-any-protocol (jrec-tag x) method)))
+        (let ((m (find-method-any-protocol (jrec-rtag x) method)))
           (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t method m))
           m)
         hit)))
@@ -351,7 +380,8 @@
          (hit (hashtable-ref t iface 'none)))
     (if (eq? hit 'none)
         (let* ((tag (jrec-tag x))
-               (ans (or (jrec-declares-class? tag iface) (jch-isa? tag iface))))
+               (ans (or (jrec-declares-class? (jrec-rtag x) iface)
+                        (and (not (retired-own-class? iface x)) (jch-isa? tag iface)))))
           (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t iface ans))
           ans)
         hit)))
@@ -379,7 +409,7 @@
          (hit (assv nargs (hashtable-ref t method '()))))
     (if hit
         (cdr hit)
-        (let ((m (find-method-any-protocol-arity (jrec-tag x) method nargs)))
+        (let ((m (find-method-any-protocol-arity (jrec-rtag x) method nargs)))
           (jolt-with-mutex jrdesc-ifc-mutex
             (hashtable-set! t method (cons (cons nargs m) (hashtable-ref t method '()))))
           m))))

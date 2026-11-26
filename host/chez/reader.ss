@@ -889,6 +889,19 @@
 ;; and clojure.main/repl, reading source, wrap one under :read-source. The
 ;; position keys stay on either kind of read.
 (define rdr-data-read (make-thread-parameter #f))
+;; Whether a list form carries :line/:column. The reference's LispReader stamps
+;; them only when its reader counts lines: a LineNumberingPushbackReader (a REPL,
+;; Compiler.load over a file or a string, with-in-str) does, and read-string,
+;; clojure.edn and a read off a plain PushbackReader do not -- (meta (read-string
+;; "(a)")) is nil there. So a source read (rdr-data-read #f) and a line-numbering
+;; one (the origin vector) stamp, and any other data read does not, unless its
+;; caller is reading source text through the data seam (rdr-data-pos, the
+;; compile-eval spine's jolt-ce-read) and wants the positions a Compiler.load of
+;; that text would give.
+(define rdr-data-pos (make-thread-parameter #f))
+(define (rdr-stamps-pos?)
+  (and (not (rdr-suppress-pos))
+       (let ((d (rdr-data-read))) (or (not d) (vector? d) (rdr-data-pos)))))
 (define (rdr-call-as-data thunk)
   (parameterize ((rdr-source-file #f) (rdr-data-read #t)) (thunk)))
 (define (rdr-phase-keys m)
@@ -1003,6 +1016,20 @@
   (let ((d (rdr-read-error-of e)))
     (if d (jolt-get d rdr-kw-err-kind jolt-nil) jolt-nil)))
 
+;; ^meta on a list: LispReader's MetaReader takes the position where the ^
+;; stands, before it reads the metadata, and gives the list THAT :line/:column
+;; unless the metadata names its own -- so (meta '^:foo (a)) has the caret's
+;; column, and '^{:line 99} (a) keeps line 99. Only when the read stamps
+;; positions at all (rdr-stamps-pos?). Taken before the metadata and target are
+;; read, so rdr-line-col-at's cursor keeps walking forward.
+(define (rdr-caret-pos s i)
+  (and (rdr-stamps-pos?)
+       (let-values (((line col) (rdr-form-line-col s i))) (cons line col))))
+(define (rdr-caret-meta pos target meta)
+  (if (and pos (cseq? target) (pmap? meta))
+      (jolt-assoc (jolt-assoc meta rdr-kw-line (jolt-get meta rdr-kw-line (car pos)))
+                  rdr-kw-column (jolt-get meta rdr-kw-column (cdr pos)))
+      meta))
 (define (rdr-attach-pos lst line col)
   (if (empty-list-t? lst)            ; () is interned, can't carry meta (= Clojure)
       lst
@@ -1197,6 +1224,18 @@
 (define (rdr-mark-ctor-form v) (jolt-with-mutex rdr-side-mu (hashtable-set! rdr-ctor-forms v #t)) v)
 (define (rdr-ctor-call? v)
   (and (cseq? v) (jolt-with-mutex rdr-side-mu (hashtable-ref rdr-ctor-forms v #f)) #t))
+;; A #= result is a value, not a form: inside a record literal it is quoted whole
+;; rather than walked as data, so a map built by #=(…/create {…}) holding a
+;; value that does not evaluate to itself (a Float) arrives as it was read.
+;; Only the collections rdr-datafy would walk are recorded.
+(define rdr-eval-results (make-weak-eq-hashtable))   ; under rdr-side-mu
+(define (rdr-mark-eval-result v)
+  (when (or (pmap? v) (pvec? v) (cseq? v))
+    (jolt-with-mutex rdr-side-mu (hashtable-set! rdr-eval-results v #t)))
+  v)
+(define (rdr-eval-result? v)
+  (and (or (pmap? v) (pvec? v) (cseq? v))
+       (jolt-with-mutex rdr-side-mu (hashtable-ref rdr-eval-results v #f))))
 
 ;; Is v a tagged-literal pmap (#inst/#uuid/#regex/#bigdec at read time)?
 (define (rdr-tagged-form? v)
@@ -1207,6 +1246,7 @@
 (define (rdr-datafy v)
   (cond
    ((rdr-ctor-call? v) v)               ; nested record ctor — keep evaluating
+   ((rdr-eval-result? v) (jolt-list (jolt-symbol #f "quote") v))  ; a #= value
    ((rdr-tagged-form? v) v)             ; #inst/#uuid/#regex/#bigdec — keep
    ((and (pmap? v) (eq? (jolt-get v rdr-kw-jolt-type) rdr-kw-jolt-set)) v)  ; #{…} set — keep
    ((pmap? v)
@@ -1304,6 +1344,13 @@
       ;; there and meets the end of input
       (when (and (string=? nstok "") (>= j end))
         (rdr-eof-error s j "EOF while reading"))
+      ;; The reference READS the namespace (LispReader NamespaceMapReader) before
+      ;; it looks for the map or judges the namespace, so a token the reader
+      ;; refuses fails as itself: #:a:{} is "Invalid token: a:", not a bad
+      ;; namespace. rdr-simple-symbol-token? below swallows that error, so the
+      ;; token is read here first, unguarded.
+      (unless (string=? nstok "")
+        (rdr-token->value nstok s i2))
       (let skip-boundary ((k j))
         (cond
           ((and (< k end) (rdr-ws? (string-ref s k)))
@@ -1577,11 +1624,12 @@
       ((char=? c #\')                    ; #'x var-quote -> (var x)
        (rdr-wrap s (+ i 1) end (jolt-symbol #f "var")))
       ((char=? c #\^)                    ; #^meta — deprecated metadata syntax = ^meta
-       (let-values (((mform j) (rdr-read-form s (+ i 1) end)))
-         (let-values (((target k) (rdr-read-form s j end)))
-           (when (rdr-eof? target)
-             (rdr-eof-error s j "EOF while reading"))
-           (values (rdr-attach-meta target (rdr-meta-map mform)) k))))
+       (let ((pos (rdr-caret-pos s i)))
+         (let-values (((mform j) (rdr-read-form s (+ i 1) end)))
+           (let-values (((target k) (rdr-read-form s j end)))
+             (when (rdr-eof? target)
+               (rdr-eof-error s j "EOF while reading"))
+             (values (rdr-attach-meta target (rdr-caret-meta pos target (rdr-meta-map mform))) k)))))
       ((char=? c #\#)                    ; ## symbolic value: ##Inf / ##-Inf / ##NaN
        ;; the reference reads a whole FORM here, so what follows ## may be any
        ;; form, and only a symbol can name a symbolic value
@@ -1608,7 +1656,7 @@
          (rdr-error s i "EvalReader not allowed when *read-eval* is false."))
        (let-values (((form j) (rdr-read-form s (+ i 1) end)))
          (when (rdr-eof? form) (rdr-eof-error s i "EOF while reading"))
-         (values (jolt-compile-eval-form form (chez-current-ns)) j)))
+         (values (rdr-mark-eval-result (jolt-compile-eval-form form (chez-current-ns))) j)))
       ;; #?(...) / #?@(...) reader conditional. One with no branch for this
       ;; platform reads as nothing, so the read goes on to the next form, as #_
       ;; does above: LispReader's ConditionalReader answers its no-op marker and
@@ -1706,7 +1754,7 @@
             ;; asking afterwards sent it back to the start of the string on every
             ;; list holding a list: quadratic over any real source file.
             ((char=? c #\()
-             (let ((pos (and (not (rdr-suppress-pos))
+             (let ((pos (and (rdr-stamps-pos?)
                              (let-values (((line col) (rdr-form-line-col s i)))
                                (cons line col)))))
                (let-values (((es j) (rdr-read-seq s (+ i 1) end #\))))
@@ -1774,11 +1822,12 @@
                  (rdr-wrap s (+ i 2) end (jolt-symbol "clojure.core" "unquote-splicing"))
                  (rdr-wrap s (+ i 1) end (jolt-symbol "clojure.core" "unquote"))))
             ((char=? c #\^)
-             (let-values (((mform j) (rdr-read-form s (+ i 1) end)))
-               (let-values (((target k) (rdr-read-form s j end)))
-                 (when (rdr-eof? target)
-                   (rdr-eof-error s i "EOF while reading"))
-                 (values (rdr-attach-meta target (rdr-meta-map mform)) k))))
+             (let ((pos (rdr-caret-pos s i)))
+               (let-values (((mform j) (rdr-read-form s (+ i 1) end)))
+                 (let-values (((target k) (rdr-read-form s j end)))
+                   (when (rdr-eof? target)
+                     (rdr-eof-error s i "EOF while reading"))
+                   (values (rdr-attach-meta target (rdr-caret-meta pos target (rdr-meta-map mform))) k)))))
             (else
              (let-values (((tok j) (rdr-read-token-lead s i end)))
                (values (rdr-token->value tok s i) j))))))))
@@ -1815,8 +1864,14 @@
 ;; carry the reader metadata, converting its nested forms too — a set/tagged
 ;; literal inside a ^{…} map (^{:k #{…}}) must become a value like the rest of
 ;; the data, not stay the tagged set-form.
+;; Only a form the reader built carries reader metadata. A #= result is any
+;; value, and a var or an atom answers meta without taking any (IMeta, not IObj):
+;; it is handed on as it is.
+(define (rdr-meta-carrier? x)
+  (or (symbol-t? x) (pvec? x) (pmap? x) (pset? x) (cseq? x) (empty-list-t? x) (jrec? x)))
 (define (rdr-carry-meta src dst)
-  (let ((m (jolt-meta src))) (if (jolt-nil? m) dst (jolt-with-meta dst (rdr-form->data m)))))
+  (let ((m (if (rdr-meta-carrier? src) (jolt-meta src) jolt-nil)))
+    (if (jolt-nil? m) dst (jolt-with-meta dst (rdr-form->data m)))))
 
 ;; tag keyword (:#time/date) -> its *data-readers* reader fn, or #f. The fn's
 ;; namespace must already be loaded (the loader requires them when a project's
@@ -1961,7 +2016,7 @@
                                   (jolt-with-mutex rdr-name-counter-mutex
                                     (set! rdr-sq-gensym-counter (fx+ rdr-sq-gensym-counter 1))
                                     rdr-sq-gensym-counter))
-                                 "__auto")))
+                                 "__auto__")))  ; the reference's x__N__auto__
 
 ;; special forms / interop heads stay bare in backquote, like the JVM reader
 ;; The one list of names a syntax-quote leaves BARE (not namespace-qualified):
@@ -2192,7 +2247,7 @@
 ;; literal in metadata is a value, not a form. Carry it whether or not the value
 ;; itself changed (a set-form in the metadata of an otherwise-unchanged value).
 (define (rdr-form->data x)
-  (let ((v (rdr-form->data* x)) (m (jolt-meta x)))
+  (let ((v (rdr-form->data* x)) (m (if (rdr-meta-carrier? x) (jolt-meta x) jolt-nil)))
     (if (jolt-nil? m) v (jolt-with-meta v (rdr-form->data m)))))
 
 ;; --- the two host seams -----------------------------------------------------

@@ -31,11 +31,11 @@
   {:added "1.1"}
   [e]
   (let [class (.getClassName e)
-        method (.getMethodName e)]
-    (let [match (re-matches #"^([A-Za-z0-9_.-]+)\$(\w+)__\d+$" (str class))]
-      (if (and match (= "invoke" method))
-        (apply printf "%s/%s" (rest match))
-        (printf "%s.%s" class method))))
+        method (.getMethodName e)
+        match (re-matches #"^([A-Za-z0-9_.-]+)\$(\w+)__\d+$" (str class))]
+    (if (and match (= "invoke" method))
+      (apply printf "%s/%s" (rest match))
+      (printf "%s.%s" class method)))
   (printf " (%s:%d)" (or (.getFileName e) "") (.getLineNumber e)))
 
 (defn print-throwable
@@ -63,7 +63,7 @@
        (print "[empty stack trace]"))
      (newline)
      (doseq [e (if (nil? n) (rest st) (take (dec n) (rest st)))]
-       (print " ")
+       (print "    ")
        (print-trace-element e)
        (newline)))))
 

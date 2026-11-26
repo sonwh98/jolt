@@ -59,16 +59,15 @@
         (set-cdr! p (intern-ns! ns))
         (chez-current-ns-param ns))))
 
-(define-record-type jolt-multifn
-  (fields name dispatch-fn methods default hierarchy prefers
-          cache (mutable cache-epoch) (mutable cache-hier))
-  (nongenerative jolt-multifn-v2))
+;; The jolt-multifn record type itself is defined in values.ss (see there).
 
 ;; a multimethod is CODE: a var holding one travels in a state image as the var's
 ;; NAME, the way a named fn does, instead of having its dispatch tables walked.
 (register-code-value! jolt-multifn?)
 
 (define kw-default (keyword #f "default"))
+;; a key no dispatch value is eq? to (mm-resolve's inline cache, below)
+(define mm-icache-empty-key (list 'mm-icache-empty))
 (define (new-mm-table) (make-hashtable key-hash jolt=))
 
 ;; mm-tbl-mu serializes every MUTATION of every multifn's methods / prefers /
@@ -107,7 +106,7 @@
 ;; multimethod reflectively reaches for, and it must produce the same value.
 (define (make-multifn name dispatch default hierarchy)
   (make-jolt-multifn name dispatch (new-mm-table) default hierarchy
-                     (new-mm-table) (new-mm-table) -1 #f))
+                     (new-mm-table) (new-mm-table) -1 #f mm-icache-empty))
 
 ;; (defmulti-setup 'name dispatch & opts) — opts is a flat :default/:hierarchy plist.
 (define (parse-mm-opts opts)
@@ -121,6 +120,21 @@
             ((and (keyword? k) (not (keyword-t-ns k)) (string=? (keyword-t-name k) "hierarchy"))
              (loop (cddr o) dk v))
             (else (loop (cddr o) dk h)))))))
+
+;; A host layer that owns a multimethod's built-in methods (the java layer's
+;; print-method printers) registers them here, keyed by the multimethod's
+;; qualified name: they go into the multifn when defmulti makes it, or at once if
+;; it already exists. The defmulti runs from the prelude, after the host files
+;; load, so this is what lets a host file seed a table it cannot yet see.
+(define mm-seed-hooks '())
+(define (register-multifn-seed! ns name proc)
+  (set! mm-seed-hooks (cons (cons (string-append ns "/" name) proc) mm-seed-hooks))
+  (let* ((c (var-cell-lookup ns name))
+         (cur (and c (var-cell-defined? c) (var-cell-root c))))
+    (when (jolt-multifn? cur) (proc cur))))
+(define (mm-run-seed-hooks! ns name mf)
+  (let ((key (string-append ns "/" name)))
+    (for-each (lambda (h) (when (string=? (car h) key) ((cdr h) mf))) mm-seed-hooks)))
 
 (define (jolt-defmulti-setup name-sym dispatch . opts)
   (let-values (((dk h) (parse-mm-opts opts)))
@@ -138,6 +152,7 @@
           have
           (let ((mf (make-multifn (symbol-t-name name-sym) dispatch dk h)))
             (def-var! ns (symbol-t-name name-sym) mf)
+            (mm-run-seed-hooks! ns (symbol-t-name name-sym) mf)
             mf)))))
 
 ;; (defmethod-setup 'mm dispatch-val impl) — add a method. Auto-creates the multifn
@@ -201,11 +216,11 @@
                                   (jolt-multifn-dispatch-fn core)
                                   (var-deref "clojure.core" "identity")))
                         (deft (if (jolt-multifn? core) (jolt-multifn-default core) kw-default))
-                        (m (make-jolt-multifn source-name disp (new-mm-table) deft #f (new-mm-table) (new-mm-table) -1 #f)))
+                        (m (make-jolt-multifn source-name disp (new-mm-table) deft #f (new-mm-table) (new-mm-table) -1 #f mm-icache-empty)))
                    (def-var! mns source-name m) m))))
     (jolt-with-mutex mm-tbl-mu
       (hashtable-set! (jolt-multifn-methods mf) (mm-dispatch-val-canon dval) impl)
-      (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1)))
+      (mm-epoch-bump!))
     mf))
 
 ;; --- dispatch ----------------------------------------------------------------
@@ -275,8 +290,8 @@
             (when (and (not (jolt= k best)) (not (dom? best k)))
               (throw-jvm (quote IllegalArgumentException)
                          (string-append "Multiple methods in multimethod '" (jolt-multifn-name mf)
-                                        "' match dispatch value: " (jolt-pr-str dv) " -> "
-                                        (jolt-pr-str best) " and " (jolt-pr-str k)
+                                        "' match dispatch value: " (mm-dv-string dv) " -> "
+                                        (mm-dv-string best) " and " (mm-dv-string k)
                                         ", and neither is preferred"))))
           matches)
          (hashtable-ref methods best #f))))))
@@ -293,6 +308,17 @@
 ;; prelude. A global epoch may over-invalidate across multifns (a miss, never a
 ;; wrong answer); correctness first, per jolt-mw44.30.
 (define jolt-mm-epoch 0)
+;; Every change to a methods / prefers table bumps the epoch through here, with
+;; the change already made and mm-tbl-mu held. The release fence orders the
+;; table's stores ahead of the epoch's, and mm-resolve-table's acquire fence
+;; orders its epoch load ahead of its table loads, so a reader that sees the new
+;; epoch also sees the new table. Without the pair, arm64 lets a reader pair the
+;; new epoch with the old method and cache that, stamped current, for good: a
+;; writer swapping one method while three threads dispatched read its own
+;; superseded method back 2 times in 200k rounds.
+(define (mm-epoch-bump!)
+  (memory-order-release)
+  (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1)))
 
 ;; the hierarchy object isa? resolves against for mf: its own :hierarchy atom/map
 ;; when set, else the global-hierarchy atom's current value. deref'd lazily (the
@@ -324,8 +350,57 @@
 ;; (mm-find-isa) and falls back to the :default method, memoizing the result. #f
 ;; only when nothing matches - the caller raises.
 (define (mm-resolve mf dv)
+  (let ((v (jolt-multifn-icache mf)))
+    (if (fx= (vector-ref v 0) jolt-mm-epoch)
+        (let scan ((i 1))
+          (cond ((fx= i mm-icache-len) (mm-resolve-table mf dv))
+                ((eq? (vector-ref v i) dv) (vector-ref v (fx+ i 1)))
+                (else (scan (fx+ i 2)))))
+        (mm-resolve-table mf dv))))
+
+;; The inline cache in front of the table: the last eight dispatch values that
+;; hit the methods table DIRECTLY, compared with eq?, stamped with the epoch they
+;; were read under. The table lookup hashes the dispatch value with key-hash and
+;; compares with jolt= on every call; a multimethod dispatching on keywords (most
+;; of them -- rewrite-clj's parse-next* takes one per node, #1713) answers here in
+;; a few loads instead. Eight, not four: parse-next* cycles through five to seven
+;; values on ordinary source (token, whitespace, list, vector, delimiter, ...),
+;; and a cache smaller than the cycle missed on every call. Only direct hits are
+;; cached, so the entry depends on the methods table alone -- not the hierarchy
+;; or the prefers -- and every change to that table bumps jolt-mm-epoch, which
+;; retires the whole vector. Only values eq? can stand for are kept: an interned
+;; keyword, a fixnum, a char, a boolean, nil. The vector is replaced, never
+;; mutated, so a reader on another thread sees an old vector or a new one, never
+;; a torn one; a lost race only loses an entry. Slot 0 is the epoch; the empty
+;; vector's -1 never matches. A new entry goes in front and the last one drops.
+(define mm-icache-slots 8)
+(define mm-icache-len (fx+ 1 (fx* 2 mm-icache-slots)))
+(define mm-icache-empty
+  (let ((v (make-vector mm-icache-len #f)))
+    (vector-set! v 0 -1)
+    (do ((i 1 (fx+ i 2))) ((fx= i mm-icache-len) v)
+      (vector-set! v i mm-icache-empty-key))))
+(define (mm-icache-key? dv)
+  (or (keyword? dv) (fixnum? dv) (char? dv) (boolean? dv) (jolt-nil? dv)))
+(define (mm-icache-add! mf epoch dv m)
+  (let* ((old (jolt-multifn-icache mf))
+         (src (if (fx= (vector-ref old 0) epoch) old mm-icache-empty))
+         (v (make-vector mm-icache-len #f)))
+    (vector-set! v 0 epoch)
+    (vector-set! v 1 dv)
+    (vector-set! v 2 m)
+    (do ((i 3 (fx+ i 1))) ((fx= i mm-icache-len))
+      (vector-set! v i (vector-ref src (fx- i 2))))
+    ;; the new vector's slots are written before another thread can reach it
+    (memory-order-release)
+    (jolt-multifn-icache-set! mf v)))
+
+(define (mm-resolve-table mf dv)
   (let* ((methods (jolt-multifn-methods mf))
+         (epoch (let ((e jolt-mm-epoch)) (memory-order-acquire) e))
          (direct (hashtable-ref methods dv #f)))
+    (when (and direct (mm-icache-key? dv))
+      (mm-icache-add! mf epoch dv direct))
     (or direct
         (begin
           (mm-cache-validate! mf)
@@ -339,7 +414,7 @@
                 ;; method, not a stale miss, and it never expires because the
                 ;; stamp already says current. mm-find-isa runs OUTSIDE the lock:
                 ;; it calls isa? / parents, which is user code.
-                (let* ((epoch jolt-mm-epoch)
+                (let* ((epoch (let ((e jolt-mm-epoch)) (memory-order-acquire) e))
                        (hier (mm-current-hierarchy mf))
                        (m (or (mm-find-isa mf dv)
                               (hashtable-ref methods (jolt-multifn-default mf) #f))))
@@ -351,10 +426,14 @@
                         (hashtable-set! cache dv m))))
                   m)))))))
 
+;; MultiFn's messages concatenate a dispatch value, so it reads as its toString:
+;; a string bare, a class as "class x.Y", a collection readably, nil as null
+(define (mm-dv-string dv)
+  (if (jolt-nil? dv) "null" (jolt-str-one dv)))
 (define (mm-no-method mf dv)
   (throw-jvm (quote IllegalArgumentException)
              (string-append "No method in multimethod '" (jolt-multifn-name mf)
-                            "' for dispatch value: " (jolt-pr-str dv))))
+                            "' for dispatch value: " (mm-dv-string dv))))
 
 ;; fixed-arity entry points: the common arities call the dispatch fn and the
 ;; resolved method through jolt-invoke1/2/3, skipping the rest-list + the two
@@ -395,7 +474,11 @@
 ;; All table ops take the multifn VALUE (Clojure semantics): the multifn record
 ;; carries its method/prefer tables, so the overlay fns pass the value directly.
 
-(define (jolt-prefer-method-setup mf dval-a dval-b)
+(define (jolt-prefer-method-setup mf dval-a* dval-b*)
+  ;; every table op keys a dispatch value as defmethod stores it: a deftype or
+  ;; defrecord name evaluates to its constructor, filed under its class tag
+  (define dval-a (mm-dispatch-val-canon dval-a*))
+  (define dval-b (mm-dispatch-val-canon dval-b*))
   (when (jolt-multifn? mf)
     ;; a preference b-over-a (direct or transitive) makes a-over-b a conflict, as
     ;; in Clojure MultiFn.preferMethod.
@@ -412,24 +495,25 @@
                      (let ((h (new-mm-table)))
                        (hashtable-set! (jolt-multifn-prefers mf) dval-a h) h))))
         (hashtable-set! sub dval-b #t))
-      (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1))))
+      (mm-epoch-bump!)))
   mf)
 
 (define (jolt-remove-method-setup mf dval)
   (when (jolt-multifn? mf)
     (jolt-with-mutex mm-tbl-mu
-      (hashtable-delete! (jolt-multifn-methods mf) dval)
-      (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1))))
+      (hashtable-delete! (jolt-multifn-methods mf) (mm-dispatch-val-canon dval))
+      (mm-epoch-bump!)))
   mf)
 
 (define (jolt-remove-all-methods-setup mf)
   (when (jolt-multifn? mf)
     (jolt-with-mutex mm-tbl-mu
       (hashtable-clear! (jolt-multifn-methods mf))
-      (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1))))
+      (mm-epoch-bump!)))
   mf)
 
-(define (jolt-get-method-setup mf dval)
+(define (jolt-get-method-setup mf dval*)
+  (define dval (mm-dispatch-val-canon dval*))
   (if (jolt-multifn? mf)
       (or (hashtable-ref (jolt-multifn-methods mf) dval #f)
           ;; isa?-based lookup, exactly like the runtime mm-resolve path —

@@ -39,6 +39,8 @@
 (define hc-kw-long (keyword #f "long"))
 (define hc-kw-float (keyword #f "float"))
 (define hc-kw-jolt-num-ret (keyword "jolt" "num-ret"))
+(define hc-kw-jvm-long-ret (keyword #f "jvm-long-ret"))
+(define hc-kw-arglists (keyword #f "arglists"))
 (define hc-kw-inst  (keyword #f "#inst"))
 (define hc-kw-uuid  (keyword #f "#uuid"))
 (define hc-kw-bigdec (keyword #f "bigdec"))
@@ -200,12 +202,28 @@
 (define hc-kw-line   (keyword #f "line"))
 (define hc-kw-column (keyword #f "column"))
 (define hc-kw-file   (keyword #f "file"))
+;; A position with no :file -- a quoted list, which keeps its :line/:column as
+;; the JVM's does, eval'd at runtime; a form eval compiled at the enclosing
+;; position -- is in the file being compiled, as everything the reference's
+;; Compiler compiles is in SOURCE_PATH: the reader's file while a file is read,
+;; else *file* when something has bound it. *file*'s root ("NO_SOURCE_PATH", a
+;; -e or REPL entry) names no file, and leaves the position without one.
+(define hc-file-cell #f)
+(define (hc-enclosing-file)
+  (let ((p (rdr-source-file)))
+    (if p
+        (rdr-file-name-of p)
+        (begin
+          (unless hc-file-cell (set! hc-file-cell (var-cell-lookup "clojure.core" "*file*")))
+          (let ((f (and hc-file-cell (jolt-deref hc-file-cell))))
+            (and (string? f) (not (string=? f "NO_SOURCE_PATH")) f))))))
 (define (hc-form-position x)
   (let ((m (jolt-meta x)))
     (if (and (pmap? m) (not (jolt-nil? (jolt-get m hc-kw-line))))
         (let ((line (jolt-get m hc-kw-line))
               (col  (jolt-get m hc-kw-column))
-              (file (jolt-get m hc-kw-file)))
+              (file (let ((f (jolt-get m hc-kw-file)))
+                      (if (jolt-nil? f) (or (hc-enclosing-file) jolt-nil) f))))
           (if (jolt-nil? file)
               (jolt-hash-map hc-kw-line line hc-kw-column col)
               (jolt-hash-map hc-kw-line line hc-kw-column col hc-kw-file file)))
@@ -489,7 +507,15 @@
     (if (or (jolt-nil? m) (jolt-nil? (jolt-get m hc-kw-file jolt-nil)))
         form
         (jolt-with-meta form (jolt-dissoc2 m hc-kw-file)))))
+;; The compiler's expansion: the call form's position carried onto the
+;; expansion (hc-propagate-pos), so code a macro built names the call site.
 (define (hc-expand-1 ctx form . maybe-env)
+  (hc-propagate-pos form (apply hc-expand-1-raw ctx form maybe-env)))
+;; What the macro itself returned. clojure.core/macroexpand-1 answers this: the
+;; reference's hands back the expander's value untouched, so (meta
+;; (macroexpand-1 '(when x y))) is nil there -- the position the compiler gives
+;; an expansion comes from its LINE, not from the form.
+(define (hc-expand-1-raw ctx form . maybe-env)
   ;; Normalize the WHOLE call form once, then take both the arguments and &form
   ;; out of the result. Walking each argument separately left &form holding the
   ;; raw shapes — a macro reading (nth &form 1) rather than its parameter still
@@ -514,8 +540,7 @@
     (when (and (procedure? expander)
                (not (proc-accepts? expander (fx+ 2 (length args)))))
       (jolt-arity-error-name (jolt-proc-arity-name expander) (length args)))
-    (hc-propagate-pos form
-      (apply jolt-invoke expander (hc-form-sans-file nform) amp-env args))))
+    (apply jolt-invoke expander (hc-form-sans-file nform) amp-env args)))
 
 ;; Classify a global (non-local) symbol reference against the var registry:
 ;;   {:kind :var :ns NS :name NAME}   — a defined var (compile ns / clojure.core)
@@ -531,6 +556,22 @@
 ;; a hint: jolt.ffi/defcfn sets :float on a binding whose C result is a float,
 ;; which the binding always answers as a java.lang.Float. A ^float tag is not
 ;; read, since on the JVM it is only a hint and coerces nothing.
+;; Whether every arity's arglist carries ^long, (defn f ^long [x] ...): the JVM
+;; then compiles a call to f as answering a primitive long, which decides the
+;; overload a quot/rem over the call takes (jolt.passes.numeric jvm-long-expr?).
+;; Only that message reads it; the call's value is typed by :num-ret alone.
+(define (hc-cell-jvm-long-ret? cell)
+  (let* ((m (and cell (var-cell-meta cell)))
+         (al (and m (jolt-get m hc-kw-arglists))))
+    (and al (not (jolt-nil? al))
+         (let loop ((s (jolt-seq al)) (any #f))
+           (if (or (not s) (jolt-nil? s))
+               any
+               (let* ((v (seq-first s))
+                      (vm (jolt-meta v))
+                      (t (and vm (not (jolt-nil? vm)) (jolt-get vm hc-kw-tag)))
+                      (n (cond ((symbol-t? t) (symbol-t-name t)) ((string? t) t) (else #f))))
+                 (and (equal? n "long") (loop (jolt-seq (seq-more s)) #t))))))))
 (define (hc-cell-num-ret cell)
   (let ((m (and cell (var-cell-meta cell))))
     (and m (let ((declared (jolt-get m hc-kw-jolt-num-ret)))
@@ -638,7 +679,10 @@
                                     hc-kw-ns (var-cell-ns cell)
                                     hc-kw-name (var-cell-name cell)))
                (nr (hc-cell-num-ret cell))
-               (base (if nr (jolt-assoc base hc-kw-num-ret nr) base)))
+               (base (if nr (jolt-assoc base hc-kw-num-ret nr) base))
+               (base (if (and (not nr) (hc-cell-jvm-long-ret? cell))
+                         (jolt-assoc base hc-kw-jvm-long-ret #t)
+                         base)))
           ;; :private — a ^:private var of ANOTHER namespace, which the analyzer
           ;; refuses to reference ("var: a/hidden is not public"), as the JVM's
           ;; Compiler.resolveIn / isMacro do. (var a/hidden) still takes it.
@@ -724,7 +768,7 @@
                                   (jolt-with-mutex hc-sq-gensym-mutex
                                     (set! hc-sq-gensym-counter (+ hc-sq-gensym-counter 1))
                                     hc-sq-gensym-counter))
-                                 "__auto")))
+                                 "__auto__")))  ; the reference's x__N__auto__
 
 (define (hc-sym nm) (jolt-symbol #f nm))
 ;; is `x` a non-empty list FORM whose head is the unqualified symbol `nm`?
@@ -762,15 +806,19 @@
 (define (hc-sq-lower ctx form gsmap)
   ;; Non-nil metadata wraps the lowered form in with-meta, with the meta map
   ;; itself lowered as a template (so a ^Thread tag qualifies to its FQN) —
-  ;; matches what the JVM emits for `^Thread [] and `^:foo a alike. Reader
-  ;; position keys (:line/:column/:file) are reader artifacts, not user meta:
-  ;; they are stripped, or every macro template form would carry its
-  ;; definition-site position into the expansion and shadow the reader
-  ;; position of the macro's input form.
+  ;; matches what the JVM emits for `^Thread [] and `^:foo a alike. A form
+  ;; whose only metadata is the reader's position (:line/:column, and the :file
+  ;; jolt's reader adds) gets none, or every macro template form would carry
+  ;; its definition-site position into the expansion and shadow the reader
+  ;; position of the macro's input form. A form with metadata of its own keeps
+  ;; the position beside it, as LispReader's SyntaxQuoteReader does: it tests
+  ;; the metadata without :line/:column for emptiness and then emits the whole
+  ;; map, so (meta `^:foo (a b)) is {:line .. :column .. :foo true}.
   (let* ((out (hc-sq-lower-bare ctx form gsmap))
          (m (jolt-meta form))
-         (m (if (jolt-nil? m) m (jolt-dissoc m rdr-kw-line rdr-kw-column rdr-kw-file))))
-    (if (or (jolt-nil? m) (zero? (jolt-count m)))
+         (m (if (jolt-nil? m) m (jolt-dissoc m rdr-kw-file))))
+    (if (or (jolt-nil? m)
+            (zero? (jolt-count (jolt-dissoc m rdr-kw-line rdr-kw-column))))
         out
         (jolt-list (hc-sym "with-meta") out (hc-sq-lower ctx m gsmap)))))
 
@@ -946,6 +994,26 @@
 (define hc-direct-link? #f)
 (define (set-direct-link-flag! on) (set! hc-direct-link? on))
 (define (hc-inline-enabled? ctx) (or hc-direct-link? (hc-form-direct-link)))
+;; Guarded inlining (#1713): the open-world spine (`jolt run`, a REPL) splices a
+;; small fn's body too, behind a test that the callee's var still holds the
+;; procedure that body was compiled into -- (if (eq? (jolt-var-fn CELL) ROOT)
+;; <body> <call>) -- so a redefinition, binding or with-redefs takes the call.
+;; ROOT is read when the caller loads, and only if the def that set the root
+;; stamped the same token the splice carries (rt.ss jolt-inline-root), so a
+;; cached caller loaded after the callee was redefined at a REPL never runs the
+;; old body. The CLI turns it on as the image boots (loader.ss); a build turns
+;; it off (it direct-links or stays fully var-routed), as do the gates.
+;; hc-guarded-inline-on is the switch; the spine opens hc-form-guarded around
+;; each form it compiles with tracing off (compile-eval.ss), since the trace
+;; reporter does not reconstruct a spliced fn's frame there, and an error report
+;; under the default trace names every fn as it ran.
+(define hc-guarded-inline-on #f)
+(define (set-guarded-inline-flag! on) (set! hc-guarded-inline-on on))
+(define hc-form-guarded (make-thread-parameter #f))
+(define (hc-guarded-inline? ctx)
+  (and (hc-form-guarded) (not (hc-inline-enabled? ctx))))
+;; Either kind of runtime-spine splicing: direct-linked forms, or guarded ones.
+(define (hc-spine-splicing?) (or (hc-form-direct-link) (hc-form-guarded)))
 ;; Inline-body registry: jolt.passes stashes an inline-eligible defn's
 ;; {:params :body :nhints :ret} here (keyed ns/name) as its form is optimized;
 ;; jolt.passes.inline fetches it to splice the body at a call site. The stash is an
@@ -1043,14 +1111,18 @@
 ;; the def's name and the literal's position: "". The runtime spine can compile
 ;; the same def again in one process (a REPL re-eval) and replays AOT-cached
 ;; code a previous process emitted, so each stash it takes gets a salt unique to
-;; this process and this stash.
+;; this process (start time and pid) and this stash.
 (define hc-site-const-nonce #f)
 (define hc-site-const-count 0)
 (define (hc-site-const-salt ctx)
-  (if (hc-form-direct-link)
+  (if (hc-spine-splicing?)
       (jolt-with-mutex inline-stash-mu
         (unless hc-site-const-nonce
-          (set! hc-site-const-nonce (number->string (sa-epoch-ms))))
+          ;; the pid too: two processes starting in the same millisecond and
+          ;; compiling in the same order minted the same salts, so one could
+          ;; replay a splice the other's AOT cache holds against its own callee
+          (set! hc-site-const-nonce (string-append (number->string (sa-epoch-ms)) "-"
+                                                   (number->string (sa-process-id)))))
         (set! hc-site-const-count (fx+ hc-site-const-count 1))
         (string-append "@" hc-site-const-nonce "." (number->string hc-site-const-count)))
       ""))
@@ -1060,7 +1132,7 @@
   (let ((fqn (string-append ns-name "/" nm)))
     (jolt-with-mutex inline-stash-mu
       (hashtable-set! inline-stash-table fqn m)
-      (if (and (hc-form-direct-link) (not (jolt-nil? m)))
+      (if (and (hc-spine-splicing?) (not (jolt-nil? m)))
           (let ((c (jolt-var ns-name nm)))
             (hashtable-set! inline-stash-pending c #t)
             (hashtable-set! inline-stash-owner fqn c))
@@ -1155,6 +1227,38 @@
          (hashtable-ref hc-seed-ns-tbl ns #f))))
 (define hc-kw-dynamic (keyword #f "dynamic"))
 (define hc-kw-redef (keyword #f "redef"))
+;; Is NS-NAME/NM, right now, a protocol method fn defprotocol defined, called
+;; with at least the receiver? Answers [proto method] -- the names its dispatch
+;; resolves by -- so the back end can dispatch at the call site on the
+;; receiver's own impl (protocols.ss jrdesc-vtable-ref, #1713), else nil. A
+;; protocol with :extend-via-metadata answers a third element, true: its
+;; metadata comes ahead of an extend-type impl the dispatch vector also holds,
+;; so the site keeps only the declared-impl test a redefinition needs. Not for
+;; a var that is dynamic, whose root is no longer a procedure, or whose meta no
+;; longer names the protocol: a plain def over the method drops :protocol, and
+;; on the JVM a call compiled after it is a plain call.
+(define hc-kw-extend-via-metadata (keyword #f "extend-via-metadata"))
+(define (hc-protocol-call-key ctx ns-name nm nargs)
+  (let* ((e (jolt-with-mutex rec-tbl-mu
+              (hashtable-ref chez-protocol-methods-tbl (string-append ns-name "/" nm) #f)))
+         (cell (and e (var-cell-lookup ns-name nm)))
+         (p (and cell
+                 (let* ((pk (car e))
+                        (slash (let loop ((i (fx- (string-length pk) 1)))
+                                 (cond ((fx<? i 0) #f)
+                                       ((char=? (string-ref pk i) #\/) i)
+                                       (else (loop (fx- i 1))))))
+                        (pc (and slash (var-cell-lookup (substring pk 0 slash)
+                                                        (substring pk (fx+ slash 1) (string-length pk))))))
+                   (and pc (var-cell-root pc))))))
+    (if (and p (pmap? p) (fixnum? nargs) (fx>=? nargs 1)
+             (procedure? (var-cell-root cell))
+             (not (var-cell-dynamic? cell))
+             (let ((m (var-cell-meta cell)))
+               (and (pmap? m) (jolt-truthy? (jolt-get m hc-kw-protocol jolt-nil)))))
+        (jolt-vector (car e) (cdr e)
+                     (jolt-truthy? (jolt-get p hc-kw-extend-via-metadata jolt-nil)))
+        jolt-nil)))
 (define (hc-seed-callable? ctx ns-name nm nargs)
   (let ((cell (var-cell-lookup ns-name nm)))
     (if (and cell
@@ -1206,7 +1310,12 @@
     "unchecked-inc" "unchecked-dec" "unchecked-negate"
     "unchecked-add-int" "unchecked-subtract-int" "unchecked-multiply-int"
     "unchecked-divide-int" "unchecked-remainder-int"
-    "unchecked-inc-int" "unchecked-dec-int" "unchecked-negate-int"))
+    "unchecked-inc-int" "unchecked-dec-int" "unchecked-negate-int"
+    ;; their *unchecked-math* twins, internal names the analyzer rewrites an
+    ;; -int call to in such a file (natives-seq.ss)
+    "__unchecked-add-int" "__unchecked-subtract-int" "__unchecked-multiply-int"
+    "__unchecked-divide-int" "__unchecked-remainder-int"
+    "__unchecked-inc-int" "__unchecked-dec-int" "__unchecked-negate-int"))
 (for-each (lambda (nm) (declare-var! "clojure.core" nm)) hc-native-op-names)
 ;; A ^:private one of these (doseq's __chunk-* walk helpers) is plumbing a core
 ;; macro's expansion calls from the user's namespace: the back end lowers the
@@ -1298,6 +1407,7 @@
   (def-var! "jolt.host" "record-shapes" hc-record-shapes)
   (def-var! "jolt.host" "protocol-methods" hc-protocol-methods)
   (def-var! "jolt.host" "inline-enabled?" hc-inline-enabled?)
+  (def-var! "jolt.host" "guarded-inline?" hc-guarded-inline?)
   (def-var! "jolt.host" "inference-enabled?" hc-inference-enabled?)
   (def-var! "jolt.host" "var-dynamic?" hc-var-dynamic?)
   (def-var! "jolt.host" "site-const-salt" hc-site-const-salt)
@@ -1308,6 +1418,7 @@
   (def-var! "jolt.host" "stash-inline!" hc-stash-inline!)
   (def-var! "jolt.host" "var-redefined?" hc-var-redefined?)
   (def-var! "jolt.host" "seed-callable?" hc-seed-callable?)
+  (def-var! "jolt.host" "protocol-call-key" hc-protocol-call-key)
   (def-var! "jolt.host" "mark-spliced!" hc-mark-spliced!))
 
 (hc-install!)

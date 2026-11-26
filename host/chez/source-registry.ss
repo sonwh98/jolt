@@ -1471,7 +1471,10 @@
                           ((char=? (string-ref proto i) #\/) i)
                           (else (find (fx- i 1))))))
            (fqn (and slash (string-append (substring proto 0 slash) "/" method)))
-           (decl (and fqn (hashtable-ref chez-protocol-methods-tbl fqn #f)))
+           ;; under rec-tbl-mu, the table's writer lock (protocols.ss): a defprotocol
+           ;; on another thread can be resizing it
+           (decl (and fqn (jolt-with-mutex rec-tbl-mu
+                            (hashtable-ref chez-protocol-methods-tbl fqn #f))))
            (nm (and decl (equal? (car decl) proto)
                     (guard (e (#t #f)) (sa-procedure-code-name fn)))))
       (when (string? nm)
@@ -1559,11 +1562,15 @@
        (let ((line (or (srcreg-frame-line f) (vector-ref r 3))))
          (ste-make (cls (vector-ref r 0) (vector-ref r 1)) "invoke"
                    (file-of (vector-ref r 2)) (if (fixnum? line) line -1))))
+      ;; an anonymous fn: the class its literal compiles into (the analyzer's,
+      ;; registered with it), else ns$def$fn__n
       ((srcreg-jfn-parts (srcreg-frame-nm f))
        => (lambda (p)
             (let ((rec (srcreg-record-for-fqn (string-append (car p) "/" (cadr p))))
                   (line (srcreg-frame-line f)))
-              (ste-make (string-append (cls (car p) (cadr p)) "$fn__" (caddr p)) "invoke"
+              (ste-make (or (fn-literal-class-of-name (srcreg-frame-nm f))
+                            (string-append (cls (car p) (cadr p)) "$fn__" (caddr p)))
+                        "invoke"
                         (file-of (vector-ref rec 2)) (if (fixnum? line) line -1)))))
       (else #f))))
 
@@ -1604,11 +1611,13 @@
        (list (string-append (vector-ref r 0) "/" (vector-ref r 1)) (vector-ref r 2)
              (or line (vector-ref r 3)) locals))
       ;; an anonymous fn: a named literal by its own name, else as Clojure
-      ;; demunges the JVM's ns$def$fn__n, ns/def/fn--n
+      ;; demunges its class (ns/def/fn--n)
       ((srcreg-jfn-parts (srcreg-frame-nm f))
        => (lambda (p)
-            (let ((rec (srcreg-record-for-fqn (string-append (car p) "/" (cadr p)))))
+            (let ((rec (srcreg-record-for-fqn (string-append (car p) "/" (cadr p))))
+                  (c (fn-literal-class-of-name (srcreg-frame-nm f))))
               (list (or (srcreg-literal-display (srcreg-frame-nm f))
+                        (and c (compiler-demunge c))
                         (string-append (car p) "/" (cadr p) "/fn--" (caddr p)))
                     (vector-ref rec 2) (or line (vector-ref rec 3)) locals))))
       (else #f))))

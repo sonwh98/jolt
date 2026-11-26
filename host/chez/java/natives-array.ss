@@ -27,6 +27,10 @@
 ;; reference array, which is what a typed reference array is on the JVM.
 (define na-prim-kinds '(int long short double float boolean byte char))
 (define (na-ref-kind? k) (not (memq k na-prim-kinds)))
+;; A String[]'s kind. The constructors hand out this one string (na-name-kind is
+;; seeded with it, na-head-kind answers it), so the store check's common case is
+;; an eq?; a kind spelled elsewhere still matches by string=?.
+(define na-string-kind "java.lang.String")
 
 ;; na-kind-class-name (the JVM array class name for a kind) is protocols.ss's,
 ;; which the class tags of an array need on every host.
@@ -73,6 +77,7 @@
 ;; bare hashtable-ref; only a first-ever name takes the lock to publish.
 (define na-name-kind-tbl (make-hashtable string-hash string=?))
 (define na-name-kind-mu (make-mutex))
+(hashtable-set! na-name-kind-tbl na-string-kind na-string-kind)
 (define (na-name-kind n)
   (or (hashtable-ref na-name-kind-tbl n #f)
       (let* ((hit (assoc n na-prim-type-kinds))
@@ -95,7 +100,29 @@
     ((char) #\nul)
     (else jolt-nil)))
 
-(define (na-idx i) (if (and (number? i) (not (exact? i))) (exact (truncate i)) (jolt-need-num i)))
+;; An index that is not a fixnum, as RT.intCast's longCast reads it: a double
+;; truncates, NaN is 0 ((long) NaN), and one past the long range is the
+;; IllegalArgumentException "Value out of range for long: 1.0E19"; a ratio
+;; truncates. What is left past the int range is the caller's to refuse
+;; (index-int-check!, on its out-of-bounds branch). (aget a ##NaN) raised Chez's
+;; exact error and (aget a 1/2) the backing's own range condition.
+(define (na-idx i)
+  (cond ((fixnum? i) i)
+        ((flonum? i)
+         (cond ((not (fl= i i)) 0)
+               ((or (fl> i 9.223372036854775807e18) (fl< i -9.223372036854775808e18))
+                (index-int-check! i))
+               (else (exact (fltruncate i)))))
+        ((and (number? i) (exact? i) (not (integer? i))) (truncate i))
+        ((and (number? i) (not (exact? i))) (exact (truncate i)))
+        (else (jolt-need-num i))))
+;; A constructor's size, (double-array n) and its siblings: Numbers.T_array
+;; reads it with Number.intValue, which keeps the low 32 bits of an integer and
+;; saturates a double, so (double-array 4294967296) is empty and
+;; (double-array Long/MAX_VALUE) is NegativeArraySizeException -1 on the JVM.
+;; jolt took the whole value and tried to allocate it (an OutOfMemoryError, or
+;; make-flvector's own error past its length limit).
+(define (na-size n) (or (num-key-index n) (na-idx n)))
 
 ;; The character a value denotes when it is STORED into a char array, or #f when
 ;; no character does — the test that decides whether a char array can keep its
@@ -551,8 +578,76 @@
 ;; A byte array's elements are signed-byte-folded by na-list->backing, the same
 ;; coercion aset applies through na-elem-of — so (into-array Byte/TYPE …) stores
 ;; bytes rather than whatever magnitude it was handed.
+;; (T-array coll) from a vector or another array has a count and indexed
+;; elements, so a double/float/long/int/short array is filled straight from
+;; them, coercing each element on the way in. The general route builds the seq,
+;; drains it to a list, maps a second list of coerced elements and only then
+;; fills — 3x the walk for a vector, and ~60ns an element for an array, whose seq
+;; steps through the generic first/next. The answer is the one the general route
+;; packs: an flvector for the float kinds; an fxvector for the integer kinds while
+;; every coerced element is a fixnum, and otherwise #f, so a value that needs the
+;; boxed backing goes the general way and is decided there.
+;; The two indexed sources, walked as (walk src (i e) body): BODY runs per
+;; element with I its index and E the element, and answers #f to stop the walk,
+;; which then answers #f; a finished walk answers #t. A vector is walked a leaf
+;; at a time — one descent per 32 elements, not one per element.
+(define-syntax na-walk-pvec
+  (syntax-rules ()
+    ((_ p0 (i e) body)
+     (let* ((p p0) (n (pvec-count p)))
+       (let chunk ((base 0))
+         (if (fx>=? base n)
+             #t
+             (let-values (((c off) (pv-leaf-for p base)))
+               (let ((m (fxmin (fx- (vector-length c) off) (fx- n base))))
+                 (let run ((j 0))
+                   (cond ((fx=? j m) (chunk (fx+ base m)))
+                         ((let ((i (fx+ base j)) (e (vector-ref c (fx+ off j)))) body)
+                          (run (fx+ j 1)))
+                         (else #f)))))))))))
+(define-syntax na-walk-backing
+  (syntax-rules ()
+    ((_ v0 (i e) body)
+     (let* ((v v0) (n (ja-backing-len v)))
+       (let run ((i 0))
+         (cond ((fx=? i n) #t)
+               ((let ((e (ja-backing-ref v i))) body) (run (fx+ i 1)))
+               (else #f)))))))
+
+(define-syntax na-indexed-backing
+  (syntax-rules ()
+    ((_ n0 kind0 walk src)
+     (let ((n n0) (kind kind0))
+       (cond
+         ((na-fl-kind? kind)
+          ;; A double element into a double array is stored as it is; asking
+          ;; na-elem-of (a case over the kinds) per element was half the fill.
+          (let ((fv (make-flvector n 0.0)) (dbl? (eq? kind 'double)))
+            (walk src (i e)
+                  (begin (flvector-set! fv i (if (and dbl? (flonum? e)) e (na-elem-of kind e)))
+                         #t))
+            fv))
+         ((na-fx-kind? kind)
+          (let ((xv (make-fxvector n 0)))
+            (and (walk src (i e)
+                       (let ((x (na-elem-of kind e)))
+                         (and (fixnum? x) (begin (fxvector-set! xv i x) #t))))
+                 xv)))
+         (else #f))))))
+
+(define (na-from-indexed x kind)
+  (and (or (na-fl-kind? kind) (na-fx-kind? kind))
+       (cond
+         ((pvec? x) (na-indexed-backing (pvec-count x) kind na-walk-pvec x))
+         ((jolt-array? x)
+          (let ((v (jolt-array-vec x)))
+            (na-indexed-backing (ja-backing-len v) kind na-walk-backing v)))
+         (else #f))))
+
 (define (na-from-seq x kind)
-  (make-jolt-array (na-list->backing (seq->list (jolt-seq x)) kind) kind))
+  (make-jolt-array (or (na-from-indexed x kind)
+                       (na-list->backing (seq->list (jolt-seq x)) kind))
+                   kind))
 
 ;; (T-array size init) has TWO forms on the JVM, and Numbers.T_array picks between
 ;; them with an instanceof: an init that is the element's own scalar type fills
@@ -591,8 +686,8 @@
 (define (na-num-array a rest init kind)
   (if (number? a)
       (if (and (pair? rest) (not (na-scalar-init? kind (car rest))))
-          (make-jolt-array (na-init-prefix-backing (na-idx a) kind (car rest) init) kind)
-          (make-jolt-array (na-make-backing (na-idx a) kind (if (pair? rest) (car rest) init)) kind))
+          (make-jolt-array (na-init-prefix-backing (na-size a) kind (car rest) init) kind)
+          (make-jolt-array (na-make-backing (na-size a) kind (if (pair? rest) (car rest) init)) kind))
       (na-from-seq a kind)))
 
 ;; numeric tower: array element defaults / narrowed bytes / count are
@@ -761,20 +856,26 @@
 ;; RT.seqToTypedArray does ((into-array ["a"]) is a String[]; an empty or
 ;; nil-headed seq is an Object[]).
 ;;
-;; The elements are NOT checked against the component class, where the JVM raises
-;; "array element type mismatch" (and an aset its ArrayStoreException): jolt's
-;; class model does not know every JDK class's ancestry — a StandardCopyOption is
-;; a CopyOption there and not here — so a check would refuse arrays the JVM
-;; builds. Recorded in known-divergences.edn (:permissive).
+;; Each element is checked against the component class as Array.set checks it,
+;; and one that cannot be stored is the JVM's IllegalArgumentException "array
+;; element type mismatch". The check is na-ref-storable?'s, so it refuses only
+;; what the class model can definitely place outside the component class.
+(define (na-check-elements! kind xs)
+  (for-each (lambda (x)
+              (unless (na-ref-storable? kind x)
+                (throw-jvm 'IllegalArgumentException "array element type mismatch")))
+            xs))
 (define (na-ref-array-of kind x)
-  (make-jolt-array (list->vector (seq->list (jolt-seq x))) kind))
+  (let ((xs (seq->list (jolt-seq x))))
+    (when (string? kind) (na-check-elements! kind xs))
+    (make-jolt-array (list->vector xs) kind)))
 ;; The array kind the untyped into-array takes from its first element: the
 ;; common heads by their Scheme type (the class arms cost more than the array),
 ;; anything else through its class name.
 (define (na-head-kind head)
   (cond ((jolt-nil? head) 'object)
         ((fixnum? head) "java.lang.Long")
-        ((string? head) "java.lang.String")
+        ((string? head) na-string-kind)
         ((keyword-t? head) "clojure.lang.Keyword")
         ((flonum? head) "java.lang.Double")
         ((symbol-t? head) "clojure.lang.Symbol")
@@ -792,8 +893,16 @@
             (na-from-seq (car rest) kind)))
       (let* ((xs (seq->list (jolt-seq a)))
              (kind (if (null? xs) 'object (na-head-kind (car xs)))))
+        ;; The rest of the seq is checked against the head's class only when that
+        ;; class is one of the final value classes jolt names by Scheme type — a
+        ;; head named through the class arms is jolt's report of its class, and a
+        ;; more specific report than the JVM's would refuse elements the JVM takes.
+        (when (and (string? kind) (na-head-checked? (car xs)))
+          (na-check-elements! kind (cdr xs)))
         ;; a reference array's backing is a plain vector (na-list->backing's else)
         (make-jolt-array (list->vector xs) kind))))
+(define (na-head-checked? h)
+  (or (fixnum? h) (string? h) (keyword-t? h) (flonum? h) (symbol-t? h) (char? h) (boolean? h)))
 (define (na-to-array coll)          (na-from-seq coll 'object))
 (define (na-aclone arr)
   (if (jolt-array? arr)
@@ -811,8 +920,21 @@
 ;; aset-int and its siblings are clojure.core's def-aset: the value goes through
 ;; the checked cast of its type ((aset-int a 0 1e10) is out of range, as (int
 ;; 1e10) is) and the call returns the value it was handed, not the stored one.
+;; The store is java.lang.reflect.Array.setInt and its siblings, which take only
+;; a primitive array: a reference array (Object[], String[]) is their
+;; IllegalArgumentException, raised after the cast, as def-aset casts first.
+;; More indices walk down through aget first, def-aset's second arity.
 (define (na-typed-aset cast)
-  (lambda (arr i v) (na-aset! arr i (cast v)) v))
+  (letrec ((store
+            (case-lambda
+              ((arr i v)
+               (let ((x (cast v)))
+                 (when (and (jolt-array? arr) (na-ref-kind? (jolt-array-kind arr)))
+                   (throw-jvm 'IllegalArgumentException "Argument is not an array of primitive type"))
+                 (na-aset! arr i x)
+                 v))
+              ((arr i i2 . more) (apply store (jolt-nth arr i) i2 more)))))
+    store))
 ;; aset-int's value arrives boxed, so the JVM casts it with RT.intCast(Object):
 ;; a double goes through longCast first, and one past the int range is the
 ;; ArithmeticException "integer overflow", not the IllegalArgumentException a
@@ -954,14 +1076,152 @@
 ;; The index takes the fixnum-first route jolt-vaget/jolt-flaget take: (exact
 ;; (na-idx k)) on a fixnum is two procedure calls to answer k itself, 9ns of an
 ;; untyped store.
+;;
+;; A typed reference array (a kind that is a STRING, see na-prim-kinds) checks
+;; what it is handed against its component class, as the JVM's aastore does:
+;; na-ref-store-check! below. A primitive or Object[] kind is a symbol, so
+;; neither pays more than the string? test.
+;;
+;; na-store-ok-fast? is the check's hit path spelled inline, since three calls
+;; deep it cost a String[] store a third of its time: a String into a String[]
+;; (eq? on the kind the constructors hand out), nil, or the value's class
+;; matching the last yes the slow path kept (na-store-memo). A miss is not a
+;; no — it goes on to na-ref-store-check!, which asks the class model.
+(define na-store-memo (vector #f #f))
+(define-syntax na-store-key-fast
+  (syntax-rules ()
+    ((_ x) (cond ((flonum? x) 'flonum) ((fixnum? x) 'fixnum) ((string? x) 'string)
+                 (else (instance-kind-key x))))))
+(define-syntax na-store-ok-fast?
+  (syntax-rules ()
+    ((_ kind v)
+     (let ((k kind) (x v))
+       (or (and (string? x) (eq? k na-string-kind))
+           (let ((m na-store-memo))
+             ;; the memo is always the two-slot vector built here, so the
+             ;; reads skip vector-ref's type and bounds checks
+             (and (eq? (sa-uvector-ref m 0) k) (eq? (sa-uvector-ref m 1) (na-store-key-fast x))))
+           (jolt-nil? x))))))
 (define (na-array-set! a k v)
-  (let* ((kind (jolt-array-kind a)) (sv (na-elem-of kind v)))
-    (ja-set! a (if (fixnum? k) k (exact (na-idx k))) sv)
-    (if (eq? kind 'float) (make-jfloat sv) sv)))
+  (let ((kind (jolt-array-kind a))
+        (j (if (fixnum? k) k (exact (na-idx k)))))
+    (if (string? kind)
+        ;; A typed reference array has its own arm: no narrowing to do (its
+        ;; na-elem-of is the identity, reached after six kind compares) and a
+        ;; plain-vector backing, so a checked store is one vector-set! — which is
+        ;; what pays for the check.
+        (let ((bk (jolt-array-vec a)))
+          (unless (na-store-ok-fast? kind v) (na-ref-store-check! a j kind v))
+          (if (and (vector? bk) (fixnum? j) (fx<? -1 j (vector-length bk)))
+              (vector-set! bk j v)
+              (ja-set! a j v))
+          v)
+        (let ((sv (na-elem-of kind v)))
+          (ja-set! a j sv)
+          (if (eq? kind 'float) (make-jfloat sv) sv)))))
+;; The same store through reflection — the aset VAR (apply aset …, the
+;; multi-index form) and java.lang.reflect.Array/set — which the JVM routes
+;; through Array.set, whose refusal is the IllegalArgumentException "array
+;; element type mismatch" rather than aastore's ArrayStoreException.
+(define (na-array-set-reflective! a k v)
+  (let ((kind (jolt-array-kind a)))
+    (if (string? kind)
+        (let ((j (if (fixnum? k) k (exact (na-idx k)))))
+          (unless (na-ref-storable? kind v)
+            (ja-check (jolt-array-vec a) j)
+            (throw-jvm 'IllegalArgumentException "array element type mismatch"))
+          (ja-set! a j v)
+          v)
+        (na-array-set! a k v))))
+
+;; --- the component-class check of a typed reference array --------------------
+;; Can a typed reference array whose component class is KIND (a JVM class name)
+;; hold V? nil always; a String in a String[] is the one-compare common case.
+;; Everything else asks the class model, and the rule is that ONLY A DEFINITE NO
+;; refuses: the value's class and the component class must both be classes the
+;; graph models exactly, and neither instance? nor the graph's ancestry may
+;; place the value under the component. A class the model does not know, or a
+;; value whose class jolt cannot name, is stored — the check must never refuse
+;; an array the JVM would fill.
+(define (na-ref-storable? kind v)
+  (or (jolt-nil? v)
+      (and (string? v) (or (eq? kind na-string-kind) (string=? kind na-string-kind)))
+      (na-ref-storable-slow? kind v)))
+;; The refusal of a store at index J of array A: a bad index still raises its own
+;; ArrayIndexOutOfBoundsException first, as aastore checks the bounds before the
+;; type.
+(define (na-ref-store-check! a j kind v)
+  (unless (na-ref-storable? kind v)
+    (ja-check (jolt-array-vec a) j)
+    (throw-jvm 'ArrayStoreException (jolt-class-name v))))
+(define (na-ref-storable-slow? kind v)
+  (if (char=? (string-ref kind 0) #\[)
+      ;; an array of arrays: only an array, and one whose class is assignable
+      (and (jolt-array? v) (na-array-class-assignable? (na-array-class-name v) kind))
+      ;; The answer is a function of the kind and the value's class, so the last
+      ;; yes is kept under instance?'s own memo key for the value (its class-name
+      ;; constant, or a record's descriptor): a loop filling a Number[] with
+      ;; doubles asks the class model once, not per store. One entry, replaced
+      ;; whole; only a yes is kept, so a stale entry can only let a store in.
+      (let ((key (na-store-key-fast v)) (m na-store-memo))
+        (if (and key (eq? (vector-ref m 0) kind) (eq? (vector-ref m 1) key))
+            #t
+            (let ((ok (or (instance-check kind v)
+                          (na-num-collapsed? kind v)
+                          (let ((cn (jolt-class-name v)))
+                            (or (not (string? cn)) (na-class-assignable? cn kind))))))
+              (when (and ok key)
+                (let ((e (vector kind key)))
+                  (memory-order-release)
+                  (set! na-store-memo e)))
+              ok)))))
+;; The memo key (na-store-key-fast): the three commonest values by their Scheme
+;; type, each exactly one class (a fixnum is a Long, a flonum a Double), anything
+;; else by instance?'s key, which is #f for a value whose class can vary per
+;; instance — never kept.
+;; jolt keeps fewer number representations than the JVM: every exact integer in
+;; long range is one fixnum, whether it came from (byte 1), (int 1), a
+;; BigInteger or a Long, and a float a host API hands back may be a flonum. So
+;; an exact integer is never refused by an integral wrapper class, nor a flonum
+;; by Float — jolt cannot tell that the JVM would have refused it.
+(define (na-num-collapsed? kind v)
+  (cond ((and (number? v) (exact? v) (integer? v))
+         (member kind '("java.lang.Long" "java.lang.Integer" "java.lang.Short" "java.lang.Byte"
+                        "java.math.BigInteger" "clojure.lang.BigInt")))
+        ((flonum? v) (string=? kind "java.lang.Float"))
+        (else #f)))
+;; Is class FROM assignable to class TO, as far as the model can say? Unknown to
+;; the model on either side reads as yes, by the rule above.
+(define (na-class-assignable? from to)
+  (or (string=? from to)
+      (string=? to "java.lang.Object")
+      (not (jch-known-exact? from))
+      (not (jch-known-exact? to))
+      (jch-isa? from to)))
+;; Array class names ("[I", "[Ljava.lang.String;", "[[D"): assignable when equal,
+;; to Object[] from any reference array, or component-wise between two arrays of
+;; references (String[][] to Object[][], String[] to CharSequence[]).
+(define (na-array-class-assignable? from to)
+  (or (string=? from to)
+      (let ((fl (string-length from)) (tl (string-length to)))
+        (and (fx>? fl 1) (fx>? tl 1)
+             (let ((f (string-ref from 1)) (t (string-ref to 1)))
+               (cond ((and (char=? t #\L) (string=? to "[Ljava.lang.Object;"))
+                      (or (char=? f #\L) (char=? f #\[)))
+                     ((and (char=? f #\[) (char=? t #\[))
+                      (na-array-class-assignable? (substring from 1 fl) (substring to 1 tl)))
+                     ((and (char=? f #\L) (char=? t #\L))
+                      (na-class-assignable? (substring from 2 (fx- fl 1)) (substring to 2 (fx- tl 1))))
+                     (else #f)))))))
+;; The kind's name as HotSpot's arraycopy messages print an element class:
+;; Object[]'s is java.lang.Object, an array component its binary name.
+(define (na-kind-element-name kind)
+  (if (string? kind) kind "java.lang.Object"))
+
 (define %na-ref-put! jolt-ref-put!)
 (set! jolt-ref-put!
   (lambda (t k v)
-    (if (jolt-array? t) (begin (na-array-set! t k v) t)
+    (if (jolt-array? t) (begin (na-array-set-reflective! t k v) t)
         (%na-ref-put! t k v))))
 (def-var! "jolt.host" "ref-put!" jolt-ref-put!)
 ;; native-op target for the 1-dim (aset arr i v): write through the array-aware
@@ -1062,7 +1322,12 @@
         (jolt-vaset-coerce a bk i v))))
 (define (jolt-vaset-coerce a bk i v)
   (let* ((j (if (fixnum? i) i (exact (na-idx i))))
-         (x (na-elem-of (jolt-array-kind a) v)))
+         (kind (jolt-array-kind a))
+         ;; ^objects over a typed reference array checks as the untyped aset
+         ;; does, and skips na-elem-of, the identity on any reference kind
+         (x (if (string? kind)
+                (begin (unless (na-store-ok-fast? kind v) (na-ref-store-check! a j kind v)) v)
+                (na-elem-of kind v))))
     (cond ((fxvector? bk)
            (if (fixnum? x) (fxvector-set! bk j x) (vector-set! (ja-promote! a) j x)))
           ((vector? bk)
@@ -1222,7 +1487,7 @@
                                   (na-make-array component len))))
         (cons "getLength" (lambda (arr) (->num (ja-len (na-need-array arr)))))
         (cons "get" (lambda (arr i) (ja-ref (na-need-array arr) (na-idx i))))
-        (cons "set" (lambda (arr i v) (na-array-set! (na-need-array arr) (na-idx i) v) jolt-nil)))))
+        (cons "set" (lambda (arr i v) (na-array-set-reflective! (na-need-array arr) (na-idx i) v) jolt-nil)))))
   (register-class-statics! "Array" statics)
   (register-class-statics! "java.lang.reflect.Array" statics))
 
@@ -1611,3 +1876,263 @@
 (register-class-statics!
  "clojure.lang.Reflector"
  (list (cons "getMethods" reflect-get-methods)))
+
+;; --- native regions (stdlib/jolt/native) ------------------------------------
+;; A region call (the backend's :native-region lowering) passes each argument
+;; through one of these before C runs, so a linked region and a JIT'd one see
+;; the same coerced values and fail the same way. A ^long or
+;; ^double parameter converts as clojure.core/long and double do; a ^boolean
+;; one must be a boolean; a ^doubles one must be a double-array whose backing
+;; is still an flvector. jolt widens a double-array's backing to a plain vector
+;; when a non-number is stored into it, and C reads the argument as raw flvector
+;; memory, so that case is refused here rather than read.
+(define (jolt-native-arg-long x) (if (fixnum? x) x (jolt-long-cast x)))
+(define (jolt-native-arg-double x) (if (flonum? x) x (jolt-double x)))
+;; What a refused argument is, for the message: its class, or nil.
+(define (jolt-native-arg-what x)
+  (if (jolt-nil? x) "nil" (jolt-class-name x)))
+(define (jolt-native-arg-bool x)
+  (if (boolean? x)
+      x
+      (throw-jvm 'ClassCastException
+                 (string-append "native region: a ^boolean parameter got "
+                                (jolt-native-arg-what x)))))
+;; Each array check answers the backing it tested, which the call site hands C:
+;; read once, since another thread's store can widen the array's backing to a
+;; plain vector, and a second read after the check would pass that to C.
+(define (jolt-native-arg-doubles a)
+  (if (not (and (jolt-array? a) (eq? (jolt-array-kind a) 'double)))
+      (throw-jvm 'ClassCastException
+                 (string-append "native region: a ^doubles parameter got "
+                                (jolt-native-arg-what a)))
+      (let ((v (jolt-array-vec a)))
+        (if (flvector? v)
+            v
+            (throw-jvm 'IllegalArgumentException
+                       "native region: this double-array holds a value that is not a double")))))
+;; A ^longs parameter: a long-array still backed by an fxvector, which C reads
+;; and writes as fixnums. jolt widens the backing to a plain vector once a value
+;; leaves the fixnum range (or a non-number is stored); that array is refused.
+(define (jolt-native-arg-longs a)
+  (if (not (and (jolt-array? a) (eq? (jolt-array-kind a) 'long)))
+      (throw-jvm 'ClassCastException
+                 (string-append "native region: a ^longs parameter got "
+                                (jolt-native-arg-what a)))
+      (let ((v (jolt-array-vec a)))
+        (if (fxvector? v)
+            v
+            (throw-jvm 'IllegalArgumentException
+                       "native region: this long-array holds a value outside the fixnum range")))))
+;; A ^bytes parameter: a byte-array, whose backing is always a bytevector of
+;; signed bytes, which C reads in place and never writes.
+(define (jolt-native-arg-bytes a)
+  (let ((v (and (jolt-array? a) (eq? (jolt-array-kind a) 'byte) (jolt-array-vec a))))
+    (if (bytevector? v)
+        v
+        (throw-jvm 'ClassCastException
+                   (string-append "native region: a ^bytes parameter got "
+                                  (jolt-native-arg-what a))))))
+;; An owned array result arrives as the region's malloc'd buffer PTR, which the
+;; stub copies into a fresh Scheme array and frees. Until the copy has freed
+;; it, a failure (the Scheme heap out of room for the array) frees it first.
+(define (jolt-native-holding ptr free thunk)
+  (guard (e (#t (free ptr) (raise e))) (thunk)))
+;; An owned double-array result: C copies the buffer in and frees it.
+(define (jolt-native-wrap-doubles n ptr copy-out free)
+  (let ((fv (jolt-native-holding ptr free (lambda () (make-flvector n)))))
+    (copy-out fv ptr n)
+    (make-jolt-array fv 'double)))
+;; An owned long-array result: C fills an fxvector and frees its buffer, or,
+;; when a value is past the fixnum range, answers that index and leaves the
+;; buffer; the array is then built through jolt's own store, which widens.
+(define (jolt-native-wrap-longs n ptr copy-out elem free)
+  (let* ((fx (jolt-native-holding ptr free (lambda () (make-fxvector n 0))))
+         (bad (copy-out fx ptr n)))
+    (if (fx= bad -1)
+        (make-jolt-array fx 'long)
+        (let ((a (jolt-native-holding ptr free
+                   (lambda ()
+                     (let ((a (na-long-array n)))
+                       (do ((i 0 (fx+ i 1))) ((fx= i n)) (jolt-aset3 a i (elem ptr i)))
+                       a)))))
+          (free ptr)
+          a))))
+
+;; Every region whose call site has loaded, sym -> C source, for jolt build to
+;; compile and link and for the JIT. Registered when the site's top-level form
+;; loads, so a build served from the AOT cache sees the same set as one that
+;; macroexpanded. Kept for the life of the process, as the JIT's code is: a
+;; program that makes regions at runtime (native-fn) holds each distinct one.
+;; The table answers a lookup; the list keeps the order they loaded in.
+(define jolt-native-regions '())
+(define jolt-native-region-table (make-hashtable string-hash string=?))
+(define jolt-native-regions-mutex (make-mutex))
+;; A name is a hash of the C, so the same name with other C is a collision:
+;; raised, since the second region would otherwise run the first one's code.
+(define (jolt-native-register! sym src)
+  (let ((clash
+         (jolt-with-mutex jolt-native-regions-mutex
+           (let ((had (hashtable-ref jolt-native-region-table sym #f)))
+             (cond
+               ((not had)
+                (hashtable-set! jolt-native-region-table sym src)
+                (set! jolt-native-regions (cons (cons sym src) jolt-native-regions))
+                #f)
+               (else (not (string=? had src))))))))
+    (when clash
+      (throw-jvm 'IllegalStateException
+                 (string-append "native region " sym
+                                ": another region's C has the same name (a hash collision);"
+                                " change either region")))))
+(define (jolt-native-registered)
+  (jolt-with-mutex jolt-native-regions-mutex (reverse jolt-native-regions)))
+(define (jolt-native-source sym)
+  (jolt-with-mutex jolt-native-regions-mutex
+    (hashtable-ref jolt-native-region-table sym #f)))
+
+;; --- the JIT ------------------------------------------------------------------
+;; A region not linked into this process (the REPL, jolt run, the build process
+;; itself) is compiled here by MIR's C compiler (host/chez/stub/jolt_mir.c), from
+;; the same C a build links, the first time its call site loads. The release
+;; jolt links MIR in; anything else loads the object JOLT_MIR_LIB names, which
+;; bin/jolt points at the checkout's target/mir/libjoltmir (make mirlib). There
+;; is no default path: one relative to the working directory would let a binary
+;; jolt build made (which carries no MIR, every region its program loads being
+;; linked into it) load whatever library sits under target/mir where it runs.
+(define (jolt-mir-object-path)
+  (let ((env (getenv "JOLT_MIR_LIB")))
+    (and env (not (string=? env "")) env)))
+
+;; #(compile lookup error resolver-entry cpu-features feature-name) once MIR is
+;; found, 'none when it is not
+(define jolt-mir-procs #f)
+(define jolt-mir-mutex (make-mutex))
+(define (jolt-mir-find!)
+  (unless (sa-foreign-entry? "jolt_mir_compile")
+    (let ((path (jolt-mir-object-path)))
+      (when (and path (file-exists? path))
+        (guard (e (#t #f)) (sa-load-shared-object path)))))
+  (if (sa-foreign-entry? "jolt_mir_compile")
+      ;; by address, not by name: a named foreign reference is a load-time
+      ;; relocation on Windows, which aborts the boot when the symbol is absent
+      (vector (sa-foreign-procedure (sa-foreign-entry-address "jolt_mir_compile") (string uptr) uptr)
+              (sa-foreign-procedure (sa-foreign-entry-address "jolt_mir_lookup") (uptr string) uptr)
+              (sa-foreign-procedure (sa-foreign-entry-address "jolt_mir_error") () string)
+              ;; java/ffi.ss, which loads after this file and before any region runs
+              (jolt-mir-resolver-entry)
+              (sa-foreign-procedure (sa-foreign-entry-address "jolt_mir_cpu_features") () integer-64)
+              (sa-foreign-procedure (sa-foreign-entry-address "jolt_mir_feature_name") (integer-64) string))
+      'none))
+
+;; base sym -> MIR module address, or a string: why the region has no code
+;; here. A failure is kept with the library set it failed against
+;; (jolt-mir-libraries): a region whose C calls a defextern no library defined
+;; yet compiles again once ffi/load-library (or a :jolt/native) has opened
+;; another, rather than failing for the rest of the process.
+(define jolt-mir-modules (make-hashtable string-hash string=?))
+(define jolt-mir-failed-at (make-hashtable string-hash string=?))
+
+;; How many native libraries this process has opened (java/ffi.ss, which loads
+;; after this file): the set only grows, so its size says when it changed.
+(define (jolt-mir-libraries)
+  (length (or (vector-ref ffi-native-handles 0) '())))
+
+(define (jolt-mir-module base)
+  (jolt-with-mutex jolt-mir-mutex
+    (let ((had (hashtable-ref jolt-mir-modules base #f)))
+      (if (and had (not (and (string? had)
+                             (not (eqv? (hashtable-ref jolt-mir-failed-at base #f)
+                                        (jolt-mir-libraries))))))
+          had
+          (let ((libs (jolt-mir-libraries))
+                (m (jolt-mir-compile base)))
+            (hashtable-set! jolt-mir-modules base m)
+            (if (string? m)
+                (hashtable-set! jolt-mir-failed-at base libs)
+                (hashtable-delete! jolt-mir-failed-at base))
+            m)))))
+
+(define (jolt-mir-compile base)
+  (let ((src (jolt-native-source base)))
+    (if src
+        (jolt-mir-compile-source src)
+        "its C source was never registered")))
+
+;; SRC, C, compiled by MIR: the module, whose functions jolt-mir-lookup finds,
+;; or a string, why there is none. Called under jolt-mir-mutex; the native gate
+;; (test/chez/native-test.clj) calls it directly, from one thread.
+(define (jolt-mir-compile-source src)
+  (unless jolt-mir-procs (set! jolt-mir-procs (jolt-mir-find!)))
+  (if (eq? jolt-mir-procs 'none)
+      (string-append "it is not linked into this binary, and this process has no JIT"
+                     (let ((path (jolt-mir-object-path)))
+                       (if path
+                           (string-append " (MIR: " path " not found)")
+                           " (no MIR linked in, and JOLT_MIR_LIB is unset)")))
+      ;; interrupts off across the call: the resolver re-enters Scheme with C
+      ;; frames on the stack, where no fiber may switch out
+      (let ((m (begin (disable-interrupts)
+                      (let ((m ((vector-ref jolt-mir-procs 0) src (vector-ref jolt-mir-procs 3))))
+                        (enable-interrupts)
+                        m))))
+        (if (eqv? m 0)
+            (string-append "the JIT could not compile it: " ((vector-ref jolt-mir-procs 2)))
+            m))))
+
+;; The address of the function NAME in MODULE, or #f.
+(define (jolt-mir-lookup m name)
+  (let ((p ((vector-ref jolt-mir-procs 1) m name)))
+    (and (not (eqv? p 0)) p)))
+
+;; The C entry's address: linked into this process (a jolt build binary), else
+;; JIT-compiled, else #f, when the call site raises jolt-native-unavailable.
+;; Resolved once per site, when its top-level form loads.
+(define (jolt-native-entry sym)
+  (cond
+    ((sa-foreign-entry? sym) (sa-foreign-entry-address sym))
+    ((< (string-length sym) 19) #f)
+    (else
+     (let ((m (jolt-mir-module (substring sym 0 19))))
+       (and (not (string? m)) (jolt-mir-lookup m sym))))))
+
+;; jolt.native/jit?: whether this process can compile a region (it has MIR).
+(define (jolt-native-jit?)
+  (jolt-with-mutex jolt-mir-mutex
+    (unless jolt-mir-procs (set! jolt-mir-procs (jolt-mir-find!)))
+    (not (eq? jolt-mir-procs 'none))))
+
+;; jolt.native/cpu-features: the C macro of each CPU feature the JIT defines
+;; when it compiles a region here (jolt_mir.c), as a jolt vector of strings;
+;; empty without a JIT.
+(define (jolt-native-cpu-features)
+  (if (jolt-native-jit?)
+      (let ((bits ((vector-ref jolt-mir-procs 4))) (name (vector-ref jolt-mir-procs 5)))
+        (make-pvec
+         (list->vector
+          (let loop ((k 0) (acc '()))
+            (let ((m (name k)))
+              (cond ((not m) (reverse acc))
+                    ((logbit? k bits) (loop (+ k 1) (cons m acc)))
+                    (else (loop (+ k 1) acc))))))))
+      (make-pvec (vector))))
+
+;; A region call whose entry did not resolve.
+(define (jolt-native-unavailable sym)
+  (let ((m (jolt-with-mutex jolt-mir-mutex (hashtable-ref jolt-mir-modules sym #f))))
+    (throw-jvm 'UnsupportedOperationException
+               (string-append "native region " sym " has no native code here: "
+                              (if (string? m) m "its entry did not resolve")))))
+
+;; jolt.native/linked-regions: each loaded region as [sym how], how being
+;; "linked" (compiled into this binary), "jit" (compiled in this process), or
+;; nil, as a jolt vector of vectors (a Scheme list does not cross into jolt as
+;; a seq).
+(define (jolt-native-linked)
+  (make-pvec (list->vector
+              (map (lambda (r)
+                     (let ((sym (car r)))
+                       (make-pvec (vector sym
+                                          (cond ((sa-foreign-entry? sym) "linked")
+                                                ((jolt-native-entry sym) "jit")
+                                                (else jolt-nil))))))
+                   (jolt-native-registered)))))

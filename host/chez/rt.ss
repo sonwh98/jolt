@@ -64,6 +64,7 @@
 ;; Before everything else that locks: jolt-with-mutex is a MACRO, so it has to be
 ;; defined before any file that uses it is loaded. It depends on nothing but Chez.
 (load "host/chez/locks.ss")
+(load "host/chez/fx-digits.ss")
 (load "host/chez/values.ss")
 (load "host/chez/hasheq.ss")
 ;; Resolve a libc entry point at RUN time; #f when the entry doesn't exist
@@ -115,6 +116,21 @@
                    (sa-load-shared-object #f)
                    (and (sa-foreign-entry? name)
                         (sa-foreign-procedure conv name args res)))))
+         #'(if (eq? (sa-os-family) 'windows) win unx)))
+      ;; Two conventions: __collect_safe with (__varargs_after n), a variadic C
+      ;; function that blocks (FileChannel.lock's F_SETLKW, java/nio-file.ss).
+      ;; The Windows branch drops both, as above; a caller that needs the call to
+      ;; be collect-safe there binds its own Windows entry.
+      ((_ conv1 conv2 name (quote args) (quote res))
+       (with-syntax
+           ((win #'(guard (e (#t #f))
+                   (sa-load-shared-object #f)
+                   (and (sa-foreign-entry? name)
+                        (sa-foreign-procedure-runtime name (quote args) (quote res) #f))))
+            (unx #'(guard (e (#t #f))
+                   (sa-load-shared-object #f)
+                   (and (sa-foreign-entry? name)
+                        (sa-foreign-procedure conv1 conv2 name args res)))))
          #'(if (eq? (sa-os-family) 'windows) win unx))))))
 
 ;; Same, for an entry point that BLOCKS (a pipe read, sigwait). The call must be
@@ -1538,6 +1554,7 @@
 (define jolt-vreg-site 2)        ; #&('ns/fn' . line) innermost, ('ns/fn' . line) outer, or 0
 (define jolt-vreg-catch-line 3)  ; the site at the throw a catch clause is handling
 (define jolt-vreg-print-readably 4)  ; the print family's *print-readably* override; 0 = unset
+(define jolt-vreg-print-dup 15)  ; #t while this thread prints under *print-dup* (java/io-streams.ss)
 (define jolt-vreg-current-fiber 0)  ; fibers.ss: the running fiber record, or 0 (fixnum) when not on a fiber
 ;; slot 1: fibers.ss jolt-vreg-park-unwinding — a park escape is unwinding this carrier
 ;; slot 5: hasheq.ss jolt-vreg-hasheq-caches — this thread's string hash cache and weak admission buckets
@@ -1565,6 +1582,10 @@
 ;; slot 13: ticks.ss jolt-vreg-ticks
 ;; slot 14: printing.ss jolt-vreg-deref-printing — the cycle check's state for
 ;;   the IDeref values this thread is printing
+;; slot 15: jolt-vreg-print-dup (above) — #t while this thread prints under
+;;   *print-dup*, so the native printer sends each element to print-dup; set and
+;;   cleared at the print entries (java/io-streams.ss), read per element. Not 12:
+;;   the Gambit kernel still keeps its outer site there.
 ;; Effective *print-readably* for the readable renderer's string/char cases. The
 ;; print family stashes its override in the slot above — a virtual-register write
 ;; is ~1ns vs a pmap alloc + fold + two thread-parameter writes per dynamic
@@ -2008,7 +2029,8 @@
 (define (jolt-host-call method target . args)
   (cond
     ((and (string=? method "isDirectory") (string? target)) (if (file-directory? target) #t #f))
-    ((and (string=? method "listFiles") (string? target)) (list->cseq (directory-list target)))
+    ;; in the OS's order, as java.io/nio list (Chez's directory-list is it reversed)
+    ((and (string=? method "listFiles") (string? target)) (list->cseq (reverse (directory-list target))))
     (else (record-method-dispatch target method (apply jolt-vector args)))))
 
 ;; --- var cells: late-bound global roots (Clojure vars) -----------------------
@@ -2785,12 +2807,15 @@
 ;; limited-string walkers never truncate.
 (define plevel-cell #f)
 (define plength-cell #f)
+;; Neither limits a print under *print-dup*, which has to read back whole.
 (define (jolt-print-level)
   (unless plevel-cell (set! plevel-cell (jolt-var "clojure.core" "*print-level*")))
-  (let ((v (jolt-var-get plevel-cell))) (and (number? v) v)))
+  (let ((v (jolt-var-get plevel-cell)))
+    (and (number? v) (not (eq? (virtual-register jolt-vreg-print-dup) #t)) v)))
 (define (jolt-print-length)
   (unless plength-cell (set! plength-cell (jolt-var "clojure.core" "*print-length*")))
-  (let ((v (jolt-var-get plength-cell))) (and (number? v) v)))
+  (let ((v (jolt-var-get plength-cell)))
+    (and (number? v) (not (eq? (virtual-register jolt-vreg-print-dup) #t)) v)))
 (define jolt-print-depth (make-thread-parameter 0))
 ;; A collection at depth >= *print-level* renders as "#". The top-level collection
 ;; is depth 0, so *print-level* 0 collapses any collection, 1 keeps the outermost.
@@ -2907,28 +2932,41 @@
 ;; Every value printed this way carries its identity hash, as the JVM's
 ;; print-object writes (System/identityHashCode o) for any object (jolt-28we).
 (define (jolt-object-repr x readable?)
-  (let* ((cls (guard (e (#t #f)) (jolt-class-name x)))
-         (hex (and (string? cls) (jolt-identity-hex x)))
+  ;; One guard for the class name and the content, not one each: a guard costs
+  ;; about 40 ns, a sixth of an #object print. Which stage raised is told by how
+  ;; far it got, as two guards told it: no class name -- the bare ~a fallback --
+  ;; or a class name with no content -- the form without its quoted part.
+  (let* ((cls #f)
+         (hex #f)
          ;; a deftype with neither toString nor hashCode of its own is
          ;; Object.toString over its identity hash: the class and hex already in
          ;; hand, rather than a second class-name lookup and a walk of the str
          ;; registry to reach them. One that declares either (user code, which may
          ;; do anything), and an enum constant (its name), go through the registry.
-         (content (if (and hex (jrec? x) (not (enum-constant? x))
-                           ;; under whatever name it was declared: Object or java.lang.Object
-                           (not (find-method-any-protocol (jrec-tag x) "toString"))
-                           (not (find-method-any-protocol (jrec-tag x) "hashCode")))
-                      (string-append cls "@" hex)
-                      (guard (e (#t #f)) (jolt-object-content x))))
+         (content (guard (e (#t #f))
+                    (set! cls (jolt-class-name x))
+                    (and (string? cls)
+                         (begin
+                           (set! hex (jolt-identity-hex x))
+                           (if (and (jrec? x) (not (enum-constant? x))
+                                    ;; under whatever name it was declared: Object or java.lang.Object
+                                    (not (find-method-any-protocol (jrec-rtag x) "toString"))
+                                    (not (find-method-any-protocol (jrec-rtag x) "hashCode")))
+                               (string-append cls "@" hex)
+                               (jolt-object-content x))))))
+         (cls (and (string? cls) cls))
+         (hex (and cls (or hex (jolt-identity-hex x))))
          ;; an array's class name is quoted, as Clojure's print-method writes it
          (array? (and hex (fx>? (string-length cls) 0) (char=? (string-ref cls 0) #\[)))
          (content (if (and array? (not (string? content))) (string-append cls "@" hex) content))
-         (head (and hex (string-append "#object[" (if array? (string-append "\"" cls "\"") cls) " 0x" hex))))
-    (cond ((not head) (format "~a" x))
-          ((not (string? content)) (string-append head "]"))
+         (cls* (and hex (if array? (string-append "\"" cls "\"") cls))))
+    ;; each form is one string-append: building the #object[cls 0xhex head first
+    ;; and appending to it copied it twice
+    (cond ((not hex) (format "~a" x))
+          ((not (string? content)) (string-append "#object[" cls* " 0x" hex "]"))
           ((and readable? (jolt-pr-readable?))
-           (string-append head " \"" (jolt-str-escape content) "\"]"))
-          (else (string-append head " " content "]")))))
+           (string-append "#object[" cls* " 0x" hex " \"" (jolt-str-escape content) "\"]"))
+          (else (string-append "#object[" cls* " 0x" hex " " content "]")))))
 
 (define (jolt-pr-str-base/readable x readable?)
   (cond
@@ -3221,6 +3259,465 @@
 ;; paths + jolt-hash-map/pmap-fold/pmap-assoc (collections.ss).
 (load "host/chez/dyn-binding.ss")
 
+;; A call through a var, open-coded at the site (#1713). The Chez back end
+;; (backend_scheme.clj emit-var-cell-call) writes a call whose callee is a var's
+;; cell as (let* ((f (jolt-var-fn cell)) (a arg) ...) (if (procedure? f) (f a ...)
+;; (jolt-invoke-tN f a ...))) where it used to write (jolt-invoke-tN
+;; (var-cell-deref cell) arg ...): two calls into the runtime ahead of the one
+;; that does the work, ~4.5 ns over a plain procedure call. This is the value
+;; half: the root behind one flag test, the binding-stack walk and *ns* exactly
+;; as var-cell-deref decides them. The call stays in the emitted text so it
+;; keeps its own source position for a backtrace.
+;; A jolt try's catch, on Chez (#1713). The back end emits
+;; (let ((r (call/1cc (lambda (k) (jolt-guard-body k BODY))))) (if (jolt-caught?
+;; r) (let ((raw (jolt-caught-val r))) HANDLER) r)) where it emitted R6RS guard. A jolt
+;; try always ends in else -- its handler unwraps, matches the catch clauses and
+;; rethrows itself -- so it never needs guard's way back into the raise for a
+;; clause that did not match. Two costs of Chez's guard go with that:
+;;
+;;   - $guard takes a FULL continuation (call/cc) plus the continuation marks.
+;;     A full continuation splits the stack, and returning through the split
+;;     copies the frames beneath back in: ~1.2 us for a try under 200 frames.
+;;     Here the escape is one-shot (call/1cc), which returns for free.
+;;   - with-exception-handler takes the body as a THUNK, a closure over every
+;;     free variable of the body -- in emitted code every hoisted constant the
+;;     body names -- allocated on each entry. tools.reader's read* enters a try
+;;     for every form it reads, and the thunk doubled what a parse allocated
+;;     (~650 bytes a try). Here the body runs inline: the handler stack is set,
+;;     and a winder that restores it is pushed, exactly as with-exception-
+;;     handler's parameterize does around its thunk (adapter sa-handler-stack,
+;;     sa-make-winder).
+;;
+;; So a raise in the body reaches this handler, which escapes to the try with the
+;; raised value, and the handler body runs there, in the try's own dynamic
+;; context, as guard runs it; an escape past the try by any other route (an
+;; outer catch, a park, an interrupt's jump) unwinds through the winder and puts
+;; the handler stack back. The setup and the teardown are masked by the
+;; counted-lock depth (locks.ss), as a finally's edges are, so an interrupt's
+;; escape cannot land between setting the stack and pushing the winder. The
+;; caught value travels back in a record of its own type, which the body can
+;; never return.
+(define-record-type jolt-caught (fields val) (nongenerative jolt-caught-v1) (sealed #t))
+;; (jolt-guard-body k body): BODY run with a handler installed that escapes to
+;; the one-shot continuation K with the raised value in a jolt-caught; BODY's
+;; value otherwise. The back end writes the rest around it -- (call/1cc (lambda
+;; (k) (jolt-guard-body k BODY))) and the jolt-caught test that runs the catch --
+;; into the emitted text, because a frame's line comes from the source object of
+;; the call it returns to, and a call a macro builds has none: the call/1cc call
+;; is the one the enclosing fn's frame returns to while the body runs.
+;;
+;; The setup and the teardown are procedures, not open code: the macro is
+;; expanded at every try, and with them inlined (three closures, the winder, the
+;; mask edges) a try cost Chez twice the compile time it does now -- 200 catches
+;; in one fn took 48 ms to load against 23 for guard, and a deftest of 200 `is`
+;; 1.3x. Two calls cost a few ns at run time; the body stays in place, which is
+;; what the change was for. The leave pops one entry off each chain rather than
+;; restoring saved values: BODY returned normally, so both chains are exactly as
+;; the enter left them (an escape and a re-entry through a continuation put back
+;; the very pairs the enter pushed).
+(define (jolt-guard-enter! k)
+  (let* ((old-hs (sa-handler-stack))
+         (new-hs (cons (lambda (c) (k (make-jolt-caught c))) old-hs))
+         (lv (virtual-register 7)))
+    (set-virtual-register! 7 (fx+ lv 1))
+    (sa-handler-stack-set! new-hs)
+    (sa-winders-set! (cons (sa-make-winder (lambda () (sa-handler-stack-set! new-hs))
+                                           (lambda () (sa-handler-stack-set! old-hs)))
+                           (sa-winders)))
+    (set-virtual-register! 7 lv)))
+(define (jolt-guard-leave!)
+  (set-virtual-register! 7 (fx+ (virtual-register 7) 1))
+  (sa-winders-set! (cdr (sa-winders)))
+  (sa-handler-stack-set! (cdr (sa-handler-stack)))
+  (set-virtual-register! 7 (fx- (virtual-register 7) 1)))
+(define-syntax jolt-guard-body
+  (syntax-rules ()
+    ((_ k body)
+     (begin (jolt-guard-enter! k)
+            (let ((v body)) (jolt-guard-leave!) v)))))
+
+;; A jolt finally, on Chez (#1713): (jolt-wind-inline IN BODY AFTER) is
+;; (dynamic-wind IN (lambda () BODY) AFTER) with BODY run in place instead of as
+;; a thunk, for the reason jolt-guard gives -- the thunk is a closure over every
+;; free variable of the body, allocated per entry, and every `binding` is a
+;; try/finally. The winder is the one dynamic-wind pushes, carrying IN, so the
+;; park filter still recognises a finally by its jolt-finally-in marker
+;; (fibers.ss), an escape still runs AFTER, and a resume still rewinds through
+;; IN. IN is not called on entry: a finally's is the marker, which does nothing.
+;; AFTER is the emitted cleanup thunk; the back end masks both edges around this
+;; form with the counted-lock depth, as it masked dynamic-wind's (emit-try).
+;; The push and the pop are procedures for the compile-time reason jolt-guard-body
+;; gives.
+(define (jolt-wind-enter! in after)
+  (sa-winders-set! (cons (sa-make-winder in after) (sa-winders))))
+(define (jolt-wind-leave! after)
+  (sa-winders-set! (cdr (sa-winders)))
+  (after))
+(define-syntax jolt-wind-inline
+  (syntax-rules ()
+    ((_ in body after-expr)
+     (let ((after after-expr))
+       (jolt-wind-enter! in after)
+       (let ((r body))
+         (jolt-wind-leave! after)
+         r)))))
+
+;; A record type's dispatch vector (protocols.ss find-protocol-method-desc) read
+;; at a protocol call site, open-coded (#1713). DESC is a record's own desc slot,
+;; so its ptable field (slot 3 of jrdesc, records.ss) is read unchecked, and the
+;; vector's own length bounds the read.
+(define-syntax jrdesc-vtable-ref
+  (syntax-rules ()
+    ((_ desc id0)
+     (let ((pt (sa-record-slot desc 3)) (id id0))
+       (and (vector? pt) (sa-ufx<? id (vector-length pt)) (sa-uvector-ref pt id))))))
+
+;; C is always a var cell (the emitter only spells this around a cell it bound
+;; from jolt-var), so its two slots are read unchecked: dyn-bound? is field 6
+;; and root field 2 of var-cell (define-record-type below). The checked
+;; accessors tested the cell's type on every call.
+(define-syntax jolt-var-fn
+  (syntax-rules ()
+    ((_ c0) (let ((c c0))
+              (if (or (sa-record-slot c 6) (eq? c star-ns-cell))
+                  (var-cell-deref-bound c)
+                  (sa-record-slot c 2))))))
+;; Guarded inlining (host-contract.ss hc-guarded-inline?, #1713). A def whose
+;; body a later caller may splice stamps its var with a token naming that
+;; compilation of the body: jolt-inline-mark! records cell -> (root . token).
+;; A caller's guard reads jolt-inline-root once, as it loads: the cell's root
+;; when the def that set it stamped the token the splice was taken from, else a
+;; value no var holds, so the guard always takes the call. A cached caller
+;; loaded after its callee was redefined at a REPL (same source, so the same
+;; cache entry) thus never runs the body the cache was compiled against.
+(define jolt-inline-marks (make-weak-eq-hashtable))
+(define jolt-inline-marks-mu (make-mutex))
+(define jolt-inline-no-root (string #\nul))
+(define (jolt-inline-mark! v token)
+  (jolt-with-mutex jolt-inline-marks-mu
+    (hashtable-set! jolt-inline-marks v (cons (var-cell-root v) token)))
+  v)
+(define (jolt-inline-root c token)
+  (let ((e (jolt-with-mutex jolt-inline-marks-mu (hashtable-ref jolt-inline-marks c #f)))
+        (r (var-cell-root c)))
+    (if (and e (eq? (car e) r) (string=? (cdr e) token))
+        r
+        jolt-inline-no-root)))
+;; The protocol PIC's receiver descriptor, open-coded (#1713): a record of the
+;; jrec family -- a deftype or defrecord instance, whose exact type is one of the
+;; per-arity children (records.ss define-jrec-family) or the zero-field base --
+;; answers its desc, the slot every child inherits first; anything else #f. As a
+;; procedure (jrec-pic-desc, records.ss) it was a call on every protocol call.
+;; record? against the family's base type open-codes on Chez 10 to a constant-
+;; time ancestry test, the same cost for every child: comparing the exact
+;; descriptor against the family's ten cost one compare per child passed, so a
+;; seven-field type paid seven (100M tests: 425 ms either way, against 440 for
+;; the first child and 690 for the seventh).
+(define-syntax jrec-pic-desc/i
+  (syntax-rules ()
+    ((_ x0)
+     (let ((x x0))
+       (if (record? x (record-type-descriptor jrec))
+           (sa-record-slot x 0)
+           #f)))))
+;; A deftype method's own field, read or written once its site has matched the
+;; receiver's descriptor (backend_scheme emit-deftype-slot-read): the descriptor
+;; fixes the field count, and so the exact child type and the slot, so the
+;; per-arity accessor's own type test is redundant. A redefinition installs a
+;; fresh descriptor (protocols.ss make-deftype-ctor), never a different layout
+;; under the same one. Field I sits after the base's four (desc ext hasheq meta);
+;; a type of more than eight keeps its fields in jrec*'s vector, the slot after.
+;; The test in front of an indexed vector read (backend_scheme.clj
+;; emit-vec-idx-read): V a vector and K an index into it. pvec? and pvec-cnt
+;; are a record predicate and accessor, each a call through its top-level
+;; binding from emitted code; open-coded here, the test is a few loads (#1713).
+;; cnt is pvec's first field (values.ss).
+(define-syntax pvec-in-range/i
+  (syntax-rules ()
+    ((_ v0 k0)
+     (let ((v v0) (k k0))
+       (and (record? v (record-type-descriptor pvec)) (fixnum? k) (fx>=? k 0)
+            (fx<? k (sa-record-slot v 0)))))))
+(define-syntax jrec-slot/u
+  (syntax-rules () ((_ o i) (sa-record-slot o (fx+ 4 i)))))
+(define-syntax jrec-slot-set!/u
+  (syntax-rules () ((_ o i v) (sa-record-slot-set! o (fx+ 4 i) v))))
+(define-syntax jrec*-slot/u
+  (syntax-rules () ((_ o i) (sa-uvector-ref (sa-record-slot o 4) i))))
+;; (= a b) at two arguments, open-coded on Chez (calls.clj native-op). Clojure's
+;; Util.equiv decides a pair of base scalars (nil, a number, a keyword, a
+;; symbol, a string, a char, a boolean) by kind: a char, a boolean or a keyword
+;; equals only itself, and nil on the left equals only nil, so once eq? has
+;; failed the answer is false without the call -- tools.reader compares a char
+;; it read against its terminator on every character. A string literal (what
+;; case on strings expands to) is a string? test and a string=?. Any other
+;; operand may be a collection whose own equiv Util.equiv asks whatever the
+;; other side is (#1769), so the pair goes to jolt=2. Two eq? flonums still
+;; compare by =, so NaN stays unequal to itself.
+(define-syntax jolt=2/i
+  (lambda (x)
+    (syntax-case x ()
+      ((_ a0 b0)
+       (let ((da (syntax->datum #'a0)) (db (syntax->datum #'b0)))
+         (cond
+           ;; a literal's length first: a case over strings rejects most of its
+           ;; candidates by length without a string=? call
+           ((string? db) (with-syntax ((n (string-length db)))
+                           #'(let ((a a0))
+                               (cond ((string? a) (and (fx=? (string-length a) n) (string=? a b0)))
+                                     ((eq-kind-settled? a) #f)
+                                     (else (jolt=2 a b0))))))
+           ((string? da) (with-syntax ((n (string-length da)))
+                           #'(let ((b b0))
+                               (cond ((string? b) (and (fx=? (string-length b) n) (string=? a0 b)))
+                                     ((eq-kind-settled? b) #f)
+                                     (else (jolt=2 a0 b))))))
+           ;; a literal nil: on the left it equals only nil (Util.equiv's
+           ;; k1 == null), and on the right only nil, a deftype or a reify can
+           ;; answer true (values.ss jolt=2)
+           ((eq? da 'jolt-nil) #'(eq? b0 jolt-nil))
+           ((eq? db 'jolt-nil) #'(let ((a a0))
+                                   (or (eq? a jolt-nil) (and (or (jrec? a) (jreify? a)) (jolt=2 a jolt-nil)))))
+           ((char? db) #'(let ((a a0))
+                           (if (or (char? a) (eq-kind-settled? a)) (eq? a b0) (jolt=2 a b0))))
+           ((char? da) #'(let ((b b0))
+                           (if (or (char? b) (eq-kind-settled? b)) (eq? a0 b) (jolt=2 a0 b))))
+           (else
+            #'(let* ((a a0) (b b0))
+                ;; identity settles it but for a NaN: a double's or a Float's
+                (cond ((eq? a b) (cond ((flonum? a) (fl= a b))
+                                       ((jfloat? a) (fl= (jfloat-fl a) (jfloat-fl a)))
+                                       (else #t)))
+                      ((eq? a jolt-nil) #f)
+                      ;; nil on the right: only a deftype or a reify can
+                      ;; answer true, by its own equality (values.ss jolt=2)
+                      ((eq? b jolt-nil) (and (or (jrec? a) (jreify? a)) (jolt=2 a b)))
+                      ;; a keyword is interned, so it too equals only itself
+                      ((or (char? a) (boolean? a) (keyword-t? a))
+                       (and (not (eq-kind-settled? b)) (jolt=2 a b)))
+                      (else (jolt=2 a b)))))))))))
+;; (str x) at one argument on Chez (backend_scheme emit-var-invoke): a string is
+;; itself and a StringBuilder its contents, the two a reader's token loop hands
+;; it; anything else is jolt-str, clojure.core/str's procedure. Through the var
+;; it cost ~50 ns against .toString's ~15. C is the var's cell, read at the
+;; site: while the var's fn (what jolt-var-fn reads) is jolt-str the answer is
+;; inline, and anything else it holds (with-redefs, a redefinition) is called
+;; with the argument instead (#1768). Without C (minting the seed) there is no
+;; var read. C is always a var cell (the emitter spells it only around one), so
+;; its slots are read unchecked, as jolt-var-fn reads them. One fn read and one
+;; eq? is the whole guard: 3.3 -> 4.0 ns on (str s), where a separate root and
+;; binding test then a second branch on the result measured 4.5.
+(define-syntax jolt-str1/i
+  (syntax-rules ()
+    ((_ e) (let ((v e)) (jolt-str1/i-body v)))
+    ((_ c0 e) (let* ((c c0)
+                     ;; what a call through the var reads (jolt-var-fn; str is
+                     ;; never *ns*), read ahead of the argument
+                     (f (if (sa-record-slot c 6) (var-cell-deref-bound c) (sa-record-slot c 2)))
+                     (v e))
+                (cond ((eq? f jolt-str) (jolt-str1/i-body v))
+                      ((procedure? f) (f v))
+                      (else (jolt-invoke f v)))))))
+(define-syntax jolt-str1/i-body
+  (syntax-rules ()
+    ((_ v) (cond ((string? v) v)
+                 ((sb-builder-jhost? v) (sb-str v))
+                 (else (jolt-str v))))))
+;; (nth coll i) and (nth coll i not-found) on Chez (calls.clj native-op): an
+;; in-range index into a vector or a string answers inline -- destructuring a
+;; pair is two of these, and tools.reader destructures every [line column] it
+;; reads -- and everything else (nil, a default taken, a seq, an array, an index
+;; out of range or not a fixnum) is jolt-nth, which owns the answer and the error.
+;; A not-found operand is evaluated with the other two, in order, whichever
+;; branch answers: nth is a call, and Clojure evaluates every argument of one,
+;; so its side effect or throw is never skipped by an in-range index (#1767).
+(define-syntax jolt-nth/i
+  (syntax-rules ()
+    ((_ c0 k0 d0)
+     (let* ((c c0) (k k0) (d d0))
+       (jolt-nth/i-body c k (jolt-nth c k d))))
+    ((_ c0 k0)
+     (let* ((c c0) (k k0))
+       (jolt-nth/i-body c k (jolt-nth c k))))))
+(define-syntax jolt-nth/i-body
+  (syntax-rules ()
+    ((_ c k fallback)
+     (cond ((and (pvec? c) (fixnum? k) (fx>=? k 0) (fx<? k (pvec-cnt c))) (pvec-nth-in-range c k))
+           ((and (string? c) (fixnum? k) (fx>=? k 0) (fx<? k (string-length c))) (string-ref c k))
+           (else fallback)))))
+;; (:k rec) on Chez (backend_scheme.clj emit-keyword-call): the hit of
+;; collections.ss's record cache, open-coded. Slot 1 of the site (jolt-kw-site)
+;; holds (desc . field-index) once jolt-kw-rec-get has found K as a defrecord's
+;; field; a receiver with that descriptor has that layout (a redefinition makes a
+;; fresh descriptor), so the field is one slot read. The procedure path was four
+;; calls deep, 19 ns against the JVM's 2.6 (#1713). Anything else -- a map, the
+;; first lookup, another type -- is jolt-kw-get-site as before; a map pays one
+;; pair? test for this.
+(define-syntax jolt-kw-get-site/i
+  (syntax-rules ()
+    ((_ m0 k site0 d ...)
+     (let* ((m m0) (site site0) (c (vector-ref site 1)))
+       (if (and (pair? c) (eq? (car c) (jrec-pic-desc/i m)))
+           (if (record? m (record-type-descriptor jrec*))
+               (jrec*-slot/u m (cdr c))
+               (jrec-slot/u m (cdr c)))
+           (jolt-kw-get-site m k site d ...))))))
+;; (instance? T x) on Chez (backend_scheme.clj emit-site-cache-invoke): the hit of
+;; records-interop.ss's jolt-instance-site, open-coded. The site's state is
+;; #(t ts tname kind answer epoch); a hit is the same T, a receiver of the cached
+;; kind and the current epoch. The procedure computed the receiver's kind through
+;; instance-kind-key, whose cond reaches a string only after jrec?, jreify? and
+;; class-fast-name's chain (21 ns of a 29 ns check; a deftype's took 16 ns, the
+;; JVM's instanceof ~0). Here the kind of a record and of the scalar types is read
+;; inline: a record's is its descriptor, a scalar's the one class-name string
+;; instance-kind-key answers for every value of the type, captured below. A kind
+;; this cond does not know is #f, never a cached kind, so it takes the procedure.
+(define instance-fast-key
+  (let ((stable (lambda (a b) (let ((ka (instance-kind-key a))) (and ka (eq? ka (instance-kind-key b)) ka)))))
+    (vector (stable "" (string #\a)) (stable 1 -7) (stable 1.5 -2.0) (stable #\a #\b)
+            (stable #t #f) (stable (keyword #f "a") (keyword "x" "b")) (instance-kind-key jolt-nil))))
+(define-syntax instance-fast-kind
+  (syntax-rules ()
+    ((_ x0)
+     (let ((x x0))
+       (cond ((jrec-pic-desc/i x))
+             ((string? x) (vector-ref instance-fast-key 0))
+             ((fixnum? x) (vector-ref instance-fast-key 1))
+             ((flonum? x) (vector-ref instance-fast-key 2))
+             ((char? x) (vector-ref instance-fast-key 3))
+             ((boolean? x) (vector-ref instance-fast-key 4))
+             ((keyword-t? x) (vector-ref instance-fast-key 5))
+             ((eq? x jolt-nil) (vector-ref instance-fast-key 6))
+             (else #f))))))
+(define-syntax jolt-instance-site/i
+  (syntax-rules ()
+    ((_ site0 t0 val0)
+     (let* ((site site0) (t t0) (val val0) (st (vector-ref site 0)))
+       (if (and st (eq? t (vector-ref st 0))
+                (let ((k (instance-fast-kind val))) (and k (eq? k (vector-ref st 3))))
+                (fx=? (vector-ref st 5)
+                      (fx+ instance-arms-epoch (fx+ jch-graph-epoch jolt-proto-epoch))))
+           (vector-ref st 4)
+           (jolt-instance-site site t val))))))
+;; (.indexOf "literal" x) on Chez (interop.clj string-direct-forms): a literal of
+;; up to 64 characters becomes a case over them, each to its first index, for a
+;; char or an ASCII code point -- rewrite-clj tests every character it reads for a
+;; token boundary as (.indexOf "\":;'@^`~()[]{}\\" (int c)), and the scan of the
+;; literal was most of that. Anything else is str-index-of-any, which owns the
+;; rest (a string needle, a wide code point, a non-literal target).
+(define-syntax str-index-of-any/i
+  (lambda (x)
+    (syntax-case x ()
+      ((k t0 a0)
+       (let ((dt (syntax->datum #'t0)))
+         (if (and (string? dt) (fx<=? (string-length dt) 64))
+             ;; the case is built as data, a lambda the template applies (cp0
+             ;; inlines it): one clause per distinct character, its first index
+             (with-syntax
+               ((dispatch
+                 (datum->syntax #'k
+                   (list 'lambda '(ch)
+                         (append (list 'case 'ch)
+                                 (let loop ((cs (string->list dt)) (i 0) (seen '()) (acc '()))
+                                   (cond ((null? cs) (reverse acc))
+                                         ((memv (car cs) seen) (loop (cdr cs) (fx+ i 1) seen acc))
+                                         (else (loop (cdr cs) (fx+ i 1) (cons (car cs) seen)
+                                                     (cons (list (list (car cs)) i) acc)))))
+                                 (list (list 'else -1)))))))
+               #'(let* ((a a0)
+                        (c (cond ((char? a) a)
+                                 ((and (fixnum? a) (fx>=? a 0) (fx<=? a 127)) (integer->char a))
+                                 (else #f))))
+                   (if c (dispatch c) (str-index-of-any t0 a 0))))
+             #'(str-index-of-any t0 a0 0)))))))
+;; A protocol fn's cache key for a host value whose TYPE alone decides the impl
+;; protocol-resolve finds (calls.clj emit-pic-call): a string, a fixnum, a
+;; flonum, a char, nil, a boolean, a keyword -- values that carry no metadata, so
+;; an :extend-via-metadata protocol cannot answer differently for two of them.
+;; One symbol per type, never eq? to a record descriptor; #f for anything else,
+;; which resolves without caching as before.
+(define-syntax jolt-pic-host-key/i
+  (syntax-rules ()
+    ((_ x0) (let ((x x0))
+              (cond ((string? x) 'jolt-pic-key-string)
+                    ((fixnum? x) 'jolt-pic-key-fixnum)
+                    ((char? x) 'jolt-pic-key-char)
+                    ((flonum? x) 'jolt-pic-key-flonum)
+                    ((eq? x jolt-nil) 'jolt-pic-key-nil)
+                    ((boolean? x) 'jolt-pic-key-boolean)
+                    ((keyword-t? x) 'jolt-pic-key-keyword)
+                    (else #f))))))
+;; (zero? x), (pos? x), (neg? x) on Chez: a fixnum answers inline, anything else
+;; takes the procedure, which owns the coercion and the error (calls.clj
+;; native-op). As calls they cost ~10 ns for a fixnum compare.
+(define-syntax jolt-zero?/i
+  (syntax-rules () ((_ e) (let ((x e)) (if (fixnum? x) (fx=? x 0) (jolt-zero? x))))))
+(define-syntax jolt-pos?/i
+  (syntax-rules () ((_ e) (let ((x e)) (if (fixnum? x) (fx>? x 0) (jolt-pos? x))))))
+(define-syntax jolt-neg?/i
+  (syntax-rules () ((_ e) (let ((x e)) (if (fixnum? x) (fx<? x 0) (jolt-neg? x))))))
+;; java.lang.Character's predicates on a char, open-coded for ASCII on Chez
+;; (calls.clj emit-host-static-call); any other argument -- a wider char, an int
+;; code point -- takes the static site, FALLBACK, as before. Java's rules in
+;; ASCII: whitespace is 9-13, 28-31 (the separators) and space; digits 0-9;
+;; letters A-Z a-z.
+(define-syntax jolt-char-pred/i
+  (lambda (x)
+    (syntax-case x ()
+      ((_ kind c0 fallback)
+       (with-syntax ((test
+                      (case (syntax->datum #'kind)
+                        ((whitespace) #'(let ((n (char->integer c)))
+                                          (or (fx=? n 32) (and (fx>=? n 9) (fx<=? n 13))
+                                              (and (fx>=? n 28) (fx<=? n 31)))))
+                        ((digit) #'(and (char>=? c #\0) (char<=? c #\9)))
+                        ((upper) #'(and (char>=? c #\A) (char<=? c #\Z)))
+                        ((lower) #'(and (char>=? c #\a) (char<=? c #\z)))
+                        ((letter) #'(or (and (char>=? c #\a) (char<=? c #\z))
+                                        (and (char>=? c #\A) (char<=? c #\Z))))
+                        ((letter-or-digit) #'(or (and (char>=? c #\a) (char<=? c #\z))
+                                                 (and (char>=? c #\A) (char<=? c #\Z))
+                                                 (and (char>=? c #\0) (char<=? c #\9))))
+                        (else (syntax-error #'kind "unknown char predicate")))))
+         #'(let ((c c0))
+             (if (and (char? c) (char<? c #\x80)) test (fallback c))))))))
+;; (.-f x) on an unproven receiver (backend interop.clj): the site's hit open-
+;; coded -- the receiver's descriptor against the one the site cached, then the
+;; cached place read unchecked (records-dispatch.ss jrec-field-site-ref, which
+;; fills the site and answers every other receiver). As a call, each read paid
+;; the call and the checked per-arity accessor behind it: ~13 ns for a load.
+(define-syntax jrec-field-site-ref/i
+  (syntax-rules ()
+    ((_ site0 o0 name)
+     (let ((site site0) (o o0))
+       (let ((c (unbox site)))
+         (if (and c (record? o (record-type-descriptor jrec))
+                  (eq? (sa-record-slot o 0) (car c))
+                  (not (fx=? (caar method-dispatch-arms) arm-priority-user-override)))
+             (let ((p (cdr c)))
+               (if (fx<? p 0)
+                   (sa-uvector-ref (sa-record-slot o 4) (fx- -1 p))
+                   (sa-record-slot o p)))
+             (jrec-field-site-ref site o name)))))))
+(define-syntax jrec*-slot-set!/u
+  (syntax-rules () ((_ o i v) (sa-uvector-set! (sa-record-slot o 4) i v))))
+;; The unchecked loads above name record slots by number, so a field added to
+;; var-cell or to the jrec base, or a reordered one, would read the wrong slot
+;; with no type test to catch it. Check every number against a built instance
+;; as the runtime loads, so a layout change fails the boot naming this place.
+(let ((c (make-var-cell 'ns 'name 'root #f #f #f 'dyn #f))
+      (r (make-jrec2 'desc 'ext 0 'meta 'f0 'f1))
+      (s (make-jrec* 'desc 'ext 0 'meta (vector 'v0)))
+      (fail (lambda (what)
+              (error 'rt.ss (string-append "record layout moved under an unchecked slot load: " what
+                                           " (update the slot numbers in jolt-var-fn / jrec-*/u)")))))
+  (unless (and (eq? (sa-record-slot c 2) 'root) (eq? (sa-record-slot c 6) 'dyn))
+    (fail "var-cell root / dyn-bound?"))
+  (unless (and (eq? (jrec-pic-desc/i r) 'desc) (eq? (jrec-slot/u r 0) 'f0) (eq? (jrec-slot/u r 1) 'f1))
+    (fail "jrec desc / inline fields"))
+  (unless (eq? (jrec*-slot/u s 0) 'v0)
+    (fail "jrec* value vector")))
+
 ;; java.lang.String method interop: jolt-string-method, the
 ;; portable String/CharSequence surface record-method-dispatch falls through to on
 ;; a string target. After regex.ss (jolt-re-pattern/regex-t-irx) + records.ss
@@ -3252,7 +3749,6 @@
 ;; and would re-class a comparator the boot already hands out.
 (register-enum-class! "java.util.Comparators$NaturalOrderComparator"
   (list (cons "INSTANCE" tm-natural-order)))
-(lazy-load "host/chez/java/enum-colls.ss")           ; EnumSet / EnumMap over the enum model
 (load "host/chez/java/linked-hash.ss")          ; LinkedHashMap / LinkedHashSet
 (load "host/chez/java/host-static-classes.ss")  ; instantiable host object classes
 ;; jolt.host/class-names and all-classes (#1663): reads the tables loaded above.
@@ -3274,6 +3770,9 @@
 ;; extensions sit over every prior shim.
 (load "host/chez/java/io.ss")
 (load "host/chez/java/nio-file.ss")             ; java.nio.file: Path / Paths / PathMatcher
+;; After nio-file.ss: it adds PosixFilePermissions/fromString, which answers an
+;; EnumSet, to the class nio-file.ss registers.
+(lazy-load "host/chez/java/enum-colls.ss")           ; EnumSet / EnumMap over the enum model
 (load "host/chez/terminal.ss")                  ; the console under the REPL line editor
 
 ;; #inst values + the java.util/java.text date layer: jinst (RFC3339 ms), Date,
@@ -3479,6 +3978,9 @@
 ;; and reads proc-name-tbl to write a fn as its var's name.
 (load "host/chez/java/image-codecs.ss")         ; how the host's values travel in an image
 (load "host/chez/state-image.ss")
+
+;; Guarded path edits emitted by the Chez backend.
+(load "host/chez/assoc-in.ss")
 
 ;; The stall watch (see "a stalled collection says so" above): after every
 ;; load, so a rendezvous that times out finds the reporter's dependencies.

@@ -215,6 +215,7 @@
 (define jolt-vreg-site 2)        ; ('ns/fn' . line) of the innermost live call site
 (define jolt-vreg-catch-line 3)  ; the site at the throw a catch clause is handling
 (define jolt-vreg-print-readably 4)  ; the print family's *print-readably* override; 0 = unset
+(define jolt-vreg-print-dup 15)  ; #t while this thread prints under *print-dup* (java/io-streams.ss)
 (define jolt-vreg-outer-site 12) ; the pair a non-tail call moved out of jolt-vreg-site
 ;; Effective *print-readably* for the readable renderer's string/char cases. The
 ;; print family stashes its override in the slot above — a virtual-register write
@@ -830,12 +831,15 @@
 ;; limited-string walkers never truncate.
 (define plevel-cell #f)
 (define plength-cell #f)
+;; Neither limits a print under *print-dup*, which has to read back whole.
 (define (jolt-print-level)
   (unless plevel-cell (set! plevel-cell (jolt-var "clojure.core" "*print-level*")))
-  (let ((v (jolt-var-get plevel-cell))) (and (number? v) v)))
+  (let ((v (jolt-var-get plevel-cell)))
+    (and (number? v) (not (eq? (virtual-register jolt-vreg-print-dup) #t)) v)))
 (define (jolt-print-length)
   (unless plength-cell (set! plength-cell (jolt-var "clojure.core" "*print-length*")))
-  (let ((v (jolt-var-get plength-cell))) (and (number? v) v)))
+  (let ((v (jolt-var-get plength-cell)))
+    (and (number? v) (not (eq? (virtual-register jolt-vreg-print-dup) #t)) v)))
 (define jolt-print-depth (make-thread-parameter 0))
 ;; A collection at depth >= *print-level* renders as "#". The top-level collection
 ;; is depth 0, so *print-level* 0 collapses any collection, 1 keeps the outermost.
@@ -1277,10 +1281,17 @@
     ;; spellings Gambit does not bind, so (.indexOf s x) died on an unbound
     ;; global. A char or a code point needle (String.indexOf(int)) is searched
     ;; as its one-char string, like natives-str.ss.
+    ;; A code no string holds (a lone surrogate, a negative int, one past
+    ;; #x10FFFF) answers -1, as on the JVM; integer->char would raise
+    ;; (natives-str.ss str-unmatchable-code?, the Chez twin).
     ((string=? method "indexOf")
-     (str-index-of s (str-needle (arg 0)) (if (fx>? (length rest) 1) (arg-idx 1) 0)))
+     (if (str-unmatchable-code? (arg 0))
+         (begin (string-length s) -1)
+         (str-index-of s (str-needle (arg 0)) (if (fx>? (length rest) 1) (arg-idx 1) 0))))
     ((string=? method "lastIndexOf")
-     (str-last-index-of s (str-needle (arg 0))))
+     (if (str-unmatchable-code? (arg 0))
+         -1
+         (str-last-index-of s (str-needle (arg 0)))))
     ((string=? method "hashCode") (java-string-hash s))   ; natives-misc.ss, shared
     ((string=? method "startsWith") (string-prefix? (jolt-need-str (arg 0)) s))
     ((string=? method "endsWith") (string-suffix? (jolt-need-str (arg 0)) s))
@@ -1321,6 +1332,11 @@
       (cond ((fx<? i 0) found)
             ((jolt-char-by-char-match? s i needle nlen) i)
             (else (loop (fx- i 1) found))))))
+;; Gambit's integer->char refuses a surrogate and anything past #x10FFFF, like
+;; Chez's, so String.indexOf(int) of such a code answers -1 before str-needle.
+(define (str-unmatchable-code? x)
+  (and (exact-integer? x)
+       (not (and (<= 0 x #x10FFFF) (not (<= #xD800 x #xDFFF))))))
 (define (str-needle x)
   (cond ((char? x) (string x))
         ((number? x) (string (integer->char (exact (truncate x)))))
@@ -1517,6 +1533,9 @@
 (define (image-register-fn-form! . _) #f)
 ;; ...and the maker a site attaches to its registration on first call
 (define (image-fn-form-maker! . _) #f)
+;; ...and a literal's class with no form to register (no code names to key it
+;; by on this target, so fns keep the AFunction stand-in)
+(define (image-register-fn-class! . _) #f)
 ;; the source text a registration carries is (image-fn-form-src "..."): a
 ;; bytevector constant on chez, an inert argument here
 (define (image-fn-form-src s) s)

@@ -228,10 +228,13 @@
 
 (defn- evaluate-frame?
   "A frame line of `evaluate` itself. Its own capture can name it
-  jolt.nrepl/evaluate or render it bare, as `evaluate`."
+  jolt.nrepl/evaluate or render it bare, as `evaluate`, and a fn literal inside
+  it (the body that runs the eval under its try) by its label,
+  jfn$jolt.nrepl/evaluate$<n>."
   [line]
   (let [t (str/trim line)]
     (or (str/starts-with? t "jolt.nrepl/evaluate")
+        (str/starts-with? t "jfn$jolt.nrepl/evaluate$")
         (= "evaluate" (first (str/split t #"\s"))))))
 
 (defn- cut-at-eval
@@ -302,7 +305,8 @@
   would name, as it skips the core's frames."
   [line]
   (when-let [{:keys [symbol]} (frame-location line)]
-    (not (re-find #"^(clojure|jolt)\." (namespace symbol)))))
+    ;; an anonymous fn literal's frame is labelled jfn$<ns>/<def>$<n>
+    (not (re-find #"^(jfn\$)?(clojure|jolt)\." (namespace symbol)))))
 
 (defn- simple-class-name [c]
   (when c (last (str/split (name c) #"\."))))
@@ -665,10 +669,21 @@
     (binding [*ns* (create-ns 'user)] (refer-clojure)))
   "user")
 
+(defn- req-text
+  "The text of request value `k`. Values arrive as latin1 wire strings, one char
+  per byte; this decodes one as UTF-8 unless jolt-lang/nrepl's wrap-utf8 already
+  decoded the whole request (it marks it :nrepl.middleware.utf8/decoded), so a
+  value is decoded exactly once with or without that middleware."
+  [request k]
+  (let [v (get request k)]
+    (if (and (string? v) (not (get request :nrepl.middleware.utf8/decoded)))
+      (wire-> v)
+      v)))
+
 (defn- explicit-ns
   "The ns the request names, nil when it names none. A blank one counts as none."
   [request]
-  (let [n (get request "ns")]
+  (let [n (req-text request "ns")]
     (when (and (string? n) (not (str/blank? n))) n)))
 
 (defn- session-ns-name
@@ -697,9 +712,9 @@
                                                               @extra-ops)
                                                         (repeat {}))})
       (or (= op "completions") (= op "complete"))
-      (respond request {"completions" (completions (or (get request "prefix")
-                                                       (get request "symbol"))
-                                                   (get request "ns"))
+      (respond request {"completions" (completions (or (req-text request "prefix")
+                                                       (req-text request "symbol"))
+                                                   (req-text request "ns"))
                         "status" ["done"]})
       ;; an ns the request names that does not exist: no eval, as JVM nREPL
       ;; answers it, rather than running the code wherever *ns* happens to be

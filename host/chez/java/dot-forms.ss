@@ -49,7 +49,7 @@
     ((string=? name "getCause")  (list jolt-nil))
     ((string=? name "getNextException") (list jolt-nil))
     ((string=? name "getStackTrace") (list (jolt-ref-array '() "java.lang.StackTraceElement")))
-    ((string=? name "toString")  (list (jolt-str-render-one obj)))
+    ((string=? name "toString")  (list (jolt-str-one obj)))
     ((string=? name "hashCode")  (list (jolt-hash obj)))
     ((string=? name "equals")    (list (if (jolt= obj (car args)) #t #f)))
     (else #f)))
@@ -107,7 +107,7 @@
     ;; order: the tree walk seeked to k in O(log n), as PersistentTreeMap.seqFrom.
     ((string=? method "seqFrom")
      (let ((cmp (jolt-ref-get obj sorted-cmp-kw)))
-       (sc-tree-seq-from (jolt-ref-get obj kw-tree) (jolt-truthy? (cadr rest))
+       (sc-tree-seq-from (scoll-tree obj) (jolt-truthy? (cadr rest))
                          (if (htable-sorted-map? obj) 0 1)
                          (if (jolt-nil? cmp) jolt-compare cmp) (car rest))))
     (else (dispatch-miss obj method rest))))
@@ -125,7 +125,10 @@
 (define (dotform-receiver? obj)
   (or (jrec? obj) (jolt-multifn? obj) (procedure? obj) (jolt-transient? obj)
       (dot-coll? obj) (htable-sorted? obj) (jolt-map? obj) (jolt-ex-info-record? obj)))
-(register-method-arm! arm-priority-dotform
+;; Named so a method call site can tell when the walk reached it (host-static.ss
+;; jrec-site-miss): for a deftype or record receiver this arm answers with the
+;; type's own declared method, which the site then keeps.
+(define dotform-method-arm
   (lambda (obj method-name rest-args)
     (let* ((dashed? (and (> (string-length method-name) 0)
                          (char=? (string-ref method-name 0) #\-)))
@@ -266,3 +269,4 @@
            ((dot-object-method obj mname rest) => car)
            (else 'pass)))
         (else 'pass)))))))
+(register-method-arm! arm-priority-dotform dotform-method-arm)

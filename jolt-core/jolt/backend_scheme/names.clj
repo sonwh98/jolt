@@ -71,7 +71,7 @@
 ;; such locals are prefixed. Matches the spec: special-form heads are not
 ;; shadowable, but a value local may legally be named `if`.
 (def ^:private scheme-reserved
-  #{"if" "begin" "lambda" "let" "let*" "letrec" "letrec*" "quote" "quasiquote"
+  #{"if" "begin" "lambda" "let" "let*" "letrec" "letrec*" "let-values" "quote" "quasiquote"
     "unquote" "set!" "define" "define-syntax" "cond" "case" "when" "unless"
     "and" "or" "do" "else" "guard" "parameterize" "delay" "values"})
 
@@ -97,8 +97,16 @@
 (def ^:private rt-emitted-names
   (let [from-registry op-registry/registry-emitted-names
         helpers #{"jolt-nil" "jolt-invoke" "jolt-invoke0" "jolt-invoke1"
+                  "jolt-loop-map-update?" "jolt-loop-map-memo" "jolt-loop-map-value" "jolt-loop-map-save!"
+                  "jolt-loop-map-standard-seq?"
+                  ;; the fused assoc-in and reduce-kv lowerings (fused.clj);
+                  ;; into/filter/map's heads are listed with the pvec helpers
+                  "jolt-assoc-in-original" "jolt-assoc-in-map-edit" "jolt-assoc-in-leaf-edit"
+                  "jolt-assoc-in-apply"
+                  "jolt-reduce-kv-builder-source?" "jolt-reduce-kv-build" "jolt-reduce-kv-collect"
                   "jolt-invoke2" "jolt-invoke3" "jolt-invoke4"
                   "jolt-invoke-t0" "jolt-invoke-t1" "jolt-invoke-t2" "jolt-invoke-t3" "jolt-invoke-t4"
+                  "jolt-var-fn" "jolt-site-kept" "jolt-guard-body" "jolt-caught?" "jolt-caught-val" "call/1cc" "jolt-wind-inline"
                   "var-deref" "list->cseq" "cseq->list"
                   "jolt-rest-seq" "jolt-register-variadic!"
                   "make-jrec" "jrec-field-at" "jrec-field-set!"
@@ -128,6 +136,9 @@
                   "pair?" "box?" "virtual-register" "set-virtual-register!"
                   "fxand" "fxior" "fxxor" "fxnot"
                   "jolt-register-source!" "jolt-proto-epoch"
+                  ;; guarded inlining (#1713): the def's stamp and the guard's
+                  ;; load-time root read
+                  "jolt-inline-mark!" "jolt-inline-root"
                   ;; --- bare heads emitted at sites the registry doesn't cover ---
                   ;; INVARIANT: any new bare Scheme head an emit* clause outputs
                   ;; (a head a user local could shadow) MUST be added here. Literal
@@ -146,7 +157,7 @@
                   "host-new" "host-static-call" "host-static-ref"
                   ;; per-site caches: the static member site and the instance?
                   ;; site, each with the constructor its hoisted cell calls
-                  "jolt-once-tag" "jolt-once-clear!" "host-static-ref-site" "host-static-proc-site" "host-static-site-make"
+                  "jolt-once-tag" "jolt-once-clear!" "host-static-ref-site" "host-static-proc-site" "host-static-proc-site/i" "host-static-site-make"
                   "jolt-instance-site" "jolt-instance-site-make"
                   "jolt-class-for-site" "jolt-class-for-site-make"
                   ;; record/reify protocol-method dispatch (:host-call fallback
@@ -165,7 +176,7 @@
                   "sb-append!" "sb-str" "sb-length" "sb-piece" "sb-char-at" "->num"
                   "sb-append*!" "sb-str*" "sb-length*" "sb-char-at*"
                   ;; cell-cached var deref (the whole-program var-cache? path).
-                  "var-cell-deref"
+                  "var-cell-deref" "var-cell-root"
                   ;; devirt cached-desc lookup (emit-invoke ctor inlining).
                   "hashtable-ref"
                   ;; top-level def / forward-declare / ns-value splice
@@ -207,9 +218,13 @@
                   ;; runtime helpers emitted bare at boxed-float, record-field,
                   ;; PIC, ffi, def, and image sites.
                   "make-jfloat" "jfloat?" "jfloat-fl" "jfloat-unbox" "jnum->exact"
-                  "jrec-field-site-make" "jrec-field-site-ref" "jrec-own-field" "jolt-set-own-field!" "jrec-pic-desc" "jrec?" "jrec-desc"
-                  "jrec-own-slot-miss" "jrec-own-slot-set-miss!" "jrec*-vals" "unbox"
+                  "jrec-field-site-make" "jrec-field-site-ref" "jrec-field-site-ref/i" "jolt=2/i" "jolt-char-pred/i" "jolt-zero?/i" "jolt-pos?/i" "jolt-neg?/i" "jolt-str1/i" "jolt-nth/i" "jolt-kw-get-site/i" "jolt-instance-site/i" "str-index-of-any/i" "jolt-pic-host-key/i" "host-new-site/i" "host-new-site-make" "jrec-own-field" "jolt-set-own-field!" "jrec-pic-desc" "jrec-pic-desc/i" "jrdesc-vtable-ref" "jrec-slot/u" "jrec-slot-set!/u" "jrec*-slot/u" "jrec*-slot-set!/u" "intern-pm-key" "protocol-direct-impl" "protocol-direct-impl/site" "protocol-fn-of" "jrec?" "jrec-desc"
+                  "jrec-own-slot-miss" "jrec-own-slot-set-miss!" "jrec*-vals" "unbox" "pvec-in-range/i" "jrec-self-site-fill!" "jrec-field"
+                  "jolt-atom-new" "jolt-atom-val" "jolt-atom-cas!"
                   "pvec?" "pvec-cnt" "pvec-nth-in-range" "fx<?"
+                  ;; The guarded into/filter/map lowering keeps these runtime
+                  ;; entries visible even when a user local has the same name.
+                  "pvec-ent" "jolt-vector-filter-map-comp" "jolt-vector-filter-map" "td-filter" "td-map"
                   "jrec1?" "jrec2?" "jrec3?" "jrec4?" "jrec5?" "jrec6?" "jrec7?" "jrec8?"
                   "keyword-t?" "mark-macro!" "set-var-meta!" "throw-jvm"
                   "def-var-linked!" "amap-slots->pmap"
@@ -225,7 +240,21 @@
                   "jrec6-f0" "jrec6-f0-set!" "jrec6-f1" "jrec6-f1-set!" "jrec6-f2" "jrec6-f2-set!" "jrec6-f3" "jrec6-f3-set!" "jrec6-f4" "jrec6-f4-set!" "jrec6-f5" "jrec6-f5-set!"
                   "jrec7-f0" "jrec7-f0-set!" "jrec7-f1" "jrec7-f1-set!" "jrec7-f2" "jrec7-f2-set!" "jrec7-f3" "jrec7-f3-set!" "jrec7-f4" "jrec7-f4-set!" "jrec7-f5" "jrec7-f5-set!" "jrec7-f6" "jrec7-f6-set!"
                   "jrec8-f0" "jrec8-f0-set!" "jrec8-f1" "jrec8-f1-set!" "jrec8-f2" "jrec8-f2-set!" "jrec8-f3" "jrec8-f3-set!" "jrec8-f4" "jrec8-f4-set!" "jrec8-f5" "jrec8-f5-set!" "jrec8-f6" "jrec8-f6-set!" "jrec8-f7" "jrec8-f7-set!"
-                  "image-fn-form-maker!" "image-fn-form-src" "image-register-fn-form!"}]
+                  "image-fn-form-maker!" "image-fn-form-src" "image-register-fn-form!" "image-register-fn-class!"
+                  ;; native region call sites (emit-native-region): the arg
+                  ;; checks, the entry lookup and registry, the out buffer and
+                  ;; the owned-array result
+                  "jolt-native-arg-doubles" "jolt-native-arg-long" "jolt-native-arg-double"
+                  "jolt-native-arg-bool" "jolt-native-arg-longs" "jolt-native-arg-bytes"
+                  "jolt-native-wrap-doubles" "jolt-native-wrap-longs"
+                  ;; an owned result's wrap failing with interrupts off re-raises
+                  "raise"
+                  "jolt-native-entry" "jolt-native-register!" "jolt-native-unavailable" "make-flvector"
+                  ;; a safe region's call: locks around a collect-safe call
+                  "disable-interrupts" "enable-interrupts" "sa-lock-object" "sa-unlock-object"
+                  ;; the call reads its status inside the no-interrupt window and
+                  ;; hands the three values out
+                  "let-values"}]
     (into from-registry helpers)))
 
 ;; A munged name both Scheme readers would take for a NUMBER rather than an

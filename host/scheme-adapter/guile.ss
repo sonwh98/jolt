@@ -206,11 +206,12 @@
 ;; tier: capability-unchecked
 ;; ---------------------------------------------------------------------------
 ;;   sa-ufx+ sa-ufx- sa-ufx<? sa-ufx>=? sa-ufx=?  UNIMPLEMENTED  Guile: the
+;;   sa-ufxand sa-ufxxor sa-ufx* sa-ufxior sa-ufxsra sa-ufxsll
 ;;                                        checked (rnrs arithmetic fixnums) ops are
 ;;                                        the permitted degradation; a tuned port may
 ;;                                        expand to the unchecked variants.
 ;;   sa-uvector-ref sa-uvector-set!       UNIMPLEMENTED  Guile: vector-ref /
-;;   sa-ustring-ref                       vector-set! / string-ref (degradation), or the
+;;   sa-ustring-ref sa-ustring-set!       vector-set! / string-ref / string-set! (degradation), or the
 ;;                                        unchecked accessors when the port is tuned.
 ;;   sa-uflvector-ref sa-uflvector-set!   UNIMPLEMENTED  Guile: f64vector-ref /
 ;;                                        f64vector-set! (SRFI 4) as the degradation.
@@ -234,7 +235,9 @@
 ;;   sa-flonum->bits        UNIMPLEMENTED  Guile: bytevector-ieee-double-set! + bytevector-u64-ref.
 ;;   sa-bits->flonum        UNIMPLEMENTED  Guile: bytevector-u64-set! + bytevector-ieee-double-ref.
 ;;   sa-flonum-hi32         UNIMPLEMENTED  Guile: as sa-flonum->bits, the upper u32.
+;;   sa-flonum-lo32         UNIMPLEMENTED  Guile: as sa-flonum->bits, the lower u32.
 ;;   sa-hi32->flonum        UNIMPLEMENTED  Guile: as sa-bits->flonum over a zero lower u32.
+;;   sa-bignum-s64?         UNIMPLEMENTED  Guile: (<= -2^63 x (- 2^63 1)).
 ;;   gensym                 UNIMPLEMENTED  Guile: (gensym) native.
 ;;   format                 UNIMPLEMENTED  Guile: SRFI-28 (format #f ...) — ~a ~s ~d subset;
 ;;                                        (ice-9 format) is the full superset.

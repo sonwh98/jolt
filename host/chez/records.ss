@@ -69,14 +69,15 @@
          (define (pred k) (sym "jrec~a?" k))
          (define (rtname k) (sym "jrec~a" k))
          (define (mkname k) (sym "make-jrec~a" k))
-         (define (ngname k) (sym "chez-jrec~av2" k))
+         (define (ngname k) (sym "chez-jrec~av3" k))
          (define (acc k i) (sym "jrec~a-f~a" k i))
          (define (mut k i) (sym "jrec~a-f~a-set!" k i))
          (define (fsyms k) (map fsym (range 0 (- k 1))))
-         ;; The base type jrec (desc ext hasheq) is defined in values.ss, ahead
-         ;; of the dispatchers that test jrec?; the children inherit its three
-         ;; fields. make-jrecN is the raw ctor, so every call passes the hasheq
-         ;; slot's 0 explicitly — a ctor protocol would keep the old arity but
+         ;; The base type jrec (desc ext hasheq meta) is defined in values.ss,
+         ;; ahead of the dispatchers that test jrec?; the children inherit its
+         ;; four fields. make-jrecN is the raw ctor, so every call passes the
+         ;; hasheq slot's 0 and the meta slot's jolt-nil explicitly — a ctor
+         ;; protocol would keep the old arity but
          ;; costs two closure hops per construction (measured 40 -> 64 ns). The
          ;; slot makes the family's layout image surface: every nongenerative
          ;; tag bumps with it, and state-image.ss reads older images through a
@@ -88,7 +89,7 @@
               (nongenerative ,(ngname k))))
          (define spill-def
            '(define-record-type (jrec* make-jrec* jrec*?)
-             (parent jrec) (fields (mutable vals)) (nongenerative chez-jrecsp-v2)))
+             (parent jrec) (fields (mutable vals)) (nongenerative chez-jrecsp-v3)))
          (define nfields-def
            `(define (jrec-nfields r)
               (cond ,@(map (lambda (k) `((,(pred k) r) ,k)) (range 1 mn))
@@ -137,18 +138,18 @@
           ;; verbatim (dissoc / meta-copy). Spill (>8 fields) copies the backing vals
           ;; vector. Replaces the old jrec-vals + jrec-vec-copy + make-jrec triple-copy.
           (define (fromexisting-clause k)
-            `((,k) (,(mkname k) desc ext 0
+            `((,k) (,(mkname k) desc ext 0 meta
                     ,@(map (lambda (j) `(if (eq? ov ,j) ov-val (,(acc k j) src)))
                            (range 0 (- k 1))))))
           (define fromexisting-def
             `(define (make-jrec-from-existing src ov ov-val ext)
-               (let ((desc (jrec-desc src)))
+               (let ((desc (jrec-desc src)) (meta (jrec-meta src)))
                  (case (jrdesc-nfields desc)
-                   ((0) (make-jrec0 desc ext 0))
+                   ((0) (make-jrec0 desc ext 0 meta))
                    ,@(map fromexisting-clause (range 1 mn))
                    (else (let ((nv (jrec-vec-copy (jrec*-vals src))))
                            (when ov (vector-set! nv ov ov-val))
-                           (make-jrec* desc ext 0 nv)))))))
+                           (make-jrec* desc ext 0 meta nv)))))))
           (datum->syntax tid
             `(begin ,@(map child-def (range 1 mn))
                     ,spill-def
@@ -162,8 +163,8 @@
 (define (make-jrec desc vals ext)
   (let ((n (vector-length vals)))
     (if (fx<= n 8)
-        (apply (vector-ref jrec-ctor-vec n) desc ext 0 (vector->list vals))
-        (make-jrec* desc ext 0 vals))))
+        (apply (vector-ref jrec-ctor-vec n) desc ext 0 jolt-nil (vector->list vals))
+        (make-jrec* desc ext 0 jolt-nil vals))))
 ;; One throwaway record, built here at load and reused, for the arm registries to
 ;; probe a candidate predicate against (reject-fast-type-claim!, values.ss).
 ;; Built ONCE rather than per registration: registrations also happen at runtime,
@@ -243,15 +244,17 @@
       (hashtable-set! t ctor tag)
       (set-box! chez-deftype-ctor-tag-box t))))
 ;; A deftype/defrecord name used as a multimethod DISPATCH VALUE evaluates to its
-;; ctor token (a procedure). Normalize it to the "ns.Name" class-name STRING that
-;; __type-tag / class / type yield for an INSTANCE (jolt models a class as its name
-;; string), so a JVM-style (defmethod print-method SomeType …) matches a (class x)
-;; / __type-tag dispatch. Any non-deftype dispatch value passes through unchanged.
-;; Called from multimethods.ss (forward-referenced; records.ss loads after it but
-;; before any user defmethod runs).
+;; ctor token (a procedure). A table files it under the type's Class, as the JVM
+;; does: the class is = to the token with the same hash, so (get (methods f)
+;; SomeType) finds it, and it stays apart from a string dispatch value spelled
+;; like the class name. A (class x) or __type-tag dispatch value reaches it as an
+;; exact key or through isa?, which takes the tag string for its class. Any
+;; non-deftype dispatch value passes through unchanged. Called from
+;; multimethods.ss (forward-referenced; records.ss loads after it but before any
+;; user defmethod runs; jolt-class-for is the java layer's, loaded by then too).
 (define (mm-dispatch-val-canon dval)
-  (or (and (procedure? dval) (deftype-ctor-tag dval))
-      dval))
+  (let ((tag (and (procedure? dval) (deftype-ctor-tag dval))))
+    (if tag (jolt-class-for tag) dval)))
 (define chez-simple-name-tag (make-hashtable string-hash string=?))
 ;; simple deftype/defrecord name -> its "ns.Name" tag, or #f. Used by the analyzer
 ;; (host-contract.ss) to resolve a bare class name to its class-name string.
@@ -264,6 +267,54 @@
 ;; mirrors an impl into desc's ptable through this index so protocol-resolve's
 ;; record branch can resolve by descriptor identity.
 (define chez-tag-desc (make-hashtable string-hash string=?))
+;; ---- retired descriptors: a redefined type's old class ------------------------
+;; Re-evaluating a deftype/defrecord makes a NEW class on the JVM. Instances built
+;; before keep the old class: they are not instance? of the new one, their class is
+;; not = to it, a record of the old class is not = to one of the new, and protocol
+;; dispatch on them answers what the OLD class implemented -- its own inline
+;; methods and the extend-type impls filed against it -- never what is extended
+;; onto the new class afterwards.
+;;
+;; jolt keys a type's impls by its tag string, which the new definition takes over.
+;; So a redefinition RETIRES the old descriptor: its impls move from the tag to a
+;; registry tag of its own (TAG$jolt-retired$N) and this table maps the old
+;; descriptor to it. Everything that asks the registry about an instance asks it
+;; under jrec-rtag; what presents the type (its name, its print form, its hash)
+;; still reads the real tag.
+;;
+;; Copy-on-write, like chez-deftype-ctor-tag-box: read on dispatch paths, written
+;; only by a redefinition. #f until the first one, so a program that never
+;; redefines a type pays one unbox per question.
+(define retired-tag-marker "$jolt-retired$")
+(define retired-desc-box (box #f))
+(define retired-tag-next 0)
+(define (jrdesc-rtag d)
+  (let ((t (unbox retired-desc-box)))
+    (or (and t (hashtable-ref t d #f)) (jrdesc-tag d))))
+(define (jrdesc-retired? d)
+  (let ((t (unbox retired-desc-box)))
+    (and t (hashtable-ref t d #f) #t)))
+(define (jrec-rtag r) (jrdesc-rtag (jrec-desc r)))
+(define (jrec-retired? r) (and (jrec? r) (jrdesc-retired? (jrec-desc r))))
+;; Mint D's registry tag and record D as retired. Caller holds rec-tbl-mu.
+(define (retire-desc! d)
+  (let ((rtag (string-append (jrdesc-tag d) retired-tag-marker (number->string retired-tag-next))))
+    (set! retired-tag-next (fx+ retired-tag-next 1))
+    (let ((t (if (unbox retired-desc-box)
+                 (hashtable-copy (unbox retired-desc-box) #t)
+                 (make-weak-eq-hashtable))))
+      (hashtable-set! t d rtag)
+      (set-box! retired-desc-box t))
+    rtag))
+;; Every retired descriptor with its registry tag, as a list of pairs.
+(define (retired-descs)
+  (let ((t (unbox retired-desc-box)))
+    (if t
+        (let-values (((ks vs) (hashtable-entries t)))
+          (let loop ((i 0) (acc '()))
+            (if (fx=? i (vector-length ks)) acc
+                (loop (fx+ i 1) (cons (cons (vector-ref ks i) (vector-ref vs i)) acc)))))
+        '())))
 ;; type-tag STRING -> fixed-arity ctor procedure: (lambda (f0 .. fn) (make-jrec ...))
 ;; with one arg per field, no rest-list walk. Used by the backend's emit-invoke
 ;; a jrec that is coll? — a record, or a deftype implementing a collection
@@ -272,7 +323,7 @@
 (define (jrec-collection? x)
   (and (jrec? x)
        (or (jrec-record? x)
-           (let ((tag (jrec-tag x)))
+           (let ((tag (jrec-rtag x)))
              ;; coll? is instance? IPersistentCollection — its marker is `cons`
              ;; (and ISeq's `first`). ILookup(valAt) / Indexed(nth) / Counted(count)
              ;; / Seqable(seq) alone do NOT make a value coll?, matching the JVM
@@ -286,7 +337,7 @@
 (define (jrec-maplike? x)
   (and (jrec? x)
        (or (jrec-record? x)
-           (find-method-any-protocol (jrec-tag x) "without"))
+           (find-method-any-protocol (jrec-rtag x) "without"))
        #t))
 (define jolt-deftype-kw (keyword "jolt" "deftype"))
 ;; unique present-vs-absent sentinel for extension-map lookups (so a present nil
@@ -678,17 +729,22 @@
   (let* ((ext (jrec-ext coll))
          (v (if (jolt-nil? ext) jrec-absent (jolt-get ext k jrec-absent))))
     (if (eq? v jrec-absent)
-        (cond ((jrec-declared-valat coll)
+        (cond ;; a plain defrecord (records-coll.ss jrec-plain?) declares no
+              ;; valAt and no get, so a key its fields and extension map miss
+              ;; is the default: (:missing rec) asked the type's method table
+              ;; for both by name on every call, 155 ns against the JVM's 14
+              ((jrec-plain? coll) d)
+              ((jrec-declared-valat coll)
                 => (lambda (va) (jrec-call-valat va coll k d)))
               ;; a defrecord that declares a valAt anyway (the JVM refuses to
               ;; compile one, but jolt has always allowed it): its fields are not
               ;; masked, so this only answers keys they miss.
-              ((find-method-any-protocol (jrec-tag coll) "valAt")
+              ((find-method-any-protocol (jrec-rtag coll) "valAt")
                 => (lambda (m) (jolt-invoke m coll k d)))
               ;; a deftype implementing clojure.lang.IPersistentSet.get
               ;; (get returns the element when present, else nil) — a
               ;; membership lookup, so (get an-ordered-set k) works.
-              ((find-method-any-protocol (jrec-tag coll) "get")
+              ((find-method-any-protocol (jrec-rtag coll) "get")
                 => (lambda (m) (let ((r (jolt-invoke m coll k))) (if (jolt-nil? r) d r))))
               (else d))
         v)))
@@ -751,7 +807,10 @@
         (else (jolt=2 ea eb))))
 (define (jrec=? a b)
   (let ((da (jrec-desc a)) (db (jrec-desc b)))
-    (and (or (eq? da db) (string=? (jrdesc-tag da) (jrdesc-tag db)))
+    ;; the registry tags: a redefined type's old instance is of another class
+    ;; than the new definition's, and = between the two is false (records.ss
+    ;; jrdesc-rtag)
+    (and (or (eq? da db) (string=? (jrdesc-rtag da) (jrdesc-rtag db)))
          ;; one descriptor is one field count; only a redefinition's old and new
          ;; descriptors (same tag) can differ
          (let ((n (jrdesc-nfields da)))

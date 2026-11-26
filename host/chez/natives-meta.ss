@@ -17,7 +17,12 @@
 ;; exists to prevent. coll-meta-set! is the only writer, and every caller of it
 ;; holds a fresh instance.
 ;;
-;; Everything else that can carry meta — a defrecord/deftype instance, a reify,
+;; A defrecord/deftype instance has a meta slot too (values.ss jrec), filled the
+;; same way: with-meta copies the record with the meta in it, and assoc's copy
+;; (make-jrec-from-existing) keeps the source's. A deftype that implements IObj
+;; itself keeps its meta where its own methods put it.
+;;
+;; Everything else that can carry meta — a reify,
 ;; a fn, a sorted collection (host-table.ss) — keeps it in the identity-keyed
 ;; side table below: with-meta returns a fresh COPY of the value (new identity)
 ;; and records its meta there, so the original is unchanged and a copy made by
@@ -161,6 +166,18 @@
 
 (define (jolt-meta x)
   (cond
+    ;; Every other record carries its meta in its own slot (values.ss jrec);
+    ;; whether the type declares its own is one read of its derived vector
+    ;; (records-coll.ss jrec-iobj/i). Asked first: a parser that tags every node
+    ;; it builds (rewrite-clj's read-with-meta) asks it per node, and the
+    ;; collection tests ahead of it were a call of their own.
+    ;; A deftype implementing clojure.lang.IObj stores meta in a field and
+    ;; threads it through its own assoc/withMeta (core.logic's
+    ;; Substitutions/LVar/LCons), so dispatch to its meta method rather than the
+    ;; slot -- which the deftype's reconstructed instances would not share.
+    ((jrec? x)
+     (let* ((io (jrec-iobj/i x)) (meth (and io (car io))))
+       (if meth (jolt-invoke meth x) (jrec-meta x))))
     ((symbol-t? x) (let ((m (symbol-t-meta x))) (if (jolt-nil? m) jolt-nil m)))
     ((coll-meta x) => (lambda (m) m))
     ;; a var's meta is {:ns :name} (derived from the cell) + :macro true for a
@@ -176,12 +193,7 @@
        (if (macro-var? x)
            (jolt-assoc base jolt-kw-var-macro #t)
            base)))
-    ;; a deftype implementing clojure.lang.IObj stores meta in a field and threads
-    ;; it through its own assoc/withMeta (core.logic's Substitutions/LVar/LCons),
-    ;; so dispatch to its meta method rather than the identity side-table — which
-    ;; the deftype's reconstructed instances would not share.
-    ((and (jrec? x) (jrec-cl x "meta")) => (lambda (m) (jolt-invoke m x)))
-    ;; everything else (records, fns, reify, atoms/agents and any reference type)
+    ;; everything else (fns, reify, atoms/agents and any reference type)
     ;; reads the identity side-table; a value with no entry is nil meta.
     ;; no such metadata anywhere: skip the table entirely
     ((meta-table-empty?) jolt-nil)
@@ -223,6 +235,12 @@
     (jolt-with-mutex fn-meta-mu (hashtable-set! fn-meta-targets w t))
     w))
 
+;; A fresh copy of record X carrying M in its slot: one allocation sharing X's
+;; fields (make-jrec-from-existing), the slot written before anyone else holds it.
+(define (jrec-with-meta x m)
+  (let ((c (make-jrec-from-existing x #f #f (jrec-ext x))))
+    (jrec-meta-set! c m)
+    c))
 (define (meta-copy x)
   (cond
     ((jrec? x) (make-jrec-from-existing x #f #f (jrec-ext x)))
@@ -243,14 +261,45 @@
 ;; The test is per-arm rather than a leading clause: a non-IObj value also has
 ;; nil metadata, so a leading (eq? (jolt-meta x) m) would return 5 from
 ;; (with-meta 5 nil) instead of throwing.
+(define jolt-with-pos-kw-line (keyword #f "line"))
+(define jolt-with-pos-kw-column (keyword #f "column"))
+;; (jolt-list-pos line column item ...) / (jolt-vector-pos line column item ...):
+;; the list or vector of the items, with the reader-position metadata a quoted
+;; one carries (literals.clj quoted-ctor-text). Run once, when the constant is
+;; built.
+;; Built with the metadata in place: one map and the list's own cells, no copy.
+;; A def's constants are built when the def loads, and an `is` quotes a nested
+;; form, so this runs once per quoted list per load.
+(define (jolt-pos-meta l c)
+  (make-pmap (vector jolt-with-pos-kw-line l jolt-with-pos-kw-column c) 2))
+(define (jolt-list-pos l c . xs)
+  (if (null? xs)
+      (coll-with-meta jolt-empty-list (jolt-pos-meta l c))
+      (let ((tail (list->cseq/k (cdr xs) sk-list)) (m (jolt-pos-meta l c)))
+        (cond ((jolt-nil? tail) (make-cseqn (car xs) tail sk-list m 1))
+              ((cseqn? tail) (make-cseqn (car xs) tail sk-list m (fx+ (cseqn-cnt tail) 1)))
+              (else (make-cseq (car xs) tail sk-list m))))))
+(define (jolt-vector-pos l c . xs)
+  (coll-with-meta (apply jolt-vector xs) (jolt-pos-meta l c)))
+;; (jolt-with-pos coll line column): COLL with the reader-position metadata
+;; {:line line :column column}, as a quoted list carries it (the back end's
+;; literals.clj emits this for a quoted collection whose metadata is exactly
+;; that, in place of a map literal per list).
+(define (jolt-with-pos x l c)
+  (jolt-with-meta x (jolt-hash-map jolt-with-pos-kw-line l jolt-with-pos-kw-column c)))
 (define (jolt-with-meta x m)
   (cond
-    ((symbol-t? x) (if (eq? (jolt-meta x) m) x (symbol-t-with-meta x m)))
-    ((coll-meta x) => (lambda (cur) (if (eq? cur m) x (coll-with-meta x m))))
     ;; a deftype with an explicit clojure.lang.IObj withMeta carries meta in a
     ;; field; dispatch to it (see jolt-meta) so the meta survives reconstruction.
-    ((and (jrec? x) (jrec-cl x "withMeta")) => (lambda (meth) (jolt-invoke meth x m)))
-    ((or (jrec? x) (jreify? x) (procedure? x))
+    ;; Every other record: a copy with the meta in its slot. Always a copy, as a
+    ;; defrecord's generated withMeta is `new R(...)`; Obj's identity shortcut is
+    ;; the collections', not a record's. First, as in jolt-meta.
+    ((jrec? x)
+     (let* ((io (jrec-iobj/i x)) (meth (and io (cdr io))))
+       (if meth (jolt-invoke meth x m) (jrec-with-meta x m))))
+    ((symbol-t? x) (if (eq? (jolt-meta x) m) x (symbol-t-with-meta x m)))
+    ((coll-meta x) => (lambda (cur) (if (eq? cur m) x (coll-with-meta x m))))
+    ((or (jreify? x) (procedure? x))
      (if (eq? (jolt-meta x) m)
          x
          (let ((c (meta-copy x)))
@@ -273,6 +322,12 @@
       (cond ((null? as) jolt-nil)
             (((caar as) coll) ((cdar as) coll))
             (else (loop (cdr as)))))))
+;; A hash map's .empty() is PersistentHashMap.EMPTY, not the {} an array map
+;; empties to, so what is assoc'd onto it next iterates in hash order as on the JVM.
+(register-empty-coll-arm!
+  (lambda (c) (and (pmap? c) (not (pmap-array? c))))
+  (lambda (c) (let ((m (pmap-meta c)))
+                (if (jolt-nil? m) empty-pmap-hash (jolt-with-meta empty-pmap-hash m)))))
 
 ;; Carry SRC's metadata onto DST (a freshly-built collection of the same kind),
 ;; as Clojure's ops do — each new collection threads its receiver's meta()
@@ -300,11 +355,16 @@
         ((pset? src) (slot-carry (pset-meta src) dst))
         ((jolt-lazyseq? src) (slot-carry (jolt-lazyseq-meta src) dst))
         ((empty-list-t? src) (slot-carry (empty-list-t-meta src) dst))
+        ((jrec? src) (slot-carry (jrec-meta src) dst))
         ((meta-table-empty?) dst)
         (else (let ((m (meta-table-get src))) (if m (meta-attach dst m) dst)))))
 (define (meta-attach dst m)
   (let ((cur (coll-meta dst)))
     (cond (cur (if (eq? cur m) dst (coll-with-meta dst m)))
+          ;; a record made by the op (assoc copies the source's slot, so this is
+          ;; usually already eq?) -- or one it handed back unchanged, which is why
+          ;; this copies rather than writing the slot of a value others may hold
+          ((jrec? dst) (if (eq? (jrec-meta dst) m) dst (jrec-with-meta dst m)))
           (else (meta-table-set! dst m) dst))))
 ;; conj's carry: the receiver kinds whose JVM cons threads meta are the
 ;; collections and a PersistentList — a list cell, and (), whose cons builds a
@@ -351,6 +411,7 @@
 (define ty-transient (keyword "jolt" "transient"))
 (define ty-uuid (keyword "jolt" "uuid"))
 (define ty-sorted-set (keyword "jolt" "sorted-set"))
+(define ty-sorted-map (keyword "jolt" "sorted-map"))
 (define ty-object (keyword #f "object"))
 
 ;; Arm registry for host-type extensions (jinst, jolt-array, jfile, etc.)
@@ -388,7 +449,7 @@
       ((jolt-transient? x) ty-transient)
       ((juuid? x) ty-uuid)
       ((htable-sorted-set? x) ty-sorted-set)
-      ((htable-sorted-map? x) ty-map)
+      ((htable-sorted-map? x) ty-sorted-map)
       ;; collections — pvec INCLUDES map entries (:vector).
       ((pvec? x) ty-vector)
       ((pmap? x)                                        ; a :jolt/type-tagged map (ex-info) -> its tag

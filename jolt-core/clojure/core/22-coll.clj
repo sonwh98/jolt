@@ -28,7 +28,7 @@
     (nil? m) nil
     ;; associative? is false for a sorted SET, so one falls through to the throw
     (associative? m)
-    (if (tree-sorted? m)
+    (if (sorted? m)
       ((get (jolt.host/ref-get m :ops) :entry-at) m k)
       (when (contains? m k) (jolt.host/map-entry k (get m k))))
     ;; a java.util.Map has no Clojure key object to preserve, and neither does a
@@ -87,10 +87,17 @@
 
 ;; conj semantics per entry arg (a map merges, a [k v] pair adds); nil args are
 ;; no-ops; all-nil (or no args) is nil.
-(defn merge [& maps]
-  (when (some identity maps)
-    (reduce (fn [acc m] (if (nil? m) acc (conj (or acc {}) m)))
-            maps)))
+(defn merge
+  ;; the fixed arities answer what the variadic one does without its rest list,
+  ;; some and reduce: (merge m nil) is m, (merge nil m) is (conj {} m), and any
+  ;; falsey argument counts as absent the way (some identity maps) and (or acc {})
+  ;; read it
+  ([] nil)
+  ([m] (when m m))
+  ([m1 m2] (when (or m1 m2) (conj (or m1 {}) m2)))
+  ([m1 m2 & maps]
+   (when (or m1 m2 (some identity maps))
+     (reduce (fn [acc m] (conj (or acc {}) m)) (conj (or m1 {}) m2) maps))))
 
 (defn merge-with [f & maps]
   (when (some identity maps)
@@ -104,12 +111,16 @@
                    (reduce merge-entry (or m1 {}) (seq m2)))]
       (reduce merge2 maps))))
 
+;; The not-found value get-in and req! pass to get: an object no collection
+;; holds, so a present-but-nil (or present-but-empty) value is told from a
+;; missing key. An empty map will not do — {} is one shared value, so a key
+;; mapped to an empty map read as missing.
+(def ^:private absent-sentinel (atom nil))
+
 (defn get-in
   ([m ks] (reduce get m ks))
   ([m ks not-found]
-   ;; a fresh table is its own identity — a present-but-nil step is
-   ;; distinguished from a missing one
-   (let [sentinel (hash-map)]
+   (let [sentinel absent-sentinel]
      (loop [m m ks (seq ks)]
        (if ks
          (let [nxt (get m (first ks) sentinel)]
@@ -125,9 +136,7 @@
   behind checked-keys destructuring (:keys! / :syms! / :strs!)."
   {:added "1.13"}
   [m k]
-  ;; a fresh map is its own identity, so a present-but-nil value is distinguished
-  ;; from an absent key (same trick as get-in's sentinel).
-  (let [sentinel (hash-map)
+  (let [sentinel absent-sentinel
         v (get m k sentinel)]
     (if (identical? sentinel v)
       (throw (new IllegalArgumentException (str "Expected key: " k)))
@@ -177,8 +186,9 @@
     ;; a defrecord without its own empty can't have one (RT: UnsupportedOperation)
     (record? coll) (throw (new UnsupportedOperationException
                                (str "Can't create empty: " (.getName (class coll)))))
-    (tree-sorted? coll) (with-meta ((get (jolt.host/ref-get coll :ops) :empty) coll) (meta coll))
-    (map? coll) (with-meta {} (meta coll))
+    (sorted? coll) (with-meta ((get (jolt.host/ref-get coll :ops) :empty) coll) (meta coll))
+    ;; a hash map empties to an empty hash map (the arm), an array map to {}
+    (map? coll) (or (jolt.host/empty-coll-arm coll) (with-meta {} (meta coll)))
     (set? coll) (with-meta #{} (meta coll))
     ;; a map entry is a vector with no empty one (MapEntry.empty() is null)
     (map-entry? coll) nil

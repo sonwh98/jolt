@@ -9,6 +9,920 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`deps.local.edn`: per-machine overrides merged over deps.edn.** A project's
+  `deps.local.edn` (or the file `$JOLT_DEPS_LOCAL` names, relative to the
+  project) merges over its deps.edn the way deps.edn merges over the user's,
+  and is meant to stay out of version control. Relative paths in it, `:jolt/native`
+  candidates and `:local/root` alike, resolve against the project wherever the
+  file is. Its `:jolt/native` specs are the
+  closest declarations of all: `{:name "sqlite3" :linux ["/opt/sqlite/lib/libsqlite3.so.0"]}`
+  overrides just that path for a library the project or any dependency
+  declares, and keeps the rest of the spec, including loading on the
+  dependency's first require. A spec there that names no declared library is
+  ignored with a warning rather than becoming a required one. `-Srepro` leaves
+  the file out, its `:tasks` included; `-Sdescribe` and `-Sverbose` name it.
+- **`jolt.configure` finds native libraries on this machine.** A task
+  `configure {:exec-fn jolt.configure/configure!}` (`jolt run configure`) looks
+  for each `:jolt/native` library the project resolves to whose declared
+  candidates do not open, and records the paths it finds in `deps.local.edn`,
+  like `./configure`. It reads pkg-config `.pc` files (`${pcfiledir}` included),
+  Homebrew's `opt/` links, the library-path variables, `~/.local/lib` and the
+  Homebrew, MacPorts and NixOS lib directories, then the dynamic linker's
+  `/etc/ld.so.conf` and the usual system directories itself, without running
+  pkg-config, ldconfig or brew, and takes a file only if it opens. A spec that
+  declares a versioned file (`libssl.3.dylib`, `libssl.so.3`) gets that file and
+  no other version of the library; an unversioned one matches by name. A path
+  under Homebrew's Cellar is recorded through the formula's `opt/` link, which
+  survives an upgrade. A spec can steer it with
+  `:pkg-config`, `:brew` and `:search`. `--all`, `--dry-run`, `--no-verify`,
+  `--file` and library names limit or redirect it; `find-library`, `discover`
+  and `pkg-config` are callable directly.
+- **A bare `:jolt/native` filename is looked for.** A candidate with no path
+  in it, like `"libcrypto.3.dylib"`, is tried beside the deps.edn that declared
+  it first, then wherever the platform's loader finds it, and when neither
+  opens it, autodiscovery looks for that exact file in the spec's `:search`
+  directories, then where `jolt.configure` does (pkg-config libdirs, Homebrew,
+  the library-path variables and `~/.local/lib`, the linker's configured
+  directories, the system directories, and every Homebrew formula's
+  `opt/*/lib`). Discovery runs only after every candidate has failed, and never
+  for an `:optional` library, so a library that loads, or an optional one that
+  is absent, costs nothing more. `JOLT_NATIVE_DISCOVER=0` turns it off. A built
+  binary loads its candidates as before.
+
+- The JIT compiles a native region for the CPU it runs on: it defines the C
+  macro of each feature the machine has (`__AVX2__`, `__FMA__`, `__ARM_NEON`
+  ...), so a `defnative` with `(on "defined(__AVX2__)" ...)` and
+  `(on :default ...)` bodies runs the SIMD one where the CPU has it, and the
+  portable one elsewhere, as `cc -march=native` would (SSE3, SSSE3, BMI and
+  BMI2, F16C and LZCNT among them). `jolt build` still compiles for its C
+  compiler's default target, usually the baseline. `jolt.native/cpu-features`
+  lists what the JIT targets; `JOLT_MIR_CPU=baseline` makes it target the
+  baseline, which keeps what every core of the architecture has (`__ARM_NEON`
+  on AArch64, SSE2 on x86-64).
+
+- Native regions specialize on runtime values: `(native ^{:specialize [n]}
+  [^long n ^doubles m] ...)` compiles a variant of the region, with the JIT,
+  for each distinct `n` the call site sees (up to `:max-variants`, 8 by
+  default), with the value as a constant, so the range analysis drops checks it
+  could not for an unknown `n`: a 512x512 matrix sum runs about 1.7 times
+  faster. Other values, and a `jolt build` binary, run the region as written;
+  the answers are the same. A call that hits a variant costs about twice a
+  direct call, and one past the budget or in a binary takes no lock. Sites
+  that specialize parameters at different positions keep their own variants;
+  a variant the JIT cannot compile is dropped and the site runs the region as
+  written. `jolt.native/specializations` lists the variants.
+
+- `jolt.native/native-fn`: compile a native region at runtime from data (a
+  params vector and body forms), with the JIT, and get back a fn that runs it
+  as native code. A program can generate a region from what it only learns at
+  runtime; `jolt.native/jit?` says whether this process can. A region the JIT
+  cannot compile or link raises from `native-fn` itself.
+- `jolt.native.layout`: a binary record layout (`[[:magic :u32] [:pad 1]
+  [:count :u16] ...]`, little- or big-endian) lowered into a region:
+  `parser` reads one record, `column` scans a field across every record in a
+  byte-array, with the offsets, widths and sign extension as constants in C.
+  A read past the end of the array, at any offset, raises
+  `ArrayIndexOutOfBoundsException`.
+- Native regions take `^bytes` parameters (read in place, each element a
+  signed byte as a long; a region never writes one) and the bit operations
+  `bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`,
+  `bit-shift-right` and `unsigned-bit-shift-right`, with the JVM's masked
+  shift counts. A mask by a non-negative constant bounds an index for the
+  range analysis, so `(aget xs (bit-and i 3))` drops its bounds check.
+- `Throwable.addSuppressed` and `getSuppressed` on every throwable, as in JDK 21.
+  `getSuppressed` returns a fresh `Throwable[]` in the order they were added, adding
+  `nil` throws `NullPointerException` ("Cannot suppress a null exception.") and adding
+  a throwable to itself throws `IllegalArgumentException` ("Self-suppression not
+  permitted") with that throwable as its cause, a proxy's included; one built
+  with `enableSuppression` false (a proxy's 4-argument constructor) records
+  nothing. `printStackTrace` prints each
+  suppressed throwable after the frames, as a `Suppressed:` line one tab in with its
+  own frames and suppressed beneath it. `CompletableFuture.whenComplete` now adds a
+  throwable from its action to the failure it was handed, so that known divergence
+  is gone.
+
+### Changed
+
+- **What a dependency declares is overridden by what depends on it.** The
+  project's declarations win over library A's, and A's over those of the library
+  B it depends on, key by key: a `:jolt/native` spec that sets only `:linux`
+  keeps the dependency's other platforms, its `:static` archive and its `:build`
+  task, which used to be dropped with everything else the closer spec left out
+  (each `:build` still runs only for the files its own deps.edn declares). A
+  project's `:jolt/provides` claim on a class takes it from a dependency's, and
+  a library's from the libraries it depends on, instead of being refused as a
+  conflict; two unrelated libraries claiming one class are still refused.
+
+- `jolt.native` regions always run as native code. Outside a `jolt build`
+  binary (the REPL, `jolt run`) a region is now compiled in process by MIR's C
+  compiler (github.com/vnmakarov/mir, vendored at `vendor/mir` and linked into
+  jolt) the first time its call site loads, from the same C a build links, so a
+  hot loop runs at native speed while you tune it. The Jolt fallback a region
+  used to run there is gone, along with the code that generated it. Where there
+  is no native path (the gambit target, a machine MIR has no code generator
+  for) calling a region raises `UnsupportedOperationException`.
+- `jolt.native/linked-regions` answers `:linked`, `:jit` or `nil` per region
+  instead of a boolean.
+- A source checkout gets the JIT from `make mirlib`
+  (`target/mir/libjoltmir`); `JOLT_MIR_LIB` names another build of it, and
+  `JOLT_NO_MIR=1` builds a jolt without it. The JIT finds a `defextern`
+  `:header` in the system include directories and any `JOLT_MIR_INCLUDE`
+  lists; a header MIR's C compiler cannot parse (Android's bionic ones) makes
+  that region raise outside a build. It resolves the C functions a region
+  calls in the process's global scope first, where a linked region's calls
+  bind (so an interposed allocator is used consistently), then in each library
+  `ffi/load-library` or `:jolt/native` opened, as a `defcfn` does. A region
+  that names a function nothing defines raises when called, and compiles again
+  once another library has loaded.
+- **A number in a `jolt.ffi` `:bool` position throws `IllegalArgumentException`.**
+  `:bool` follows jolt truthiness, and 0 is truthy, so a C-style `0` for false
+  or `(if on? 1 0)` used to send true without any error. Pass `true` or `false`,
+  or the value itself. This covers call arguments, `write` and layout fields,
+  and a foreign-callable whose fn returns a number for a `:bool` result. Code
+  that passed `1` for true has to change too.
+
+### Performance
+
+- A native region's fast copy drops the bounds check on an index bounded by a
+  long parameter (`(< i m)`, guarded once at entry by `m` against the array's
+  length), by another array parameter's length, or by a length minus a
+  constant (`(< i (dec n))` reading `(aget xs (inc i))`, which needs no guard).
+  An accumulator that adds a bounded step once per counted iteration keeps no
+  overflow check, so a sum over a `^bytes` array runs unchecked. A pure
+  expression a block repeats, such as `(inc i)` in both a `recur` and an
+  index, is computed once.
+- On x86-64 glibc, `jolt build` compiles each region function that has a loop
+  twice, for AVX2 and the baseline, and the loader picks one for the CPU it
+  runs on (gcc, or clang 18 and later). `-DJN_NO_CPU_CLONES` turns it off.
+- `clojure.tools.reader` and rewrite-clj parse about 10% faster (#1713).
+  `(symbol s)` no longer pools a run-time string's name, which matches the
+  JVM: `Symbol.intern` interns only a class file's literal strings, so
+  `(identical? (name (symbol s)) (name (symbol s)))` is now false, as it is
+  there. Quoted symbols still share their name. A `StringBuilder` writes a
+  char appended while nothing else is pending straight into its buffer, and
+  `toString` of such a builder is a single copy.
+- Common host operations are 2 to 7 times faster (#1713). On Chez,
+  `(:k rec)` and `(get rec :k)` on a defrecord read the field straight from a
+  per-site cache (19 and 38 ns to 5.5); the inline read is emitted only for a
+  key some defrecord declares, so a map's lookup is not slowed by it.
+  `(instance? T x)` answers a repeat inline for a record or a string, number,
+  char, boolean, keyword or nil (16 to 32 ns down to 9 to 15).
+  `Matcher.group` and the group vectors of `re-find`, `re-matches` and
+  `re-seq` slice the matched string directly (94 to 37 ns). A key a plain
+  defrecord does not have no longer searches its type's methods (155 to
+  31 ns), `satisfies?` on a record is keyed by the protocol value (45 to
+  27 ns), char keys take the hash map's fast path, and a map or keyword
+  called as a fn goes straight to the lookup.
+- Printing numbers is 3 to 4 times faster: `(str n)` of a long and the
+  digits of a double divide by 10 and 100 with a multiply and a shift, not a
+  chain of hardware divides, and a double's plain decimal form is written into
+  one string. `clojure.lang.PersistentList/create` builds a vector's list
+  directly (2 to 3 times faster; tools.reader reads every list through it).
+- Printing a double is about twice as fast again, and a short decimal like
+  `1.5` about three times (#1713). Schubfach's three rounded products are
+  computed over 28-bit limbs in fixnums instead of bignums, a double's digits
+  stay a fixnum until they are laid out straight into the printed string, and
+  long digit runs are split seven at a time. Output is unchanged: `str` of 2.5
+  million doubles and longs is identical to the JVM's.
+
+### Fixed
+
+- `Base64$Decoder.wrap(InputStream)` returns a decoding stream (#1872). It
+  decodes as it reads, as the JDK's does, so a source that stays open (a pipe,
+  a socket) gives the bytes decoded so far without waiting for its end.
+  Padding, an unpadded tail, data after `=`, `read(byte[],off,len)` counts,
+  `available`, and reads after an error or after close match JDK 21, and an
+  illegal character's IOException names it (`Illegal base64 character 0x23`).
+  The MIME encoder's bad line separator message prints the character in
+  lowercase hex, as the JDK's does.
+- `Math/log10` and `clojure.math/log10` give the JDK's digits: they are
+  fdlibm's, as the JDK's are, so `(Math/log10 1000.0)` is `3.0` rather than
+  `2.9999999999999996`.
+- `Matcher.start(g)`/`.end(g)` answer `-1` for a group that took no part in
+  the match (they answered `false`), and `group`/`start`/`end` of a group
+  number out of range throw `IndexOutOfBoundsException: No group N`.
+  `start` and `end` take a group name, as `group` does; an unknown name throws
+  `IllegalArgumentException: No group with name <n>`.
+- `Character/digit` reads non-ASCII decimal digits and fullwidth letters, and
+  answers `-1` for a radix outside 2..36. `Character/getNumericValue` and
+  `Character/forDigit` exist.
+- `Character`'s classification (`getType`, `isDigit`, `isLetter`,
+  `isLetterOrDigit`, `isUpperCase`, `isAlphabetic` and the rest, `digit`) and
+  regex Unicode classes like `\p{L}` and `\p{Nd}` follow JDK 21's Unicode 15
+  data. They read Chez's newer tables, so the digits and letters Unicode added
+  since counted as digits and letters. `\p{Cn}` and `\p{C}` no longer fail to
+  compile.
+- `Math` double functions and `clojure.math` take a `BigDecimal` as its double
+  value, so `(Math/sqrt 4M)` is `2.0`; they threw `ClassCastException`.
+- A native region's `^doubles`/`^longs` argument is read once, after its
+  check, so a store on another thread that widens the array's backing cannot
+  reach C. An owned array result is copied out before interrupts come back on.
+- A `defextern` called outside a region frees the buffers it made for earlier
+  array arguments when a later one fails to copy, and refuses an array of the
+  wrong kind with `ClassCastException`.
+- `nil` passed to a native region's `^doubles`, `^longs`, `^bytes` or
+  `^boolean` parameter raises `ClassCastException` naming `nil`, instead of a
+  `NullPointerException` from building that message.
+- `aget`, `aset` and `nth` on an array read a `##NaN` index as 0 and truncate a
+  ratio index, as `RT.intCast` does, instead of raising Chez's own error; an
+  index past the long range is the `IllegalArgumentException` naming the
+  double.
+- Inside a native region, a call whose head is a local (`(let [aget 1] (aget
+  xs 0))`) is refused rather than compiled as the builtin of that name, and a
+  region name registered again with different C raises.
+- `clojure.test/*initial-report-counters*` is dynamic, as in Clojure, so
+  `binding` it no longer throws `Can't dynamically bind non-dynamic var`.
+- `jolt.parser.combinators/any-of` carries its docstring; it sat after the
+  argument vector, where it was a body expression.
+- `jolt.deps/add-deps` loads the added libraries' `:jolt/native` libraries,
+  each on the first require of one of its namespaces, as a dependency in
+  `deps.edn` does. It left them out, so a script that added jolt-lang/crypto
+  at run time bound `EVP_*` to nothing ("no entry for EVP_sha256"), or on
+  macOS to a BoringSSL copy already in the process, which aborted the first
+  `MessageDigest` update. A library already on the roots registers nothing
+  twice.
+
+### Internal
+
+- The metrics workflow runs the latest jolt-metrics and gates on its lint
+  findings as well (`ci/metrics-allow.edn` lists the ones that stay), and a
+  pull request's report opens with what changed since main's.
+
+## [0.8.30] - 2026-11-24
+
+`jolt.native` regions: blocks of hinted numeric code that `jolt build` compiles
+to C, with an ownership checker so arrays are never used after they are given
+away, and the same program running as Jolt under `jolt run`. Also new:
+`java.util.concurrent.CyclicBarrier` and `java.io.DataInputStream` /
+`DataOutputStream`, and optimizer passes for `set/difference`, filter/map into
+vectors, fixed-key map loops, `assoc-in` chains and `reduce-kv` map builds. The
+rest is JVM parity found reviewing this window: NaN payloads survive raw bit
+reads, division by zero and calling `nil` throw the JVM's exception and message,
+`Math/pow` follows Java's special cases, and dependency fetches wait out a
+rate-limiting Maven repository.
+
+### Added
+
+- `jolt.native/native`: a block of numeric code that `jolt build` compiles to C
+  and links into the binary, for hot loops. The locals it reads are hinted
+  (`^long`, `^double`, `^boolean`, `^doubles`); a `^doubles` array is read and
+  written in place, with no copy. Arrays the block creates are owned and freed
+  when it is done with them, checked at compile time with an ownership pass
+  ported from Carp, so using an array after giving it away, or returning one it
+  only borrowed, is a compile error. Long arithmetic overflows with
+  `ArithmeticException` as on the JVM, and failures raise the JVM's exceptions:
+  a helper that recurses deeper than the thread's stack raises
+  `StackOverflowError`.
+  Under `jolt run` and in the REPL the same checked program runs as Jolt, so
+  both agree. By default other threads keep running and collecting while a
+  region works, its borrowed arrays pinned in place for the call.
+  `(native ^:hold-gc [...] ...)` opts into a cheaper call that holds every
+  other thread's collection until it returns, for short regions. A build with regions
+  needs a C compiler.
+- A native region leaves out the overflow, int-cast and bounds checks that a
+  range analysis proves cannot fire (loop counters, `(< i (alength a))` scans,
+  indexes built from them). Those that depend on an array parameter's length
+  run behind one guard at the function's entry: a fast copy when it holds, the
+  fully checked body otherwise, so results and exceptions are unchanged. The
+  rules are proved with z3 in `test/native/proofs/range-*.smt2`.
+- A native region keeps a small constant-size array (up to 256 elements) on
+  the C stack when it never leaves the function or the loop iteration that
+  made it: no allocation, no free. An array that is returned, carried by
+  `recur`, taken by a helper, or shares a name with a heap array stays on the
+  heap. One indexed only by constants (a scratch `[x y z]`) becomes plain C
+  locals, with no memory at all.
+- `jolt.native/defextern` declares a C function native regions call directly:
+  `(defextern ^double fast-erf [^double x] {:header "erf.h"})`. Arguments and
+  results are scalars; the region's C calls it by name (declared from the hints,
+  or through its header), and the Jolt fallback and plain Jolt code call the
+  same function through `jolt.ffi`. A `jolt build` links it from a `:static`
+  native. An array parameter (`^doubles`, `^longs`) reaches C as a pointer to
+  its elements and their count; a region passes the array's own storage, and
+  the Jolt side copies it in and back out.
+- A native helper can give a body per platform, chosen by the C compiler:
+  `(defnative f [xs] (on "defined(__aarch64__)" ...) (on :default ...))`. A
+  platform no guard covers is a build error unless there is a `:default`,
+  which is also what the Jolt fallback runs. The bodies must agree on their
+  result type and on which arguments they take.
+- `java.util.concurrent.CyclicBarrier`, with the barrier action, `await` with
+  or without a timeout, `reset`, `isBroken` and `getNumberWaiting`. The last
+  party to arrive runs the action and gets index 0. A timeout, an interrupt or
+  an action that throws breaks the barrier, and the other waiters get
+  `BrokenBarrierException`. While the action runs, a new arrival, `reset` and
+  the queries wait for it, and a waiter whose timeout runs out or that is
+  interrupted still gets its index, as on the JDK. The action itself may call
+  `isBroken`, `getNumberWaiting` and `reset` on its barrier. It waits the way
+  `CountDownLatch` does, so a fiber that awaits parks and gives its carrier up.
+
+- **`java.io.DataInputStream` and `java.io.DataOutputStream`, and the
+  `DataInput`/`DataOutput` methods on `RandomAccessFile`.** A
+  `DataOutputStream` writes `writeInt`, `writeLong`, `writeShort`,
+  `writeDouble`, `writeUTF` and the rest as the JDK's big-endian bytes, answers
+  `size`, and passes each write straight to the stream it wraps. A
+  `DataInputStream` reads them back, with `readFully`, `skipBytes`, `readLine`
+  and `readUTF`, and a short read is an `EOFException`. `writeUTF` and `readUTF`
+  use modified UTF-8, so U+0000 is `C0 80` and an astral character takes six
+  bytes, and a string that encodes past 65535 bytes is a
+  `UTFDataFormatException`. Both streams wrap any `InputStream` or
+  `OutputStream`, a `proxy` included, and are `instance?` of `DataInput` and
+  `DataOutput`. `RandomAccessFile` answers the same read and write methods, so
+  the note under #1376 that they were missing no longer holds.
+  Two differences from the JDK remain. Over a jolt stream other than a
+  `PushbackInputStream`, `readLine` after a `\r` peeks at the next byte and
+  leaves it in the stream where the JDK reads it, so a `read` on the wrapped
+  stream afterwards sees that byte in jolt and not on the JVM. And `readUTF`
+  turns a lone surrogate into U+FFFD, since a jolt string cannot hold one.
+
+### Changed
+
+- A `reduce-kv` into `{}` whose callback only passes its accumulator to a final
+  `assoc` builds the result map in one pass in a transient, whatever the key
+  and value expressions are, and still answers a correct persistent map if a
+  var it reads is redefined part way through. Keyword-keyed rebuilds are about
+  2x faster.
+- A chain of `assoc-in` calls on sibling paths of the same map descends the
+  shared prefix once and rebuilds the common ancestors once, including when the
+  path is a literal left by inlining a constant key argument.
+- `(keyword ...)` no longer allocates an argument list on every call.
+- A loop accumulating a fixed-key map with `update` is about 12% faster.
+
+### Performance
+
+- `clojure.set/difference` of two hash sets that share structure skips the
+  subtries they have in common, when the keys are numbers, keywords or
+  characters and `disj` has not been redefined. Removing a few elements from a
+  large set and diffing it against the original no longer walks the whole set.
+- `(into [] (comp (filter p) (map f)) v)` over a vector walks the vector's
+  leaves directly and fills the result in place, with no transducer stack or
+  transient in between. It falls back to the ordinary path if `into`, `comp`,
+  `filter` or `map` has been redefined.
+- A `loop` whose accumulator is a map with a fixed set of keyword keys keeps
+  the fields in locals and builds the map only when it leaves the loop or
+  escapes, so each iteration no longer allocates a map.
+- The compiler replaces reads from a private, never-escaping map literal with
+  the values themselves, so the map is not built.
+- `into` a sorted set or map sizes a short batch from `counted?` instead of a
+  fixed list of types, and fills a batch of known size in place.
+
+### Fixed
+
+- `setName` or `setPriority` called on a `Thread` right after `.start` could
+  be lost: the new thread copied its name and priority into the runtime's
+  tables after it published its id, so a change made between the two was
+  overwritten with the old value. The copy and the setters now run under the
+  thread object's lock.
+- `clojure.lang.PersistentTreeSet/EMPTY` and `PersistentTreeMap/EMPTY` could
+  read as `nil` on arm64 when two threads touched them first at the same time:
+  the one-shot compare-and-swap that caches them can fail spuriously there, and
+  the loser returned the unset value. It now retries (#1802).
+- On 32-bit targets, `hash` of a string or keyword could come out wrong
+  (`(hash "wii")` gave 104228450 instead of -1182153146), from a 32x32-bit
+  product that overflowed into bignums. 64-bit builds were not affected (#1830).
+- A Maven repository answering 429 (rate limited) failed dependency resolution
+  after 800 ms of retries, which is how Central treats shared CI runners. The
+  fetch now waits as long as the server's `Retry-After` asks, up to 30 seconds,
+  and without one backs off 2 and then 5 seconds on a 429.
+- `double-array`, `long-array` and the other array constructors read a numeric
+  size with `Number.intValue`, as the JVM does: `(double-array 4294967296)` is
+  empty and `(double-array Long/MAX_VALUE)` raises `NegativeArraySizeException`
+  -1. jolt tried to allocate the whole value, which ran out of memory or leaked
+  Chez's `make-flvector` error as a `ClassCastException`.
+- `Double/doubleToRawLongBits` and `Float/floatToRawIntBits` kept a NaN's
+  payload and sign, as on the JVM, instead of answering the canonical NaN:
+  `(Double/doubleToRawLongBits (Double/longBitsToDouble 0x7ff0000000000001))`
+  was 9221120237041090560 and is now 9218868437227405313.
+  `Float/intBitsToFloat` keeps a NaN payload for the raw form to read back
+  (a signaling one too, while `(double f)` widens it to the quiet NaN as the
+  JVM does), and `ByteBuffer.putDouble`/`putFloat` store the raw bits as the
+  JDK does.
+  `doubleToLongBits`, `floatToIntBits`, hashing and `DataOutputStream`'s
+  `writeDouble`/`writeFloat` still fold every NaN into the canonical one.
+- `Math/pow` and `clojure.math/pow` answered 1.0 for a NaN exponent over a
+  base of 1.0 and for a base of ±1.0 to an infinite power, which is C's pow.
+  Java's answers NaN for both, and so does jolt now, hinted or not.
+- Integer division by zero raised the JVM's message only some of the time:
+  `quot` and `rem` over `^long` operands said
+  "fxquotient: attempt to divide by zero" where the JVM says "/ by zero", and
+  `Math/floorDiv`, `Math/floorMod`, `clojure.math/floor-div` and
+  `unchecked-divide-int` said things like "/: undefined for 0". They now say
+  "/ by zero" wherever the JVM does: over literals, let-bound literals,
+  casts, `count`, interop calls answering an int, fns whose arglist is tagged
+  `^long`, and arithmetic over those, while `mod`, `/` and `quot`/`rem` over a
+  boxed value keep the JVM's "Divide by zero".
+- `Math/floorDiv`, `floorMod`, `addExact`, `subtractExact`, `multiplyExact`,
+  `incrementExact`, `decrementExact` and `negateExact` accepted any number and
+  truncated it: `(Math/floorDiv 5.5 2)` was 2. They have only int and long
+  overloads, so a double, Float, ratio, BigDecimal, char or nil argument is now
+  the JVM's `IllegalArgumentException` "No matching method floorDiv found
+  taking 2 args".
+- `DataOutputStream.writeUTF`, `writeChars` and `writeBytes` of nil, and a
+  `DataInputStream` or `DataOutputStream` built over nil, threw
+  `NullPointerException` with no message or a generic one. They now carry the
+  JDK's message, such as `Cannot invoke "String.length()" because "str" is
+  null` and `Cannot invoke "java.io.InputStream.read()" because "this.in" is
+  null`. Reading into a nil array from an `InputStream` says
+  `Cannot read the array length because "b" is null` instead of leaking a Chez
+  error, or no message from a `FileInputStream` or `PushbackInputStream` (and a
+  `DataInputStream` over one), as the JDK's do.
+- Calling nil as a fn, as in `(update {} :a nil)`, `(swap! a nil)` or
+  `(apply nil [])`, throws `NullPointerException` naming the IFn method as the
+  JVM does (`Cannot invoke "clojure.lang.IFn.invoke(Object)"`,
+  `applyTo(clojure.lang.ISeq)` for apply). jolt threw a `ClassCastException`.
+- `into` a sorted set or map, `apply sorted-set` and `bounded-count` no longer
+  call the `counted?` var, so rebinding it with `with-redefs` does not reach
+  them, as on the JVM, whose core is direct-linked.
+
+## [0.8.29] - 2026-11-23
+
+Sorted maps and sets now sit on a persistent B+tree, which makes most sorted
+and `java.util.TreeMap` operations faster. Also new: `*print-dup*` prints what
+reads back, `FileChannel` locks interoperate with other processes and wait in
+the kernel, the JDK's `dos:`/`acl:`/`user:` attribute views, and
+`jolt.host/build-id`. Most of the rest is JVM parity in `java.nio.file`
+(attribute snapshots, directory order, Windows `DELETE_ON_CLOSE` and symlinks)
+and fixes from reviewing this window: `letfn` under the optimizer, provider
+autoload across threads with deadlock detection, `=` and `instance?` edge
+cases, and collision-bucket order in hash maps.
+
+### Added
+
+- **`(jolt.host/build-id)` names the exact build that is running (#1793).**
+  It joins the jolt version, the runtime fingerprint jolt's own AOT cache keys
+  its generations on, and the Chez release, for example
+  `v0.8.28-71-g35af4916-dirty-B6-3AD3D880-chez-1041`. A tool that keeps its
+  own cache of compiled code can key on it: two builds of one dirty commit, or
+  a rebuild with other edits, share `*jolt-version*` but not the build id.
+  `jolt.image/runtime-version` stays the Chez release alone, since an image
+  holds data, and its docstring now says so.
+- **`*print-dup*` prints what reads back.** `print-dup` dispatches on the
+  class with core_print.clj's methods: a Float, a fn and a namespace print as
+  constructor calls, an array or sorted map through its `create` static, a
+  record positionally, a var and a class as `#=` forms, and metadata always
+  prints. A value with no method, an atom say, throws the multimethod's
+  `IllegalArgumentException`, and a `defmethod print-dup` of your own is used,
+  nested too. `pr`, `print`, `pr-str` and `str` of a collection all go
+  through it. Under `*read-eval*` the output reads back to an equal value with
+  its metadata: the `Persistent*/create` statics exist now, a named fn's class
+  constructs that fn, and a sorted set reads back where the JVM's
+  `PersistentTreeSet/create` refuses the vector it printed. An int, short,
+  byte or small BigInt is a long here, so it prints as one. Also, under
+  `*print-meta*` a lone `:tag` prints as `^String x`, as on the JVM.
+
+  ```clojure
+  (binding [*print-dup* true] (pr-str [{:a (float 1)} (with-meta 'x {:k 1}) #'inc]))
+  ;; before: "[{:a 1.0} x #'clojure.core/inc]"
+  ;; after:  "[#=(clojure.lang.PersistentArrayMap/create {:a #=(java.lang.Float. \"1.0\")}) ^#=(clojure.lang.PersistentArrayMap/create {:k 1}) x #=(var clojure.core/inc)]"
+  ```
+- **`FileChannel` can lock a file, so two processes can keep out of each
+  other's way.** `.tryLock` and `.lock`, with or without a position, size and
+  shared flag, answer a `java.nio.channels.FileLock` with `release`, `close`,
+  `isValid`, `isShared`, `channel`, `acquiredBy`, `position`, `size`,
+  `overlaps` and the JDK's `toString`. They take the locks OpenJDK takes, POSIX
+  record locks on Unix and `LockFileEx` on Windows, so a JVM and a jolt process
+  see each other's locks. `tryLock` answers nil when another process holds an
+  overlapping range, and `lock` waits for it in the kernel as the JDK does
+  (`F_SETLKW`, a blocking `LockFileEx`), on a helper thread so a fiber parks
+  instead of holding its carrier; an interrupt or a close from another thread
+  ends the wait. Inside one process a second
+  overlapping lock, through any channel on the file, is
+  `OverlappingFileLockException`, and closing a channel releases its locks.
+  An exclusive lock on a read-only channel is `NonWritableChannelException`
+  and a shared one on a write-only channel `NonReadableChannelException`, as
+  on the JDK. A channel is a `sun.nio.ch.FileChannelImpl` with the JDK's
+  supertypes (`FileChannel`, `SeekableByteChannel`, `Closeable` and the rest)
+  instead of a bare `:object`.
+  `FileChannel/open` now really opens the file, with the JDK's checks first:
+  READ with APPEND, and APPEND with TRUNCATE_EXISTING, are
+  `IllegalArgumentException`, a null option `NullPointerException` and an
+  unknown one `UnsupportedOperationException`. A missing file without
+  `CREATE` throws `NoSuchFileException`, an unreadable one
+  `AccessDeniedException`, and a write-open of a directory
+  `FileSystemException`. `CREATE_NEW` creates the file exclusively and throws
+  `FileAlreadyExistsException` when it exists, `TRUNCATE_EXISTING` empties a
+  file opened for writing, neither `CREATE` nor `CREATE_NEW` makes a file for
+  a channel that only reads, `NOFOLLOW_LINKS` and `DELETE_ON_CLOSE` refuse a
+  symbolic link, `SYNC`/`DSYNC` open for synchronous writes, and the
+  `open(path, Set, FileAttribute...)` form creates with the attribute's
+  permissions. `DELETE_ON_CLOSE` works on Windows too. `size` on a closed
+  channel is `ClosedChannelException`, and a channel the program drops
+  without closing gives its descriptor back once it is collected.
+
+- **The `dos:`, `acl:` and `user:` attribute views, matching each platform's
+  JDK 21 provider.** `FileSystem.supportedFileAttributeViews` answers what the
+  JDK's does: `basic owner posix unix dos user` on Linux, `basic owner posix
+  unix user` on macOS, `basic owner dos acl user` on Windows.
+  `UserDefinedFileAttributeView` (`list`, `size`, `read`, `write`, `delete`,
+  and `user:` names through `getAttribute`, `setAttribute` and
+  `readAttributes`) keeps values in `user.*` extended attributes on Linux and
+  macOS and in NTFS alternate data streams (`file:name`) on Windows, with the
+  JDK's messages for a missing attribute, a buffer too small and a name too
+  long. `DosFileAttributeView`, `DosFileAttributes` and `dos:readonly`,
+  `hidden`, `system` and `archive` read and set the DOS bits through
+  `GetFileAttributesW`/`SetFileAttributesW` on Windows and through Samba's
+  `user.DOSATTRIB` attribute on Linux, as the JDK does. On Windows
+  `AclFileAttributeView` reads and writes the owner and the DACL
+  (`GetFileSecurityW`/`SetFileSecurityW`), principals are
+  `WindowsUserPrincipals` named `DOMAIN\name` with the JDK's `toString`, and
+  `getOwner`/`setOwner` go through it, where `getOwner` used to answer
+  `$USER`. `AclEntry` with its builder, `AclEntryType`, `AclEntryPermission`
+  and `AclEntryFlag` are there on every platform, and the default filesystem
+  has a `UserPrincipalLookupService`. `Files/setAttribute` now goes through
+  the view the spec names, so `posix:permissions`, `posix:owner`,
+  `posix:group`, `unix:mode`, `unix:uid`, `unix:gid` and `owner:owner` set what
+  they name, and a name or view it does not have raises the JDK's
+  `IllegalArgumentException` or `UnsupportedOperationException` instead of
+  being ignored. windows-static runs the Windows half against `attrib`,
+  `icacls` and `dir /r`.
+
+### Fixed
+
+- **`clojure.test` counts every assertion when `is` runs on several threads
+  (#1791).** The report counters were bumped from a deref taken outside the
+  `commute` fn, so two threads reporting at once both wrote old+1 and counts
+  were lost; a lost `:fail` could let a runner exit 0. Four futures of 500
+  `(is true)` each now report 2000.
+
+- **`PosixFilePermissions/fromString` answers a `java.util.RegularEnumSet`,
+  iterating in ordinal order, as it does on every JDK, and refuses a string
+  that is not nine characters of each position's letter or `-` with
+  `IllegalArgumentException "Invalid mode"`.** It answered a `HashSet` and
+  read `s` and `t` as set bits. `getPosixFilePermissions` and
+  `PosixFileAttributes.permissions` stay `HashSet`s: that is what JDK 21
+  answers on Linux and macOS alike (JDK 25 changed them to `EnumSet`s).
+- `UserPrincipalNotFoundException` has a null message, as the JDK's does; it
+  carried the name.
+- A `jolt build` embeds resources in sorted order, and a native library search
+  settles on the same file whatever order the directory lists in. Both
+  followed the filesystem's order, so the same sources could build to a
+  different image on another machine.
+- **A `letfn` passed to an inlined call keeps its mutual recursion (#1808).**
+  In a `jolt build` (default or `--opt`), or under `{:direct-linking true}`, a
+  call such as `(f (letfn [(a [] (b)) (b [] …)] (a)))` to a function the
+  compiler inlines failed at runtime with "variable … is not bound": the
+  `letfn`'s functions were hoisted into a plain `let*`, so the first read its
+  sibling before it was bound.
+- **Every compiler pass reads a `letfn`'s fns as seeing each other, and a
+  `loop` init as seeing the loop vars before it.** The inline splice, the type
+  pass and the numeric pass walked a `letfn`'s bindings in sequence, so a fn
+  naming a later sibling got whatever an outer binding of that name held: an
+  inlined `(defn h [g] (letfn [(f [] (g)) (g [] 42)] (f)))` called its argument
+  instead of `g`, and `(let [g nil] (letfn [(f [] (nil? g)) (g [] 0)] (f)))`
+  answered `true` in an optimized build. The numeric pass typed every `loop`
+  init in the enclosing scope, so `(let [x 1.5] (loop [x 1 y x] ...))` ran
+  flonum ops on the fixnum `1` and crashed with "invalid memory reference" in
+  any mode. One helper, `jolt.ir/thread-bindings`, now carries the scope rule
+  for all of them.
+- **`DELETE_ON_CLOSE` works on Windows for `Files/newInputStream`,
+  `newOutputStream` and `newByteChannel`.** They threw
+  UnsupportedOperationException there, because the streams sat on Chez's C
+  runtime file ports. With the option they now open the way `FileChannel/open`
+  does, a HANDLE with `FILE_FLAG_DELETE_ON_CLOSE` read and written through
+  ReadFile/WriteFile, so the file goes when the stream closes, and APPEND,
+  TRUNCATE_EXISTING, CREATE_NEW, SYNC and DSYNC still apply. On every host
+  these opens refuse a symbolic link with the JDK's IOException instead of
+  deleting the link and opening its target.
+- **`Files/newByteChannel` takes `READ` with `WRITE`.** It threw
+  IllegalArgumentException "READ not allowed". It now checks its options as
+  newFileChannel does: READ + APPEND is "READ + APPEND not allowed", a channel
+  opened without READ throws NonReadableChannelException on read, and READ with
+  DELETE_ON_CLOSE deletes the file, which it skipped before.
+- **`Files/newInputStream`, `newOutputStream` and `newByteChannel` honour
+  `LinkOption/NOFOLLOW_LINKS`.** The output opens threw
+  UnsupportedOperationException for it and the input stream ignored it. A
+  symbolic link is now refused with the JDK's IOException, a dangling one is
+  not followed to create its target, and a plain file opens as usual.
+- **`newInputStream`'s `available` and `skip` are the channel's.** `available`
+  is what is left of the file, also on a Windows DELETE_ON_CLOSE stream, which
+  answered 0. `skip` stops at the end of the file and can move back to its
+  start, as JDK 21's ChannelInputStream does. It used to move past the end
+  and answer the full count asked for.
+- **Symbolic links work on Windows.** `Files/createSymbolicLink` threw an
+  ex-info "symlink unavailable"; it now calls CreateSymbolicLinkW the way the
+  JDK does, with the directory flag for a directory target, unprivileged
+  creation where the system allows it, and the JDK's exceptions on failure.
+  `isSymbolicLink`, `readSymbolicLink`, `exists` with NOFOLLOW_LINKS, `delete`
+  of a link and `copy` with NOFOLLOW_LINKS answered as if there were no links,
+  because they asked readlink(3); they now read the reparse point.
+- **`(require 'x :reload-all)` of a namespace load-file'd from off the source
+  roots throws.** The check from #1751 only covered `:reload`, so `:reload-all`
+  kept the stale definitions in silence. The message is now RT.load's, `Could
+  not locate x__init.class, x.clj or x.cljc on classpath.`, and names the file
+  the namespace was loaded from only when it is that namespace's own file: a
+  script that did `(in-ns 'yy)` is no longer reported as yy's source.
+- **A thrown exception is not an instance of a record sharing its simple
+  name.** With `(defrecord IOException [x])` in `demo`, `(instance?
+  demo.IOException (java.io.IOException. "x"))` was true, `cast` returned, and
+  `(catch demo.IOException e …)` caught a failed `slurp`. Exceptions now ask the
+  class graph as the `:class` envelope arm does since #1795.
+- **`=` on a reify, and a deftype opposite a java.util collection, follow
+  `Util.equiv`.** A reify whose `equals` says true was `=` to `[1]`, `{}` and
+  `'()`; the JVM asks the persistent collection, which says false. A deftype
+  whose `equals` says true was not `=` to a `java.util.ArrayList` on its right,
+  because the collection was converted to a persistent one before the deftype
+  was asked.
+- **`*print-meta*` writes no `^meta` before a user `print-method`.** A record
+  with its own `print-method` printed as `^{:m 1} #R!`; the JVM's built-in
+  methods write the metadata, and a user method that replaces one writes none.
+- **`#=` reads a var.** `(read-string "#=(var clojure.core/inc)")` under
+  `*read-eval*` threw `ClassCastException`: the reader tried to put the var's
+  own metadata back on it as reader metadata.
+- A `ProcessBuilder` whose directory does not exist threw
+  `IOException: posix_spawn failed (errno 2)`, and through the shell fallback
+  it started anyway. `start` now throws what the JDK throws,
+  `Cannot run program "cat" (in directory "/nonexistdir"): error=2, No such file or directory`
+  (`error=20, Not a directory` for a file), and every start failure, a missing
+  program or an unopenable redirect file included, names the directory when
+  one was set. `clojure.java.shell` and `jolt.process` surface the same.
+- On Windows every child process jolt started inherited a handle to each file
+  jolt had open, so a file could not be deleted or renamed while any child
+  that started after it was opened was still running. A child now inherits
+  only the standard handles it was given, as on the JVM.
+- `(.directory pb nil)` failed the next `start` instead of going back to the
+  default directory, and `(.directory pb)` with no argument was not there to
+  read the setting back.
+- A hash map or set ordered a collision bucket and its neighbours as the JVM
+  does not. A key whose hash differed from a bucket's was appended to the
+  bucket on its slot instead of the bucket nesting one level down
+  (`HashCollisionNode.assoc`), and a bucket iterated in reverse insertion
+  order: `(keys (assoc (hash-map "AaAa" 1 "BBBB" 2) 54 1 95 1))` gave
+  `(95 54 "BBBB" "AaAa")` where the JVM gives `("AaAa" "BBBB" 95 54)`.
+- An image restore that had to rebuild a small hash map made it an array map,
+  and a rebuilt set reversed its collision buckets.
+- `dissoc!` and `disj!` on a transient hash map or set kept a collision
+  bucket's order, where the JVM moves the bucket's last entry into the hole:
+  `(keys (persistent! (dissoc! (transient (hash-map "AaAa" 1 "BBBB" 2 "AaBB" 3 "BBAa" 4)) "AaAa")))`
+  is `("BBAa" "BBBB" "AaBB")`, as on the JVM.
+- `=` on a sorted set or map never asked the comparator, so
+  `(= (sorted-set 1) (sorted-set 1.0))` and `(= (sorted-set 1) #{1.0})` were
+  false. It now asks the side the JVM asks: a sorted set on the left looks the
+  other set's elements up under its comparator, and a sorted map on the right
+  is the one whose keys are looked up (`(= {1.0 :a} (sorted-map 1 :a))` is true,
+  the other order false). An incomparable key makes a sorted coll on the left
+  answer false, and a hash map asking a sorted one throws the
+  ClassCastException, as on the JVM.
+- conj and into on a map refuse a bad entry with the JVM's exception. A sorted
+  map threw an ExceptionInfo for every shape; it now throws
+  IllegalArgumentException "Vector arg to map conj must be a pair" for a vector
+  that is not a pair, seq's IllegalArgumentException for a value that does not
+  seq, and a ClassCastException for a seq element that is not a map entry,
+  including a plain `[k v]` vector: `(conj {} '([1 2]))` throws as on the JVM,
+  while `(conj {} [1 2])` and `(into {} [[1 2]])` still take the pair. A
+  transient hash map (so `into {}`) refused a seq of entries outright, and
+  `(conj {} '(nil))` failed inside the error message instead of throwing the
+  NullPointerException.
+
+- A program could die of a signal it had a `sun.misc.Signal` handler for. Chez
+  starts its parallel GC threads with the mask of whichever thread runs the
+  collection, so one started while that thread had a signal unblocked never
+  blocked it. On a Chez without jolt's signal relay the kernel could deliver the
+  signal to one of those threads at its default action (a `Signal/raise` of USR2
+  ended the process with 140). Collections now run with jolt's signals blocked.
+- A one-argument `(str x)` goes through the `clojure.core/str` var again, so
+  `with-redefs` and a redefinition reach it as they reach every other arity.
+  The open-coded call from 0.8.28 never read the var (#1768). It still answers
+  a string or a StringBuilder inline while the var holds the original `str`.
+- `=` asks a deftype's or a reify's own equality again when the other operand
+  is a string literal, a keyword, a char or a boolean, as `Util.equiv` does
+  for a collection on either side. Since 0.8.28 the open-coded `=` and
+  `jolt=2` answered those pairs false from the scalar's type alone (#1769).
+  `(= coll nil)` also asks the collection now; it always answered false.
+- `=` between one of jolt's vectors, maps or sets and a scalar no longer
+  walks every registered equality arm: `(= [1] :k)` went from 57 to 21 ns.
+- `(nth coll i not-found)` evaluates `not-found` when `i` is in range for a
+  vector or a string again. The open-coded `nth` from 0.8.28 only evaluated it
+  on the fallback path, so a side effect or a throw in the default was lost
+  (#1767).
+- A Windows `jolt build` that links OpenSSL 4's static `libcrypto.a` as a
+  `:static` native links again. MSYS2 moved to OpenSSL 4.1, whose RNG calls
+  `BCryptGenRandom`, and the final link had no `-lbcrypt`.
+- A task that calls `babashka.tasks/jolt` or `clojure` under a built jolt runs
+  that same jolt again. It used to run whichever `jolt` was on PATH, or fail
+  with `exec: jolt: not found` when there was none (#1787).
+  On Windows the binary could not name its own path, so a task there still
+  went to PATH; it asks Windows for it now.
+- A `ProcessBuilder` file redirect (`to`, `appendTo`, `from`, `DISCARD`) no
+  longer runs the child through `/bin/sh`. jolt opens the file before the spawn,
+  as the JDK does, so a target that cannot be opened throws `Cannot run program
+  "x": path (No such file or directory)` from `start()` instead of starting a
+  child that exits 1.
+- `Files/getLastModifiedTime`, `Files/getAttribute`, `Files/readAttributes` and
+  `babashka.fs/last-modified-time` of a file deleted while they ran answered
+  epoch 0 about 1 time in 100 (#1804). They checked that the path existed,
+  then statted it, and a failed stat fell back to a millisecond mtime that is
+  0 for an absent file. Every attribute reader now takes one stat (lstat under
+  `NOFOLLOW_LINKS`), as the JDK does, and that stat is the existence check: a
+  path that is gone throws `NoSuchFileException` naming it. The same window
+  made `Files/getPosixFilePermissions` answer `rwxr-xr-x` and `Files/getOwner`
+  answer `$USER` for a missing file or a dangling link; they throw too now.
+  `File.lastModified` still answers 0 for a missing file, as on the JVM.
+- A `BasicFileAttributes` from `readAttributes` is a snapshot, as the JDK's
+  is: its getters answer the values from the stat `readAttributes` took, a
+  getter after a delete included, and never throw. They used to stat again on
+  every call, so a `walkFileTree` visitor reading three attributes of a file
+  deleted under it got epoch 0. `PosixFileAttributes` is supported
+  (`permissions`, `owner`, `group`), and so are the `posix:`, `unix:` and
+  `owner:` views of `getAttribute` and `readAttributes`. An unknown attribute
+  is `IllegalArgumentException` and an unknown view
+  `UnsupportedOperationException`, where they answered nil or the basic value.
+  Owners and groups are instances of `UserPrincipal` and `GroupPrincipal`.
+- `Files/size` and the `size` attribute read `st_size`, so a file the process
+  cannot read has a size; they opened the file and threw
+  `AccessDeniedException`. They are also over 100 times faster (about 230 to 1.5 us on macOS).
+- `walkFileTree` takes one snapshot per entry and hands `visitFileFailed` the
+  exception when it fails: an entry deleted between its listing and its visit,
+  a missing start path, or a link cycle under `FOLLOW_LINKS`
+  (`FileSystemLoopException`, which was nil). The two-argument
+  `walkFileTree(start, visitor)` works; it threw `ArityException`.
+  `Files/find` reads each entry's attributes without following links unless
+  asked to, so a dangling link no longer makes it throw.
+- `jolt build`'s parallel compile workers and the run-path AOT cache's
+  background worker start without a shell, so both now run on Windows too. The
+  build workers used to need a `--build-worker-probe` round trip through `sh`
+  before a build could fan out.
+- A git dependency whose URL or cache path holds a `$` or a backtick resolves.
+  git ran as a shell line with each argument in double quotes, where the shell
+  still expands both; it runs with an argument list now.
+- `jolt build` no longer needs `xxd` or `sed`: the boot is written into its C
+  header directly, about 4x faster on a 30 MB boot. PATH lookups, `brew`,
+  `pkg-config`, `nm` and `otool` also run without a shell.
+- `format` rounds the same digits `Double.toString` prints, as JDK 21's
+  Formatter does. It started from Chez's, which differ on a 16-17 digit tie:
+  `(format "%.16e" 1338163280546708.25)` printed `1.3381632805467083e+15`, the
+  JDK `1.3381632805467082e+15`.
+- `(require 'x :reload)` throws `FileNotFoundException` when `x` was loaded
+  from a file under none of the source roots (a `load-file`, an nREPL
+  `load-file`) and the roots don't have it, as on the JVM. The reload used to
+  succeed without loading anything, so the caller kept running the old
+  definitions: an nREPL test run on a server started without the test paths
+  ran stale tests. The message names the file the namespace came from.
+  Namespaces baked into a built binary still reload as a no-op.
+- Several threads using a provided class for the first time at once all get
+  the class (concurrent first use of a provided class). Only the thread that
+  started the provider's autoload used to see it: the others arrived while that
+  load was still running, found the claim already taken and the class not yet
+  registered, and threw "No dependency provides java.time.Instant", so eight
+  futures calling `Instant/now` got one value and seven errors. A thread that
+  misses a class whose provider is loading now waits for that load and looks
+  again, the way a JVM thread waits for a class another thread is initializing.
+  A fiber parks for it instead of blocking its carrier, and work the install
+  namespace itself started (a future, thread or fiber) waits the same way. When
+  the load is blocked on that work, a top-level `@(future ...)`, `.join` or
+  fiber join whose body reaches one of the provider's own classes, the two
+  would wait for each other forever, as they do on the JVM; the work's wait
+  raises a "Deadlocked load" error naming the cycle instead. Before this a
+  future like that waited out the 120 s load watchdog, or forever on a fiber,
+  and the same happened when the install namespace was loaded by a plain
+  `require`. A provider that fails while threads wait on it runs once, and the
+  waiters get its failure; each waiter used to run the failing namespace again.
+- A namespace whose top level blocks on a future, thread or fiber that requires
+  the same namespace raises "Deadlocked load" naming both sides at once,
+  instead of waiting out the 120 s load watchdog (forever when the waiter is a
+  fiber). The loader's cycle check now follows a load through the future,
+  thread or fiber it is blocked on.
+- Registering classes from several threads at once no longer loses
+  registrations. A deftype, a library's class registration and a lazy host shim
+  all write the class tables, and two namespaces loading in parallel wrote them
+  with no lock, which drops entries and can corrupt the table. The other host
+  registries written at run time (method tag aliases, image codecs, provider
+  ownership) are serialized the same way.
+- A thread started inside a provider's install namespace (a pool worker its
+  first `future` forked) no longer carries that provider's loading mark for the
+  rest of its life, where every later registration on it counted as the
+  provider's own.
+- A timed socket read, accept or connect no longer reports a timeout for an fd
+  that was ready before its deadline. When the wait ended at the deadline, the
+  call raised `SocketTimeoutException` without looking at the socket again, so
+  a waiter that got back late (descheduled under load, or beaten to its fiber
+  by the timer thread) lost data or a finished handshake. The call now tries
+  once more and times out only if that would still block, as the JDK's
+  `timedRead` and `timedFinishConnect` do.
+- The built-in collection methods in `(methods print-method)` print the value
+  in their key's shape, as on the JVM: the `IPersistentVector` method writes a
+  queue as `[...]`, `ISeq`'s writes a vector as `(...)`, `IPersistentMap`'s
+  writes a record's entries. Libraries that borrow them (duratom) no longer
+  need a `(vec q)` workaround.
+- `remove-method`, `get-method` and `prefer-method` key a deftype or defrecord
+  dispatch value the way `defmethod` does, so `(remove-method f SomeType)`
+  removes the method. `(methods f)` and `(prefers f)` present such a key as the
+  class, and `(class SomeType)` is `java.lang.Class`.
+- The borrowed `IPersistentMap` print-method stops at `*print-length*` on an
+  infinite seq of entries instead of hanging. Under `print`, the `java.util`
+  methods write the value inside `#object[...]` as the JVM's `print-object`
+  does.
+- `*print-meta*` prints metadata only while printing readably, and never empty
+  metadata: `(print (with-meta [1] {:m 1}))` writes `[1]`, as on the JVM.
+- A string dispatch value spelled like a deftype's class name is its own
+  multimethod key, separate from the type's. A deftype name prints as its class
+  (`user.T`, not `#object[...]`), and a multimethod's "No method" and "Multiple
+  methods" messages name the dispatch value by its `toString`.
+- `instance?` and `cast` no longer take a host value for a record or deftype
+  that only shares its class's simple name. A `java.lang.Process` isn't a
+  `demo.Process` record, as `isa?` already answered, so `cast` to that record
+  throws `ClassCastException`. A simple name such as `Process` still matches.
+  A thrown envelope carrying a JVM `:class` follows the same rule, so a record
+  named `IOException` no longer catches a `java.net.UnknownHostException`.
+- `.toString` on a vector, list or set returns the readable form `str` gives:
+  `(.toString [1 "a"])` is `[1 "a"]`.
+
+### Changed
+
+- **Sorted maps and sets are a persistent B+tree (#1757).** It replaces the
+  red-black tree behind `sorted-map`, `sorted-set` and `java.util.TreeMap`:
+  leaves of up to 16 entries and inner nodes of 32, each one vector. Builds
+  sort once and bulk-load. Against 0.8.28 (B/A): `get` 0.84-0.95, `dissoc` of
+  every key 0.69, `pop` loops 0.47-0.61, `subseq` 0.41-0.88, `reduce-kv` 0.06,
+  and `TreeMap` put/get/floorKey/remove 0.19. Peak RSS for 4M entries goes
+  from 1.47 to 1.05 GB. A counting comparator sees a different number of
+  calls than the JVM's red-black tree makes, which is recorded in
+  known-divergences.
+
+- Directory listings come in the order the OS hands entries out (readdir on
+  POSIX, `FindNextFileW` on Windows), as the JDK's do, instead of sorted:
+  `newDirectoryStream`, `walkFileTree`, `Files/list`, `Files/walk`,
+  `Files/find`, `File.list`, `File.listFiles`, `file-seq`, and babashka.fs's
+  `list-dir` and `glob` through them. Code that needs an order has to sort, as
+  on the JVM. Listing a directory no longer sorts it, so it is cheaper.
+- A hash map or set node keeps its entries in its own array, two slots each,
+  with an entry bitmap and a branch bitmap, instead of a `(key . value)` pair
+  per entry: 16 bytes less per entry and one pointer chase less per lookup.
+  At 100k entries `get` with a string key is about 0.8x the time it was,
+  `dissoc`/`disj` 0.9x, and builds and walks are unchanged. Images are format
+  16; older images still restore.
+- Hashing a long multiplies with one wrapping fixnum multiply per step instead
+  of a 16-bit split.
+
+- jolt.ffi's fixed costs are lower (#1753). A one-allocation
+  `(with-open [a (ffi/confined-arena)] (ffi/alloc a 64))` went from 820 to
+  460 ns and `(ffi/free (ffi/alloc 64))` from 126 to 87: the size table no
+  longer takes its lock through a `dynamic-wind`, arena creation skips the
+  automatic-arena drain while none is live, and the arena attach no longer
+  goes through variadic `update`. `(ffi/write-array p :double arr)` of 35
+  doubles went from 230 to 137 ns, mostly by remembering each type keyword's
+  Chez type instead of matching its name per call.
+- `double-array`, `float-array`, `long-array`, `int-array` and `short-array`
+  built from a vector or another array fill the backing straight from it
+  instead of draining a seq: 1000 doubles from a vector went from 13.4 to
+  3.9 us, and 35 from a double-array from 1650 to 180 ns.
+- `update` has clojure.core's fixed arities instead of only `[m k f & args]`,
+  so it no longer goes through `apply`: `(update m :k inc)` went from 113 to
+  35 ns and `(update m :k + 1 2 3)` from 204 to 46.
+- A user `print-method` no longer slows printing the values it does not reach.
+  Printing a 10k-entry map with one unrelated method installed went from 1.22x
+  to 1.08x of the time with none.
+- Doubles print faster: about 3x for one with at most 15 significant digits
+  (`1.1`, `3.25`, `0.001`), whose digits come from flonum arithmetic, and about
+  2x for a full-precision one, whose digits come from a port of the JDK's own
+  Schubfach (`jdk.internal.math.DoubleToDecimal`) instead of Chez's
+  arbitrary-precision search.
+
+## [0.8.28] - 2026-11-19
+
+A performance release: with tracing off, `jolt run` inlines small fns behind a
+redefinition guard, protocol calls go through a per-type vtable, var calls,
+`try` and `binding` are open-coded, and transient builds, string hashing and
+printing got faster. Also new: `sun.misc.Signal` handlers, `jsonista.core` and
+`bencode.core` bundled, C structs by value in callbacks and
+`jolt.ffi/pointer-fn`, `jolt -M -i`, and a printer that streams into its
+Writer as the JVM's does. The rest is JVM parity, much of it found reviewing
+this window: `(methods print-method)` holds the JVM's built-in printers,
+redefining a protocol or type follows the JVM, fn and reify classes are named
+as Compiler names them, quoted forms keep their reader position, clojure.test
+prints the JVM's report, and the reference fns work on custom IAtom/IRef types.
+
+### Added
+
+- **Guarded inlining under `jolt run` (#1713).** With tracing off
+  (`--no-trace` / `JOLT_TRACE=0`), code the CLI compiles splices a small fn's
+  body into its callers behind a test that the fn's var still holds the fn the
+  body came from: `(if (eq? <the var's fn> ROOT) <body> <call>)`. A
+  redefinition, `with-redefs` or `alter-var-root` takes the call,
+  and the fn is read before the arguments are, as a call reads it. ROOT is read
+  as the caller loads, and only if the def that set the var's root stamped the
+  same token the splice carries, so an AOT-cached caller loaded after its
+  callee was redefined at a REPL takes the call too. A loop calling a small
+  clamp fn runs 52 -> 29 ms; `^:dynamic` fns, protocol methods and bodies that
+  build a closure stay calls. `JOLT_GUARDED_INLINE=0` turns it off; a traced
+  run keeps every call, so an error report names each fn from its own frame.
+
+- **Chez inlines through a top-level definition jolt registers (#1713,
+  `chez-patches/0010`).** Chez's cross-library inliner records an exported
+  procedure's body so code compiled against the library can inline it. The
+  patch extends the same machinery to a top-level definition whose symbol the
+  program marks, and `sa-define-inlinable!` (scheme-adapter-runtime.ss) is how
+  the runtime marks one: a caller compiled afterward that calls the symbol
+  behind a guard gets the body in place. It is the mechanism a runtime
+  specialization of a protocol call site will inline the receiver's observed
+  method with; on a three-layer deftype protocol chain, hand-specialized this
+  way, a call goes from 26.8 to 15.5 ns. A stock Chez defines the symbol and
+  inlines nothing.
+
+- **`--no-trace`, the option spelling of `JOLT_TRACE=0`.** `jolt --no-trace
+  run …` (or `-m`, `-M`, `repl`, any command; it must be the first argument)
+  compiles the app without tail-frame tracing, and `jolt build --no-trace` or
+  deps.edn `:jolt/build {:trace false}` builds an untraced binary. The
+  environment variable and the option go through the same test, so they turn
+  off the same things.
+
 - **`jolt.loader` caches context-private namespaces.** A namespace a loader
   reads from its own roots was compiled from source on every load, so every
   fresh context paid full compilation again (#1653: 20 small files took
@@ -178,9 +1092,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   18.1 ns to 5.9 ns an element, because it steps with `unchecked-inc-int`
   (#1647). The vars now take the JVM's arities, so `(apply unchecked-add-int
   [1 2 3])` raises an `ArityException` where it used to answer 6.
+- **The printer streams.** `pr`, `prn`, `print` and `print-method` write into
+  the target Writer as they walk the value, as core_print.clj does, instead of
+  building the whole text as a string first, and `pr-str` fills one string port.
+  Printing a large value to a file holds only the path to the value being
+  written; `pr-str` of a 480 KB nested value is about 12% faster, and `pr` to a
+  FileWriter or `io/writer` is as fast as `spit` of `pr-str`. A user
+  print-method reached mid-value is handed the Writer itself, and the built-in
+  methods in `(methods print-method)` are this printer. Output is unchanged.
 
 ### Performance
+- Printing no longer slows down for every value once any class-keyed `print-method` exists (a `java.util.UUID` or `java.time.Instant` printer from a library is common). Each printed value turned its class name into a class token and looked that up; the answer is now cached per class. `pr-str` of a 200k vector and a 20k map with a UUID printer installed: 225 ms before, 96 ms now (80 ms with no class-keyed methods).
+- `(reduce conj! (transient coll) v)` over a vector builds vectors, maps and sets several times faster: vector builds copy whole leaves, map and set builds walk them directly with a shorter hash path for integer keys, and the first few edits to a populated transient map or set copy a compact trie path instead of expanding it.
+- Hashing more distinct strings than the per-thread string-hash cache holds no longer clears the whole cache on the next miss; 2,049 strings hashed as fast as 2,048 instead of ~4x slower.
+- `clojure.string/escape` scans a string directly and copies unchanged spans.
+- `babashka.fs` name and parent operations on relative paths (`file-name`, `extension`, `strip-ext`, `parent`, `normalize`) skip a working-directory lookup.
 
+- **The runtime operations a reader leans on cost less (#1713).** Each was a
+  call into a generic procedure that the JVM answers in a few instructions:
+  - `(= a b)` answers a char, nil, boolean or keyword on the left, or a string
+    literal (what `case` over strings expands to), without the call;
+    `zero?`/`pos?`/`neg?` test a fixnum inline.
+  - `(nth coll i)` (destructuring is two of these) reads a vector or string
+    index inline, and the runtime's own `nth` no longer pays the java.util
+    shims' type tests for jolt's collections.
+  - `(str x)` of a string or a StringBuilder, `java.lang.Character`'s
+    predicates on an ASCII char, and `(.indexOf "literal" c)` (a `case` over the
+    literal) answer inline.
+  - `(merge nil m)` is `m` (merge has fixed arities, and `(conj {} m)` answers
+    `m`): ~450 to ~25 ns.
+  - A one-var `binding` pushes its frame without building a map.
+  - `(seq java.util.LinkedList)` no longer walks every registered seq arm.
+  - A constructor call site keeps the constructor it resolved, a `Matcher`'s
+    methods are kept per call site (`.group` ~175 to ~80 ns), and a protocol
+    call on a string, number, char, nil, boolean or keyword is cached by type
+    instead of resolved per call (a tools.reader reader is built in ~130 ns,
+    from ~400).
+  - An `aget`/`aset` hinted with the JVM's spelling of an array class
+    (`^"[Ljava.lang.Object;"`) takes the typed path.
+
+  On an Intel i5-4278U, tools.reader's `read-string` of a small form takes
+  ~45 us, from ~67, and rewrite-clj's `parse-string` about 15% less.
+
+- **A deftype's method or field reached through interop costs about what a
+  protocol call or a field load does (#1713).** `(.m ^T x)` on a deftype or
+  record walked every dispatch arm by name and built an argument vector on
+  every call (~240 ns); the call site now keeps the method the type declares,
+  keyed on its descriptor, the dispatch arms and the type-interface epoch
+  (~17 ns, against a protocol call's ~10). `(.-f x)` was a call into the
+  runtime and the checked per-arity accessor (~15 ns); the site's hit is now a
+  descriptor test and a load (~6 ns).
+
+- **A call through a var, a protocol call and a deftype field access drop
+  their redundant type tests (#1713).** The call read its var cell through the
+  record type's checked accessors, though the cell is always a var cell; the
+  protocol call recognised a record by comparing its type against each of the
+  family's ten in turn; and a method's field read, already guarded by the
+  receiver's descriptor, went through an accessor that tested the type again.
+  Each is now the bare load. A plain fn call goes from 6.2 to 4.9 ns and a
+  protocol call on a deftype from 12.5 to 10.4; rewrite-clj's `parse-string`
+  takes about 12% less time.
+
+- **A protocol method call on a record or deftype is one vector read (#1713).**
+  Each protocol method gets a fixnum id when it is defined, and a type's
+  descriptor holds a vector of its implementations indexed by that id. A call
+  site whose var is a protocol method reads the receiver's descriptor and the
+  vector slot inline, and calls the implementation directly; any other
+  receiver (a type extended later, `nil`, a host class, a redefined var) takes
+  the existing path, which went var, protocol fn, per-site cache, method. A
+  protocol call on a deftype now costs about 1.65x a plain fn call.
+  `deftype` and `defrecord` methods also bind only the fields their bodies
+  name, unless a body calls a macro from outside `clojure.core`, whose
+  expansion may name any field.
+- **A call through a var, a multimethod call, `str` of a StringBuilder and
+  `.charAt` cost less (#1713).** These are the per-operation costs a reader
+  pays for every character and node. A var-routed call read the var through
+  two more calls and checked the arity with an out-of-line library call
+  before Chez's own check. It now reads the root behind one flag test, and a
+  wrong-arity call raises from Chez's check with the JVM's ArityException
+  message: 16 ns down to 9.5. A multimethod is dispatched without a rest list,
+  and a keyword (or other identity) dispatch value hits a per-multifn inline
+  cache before the methods table: 172 ns down to 40. On an Intel i5-4278U,
+  rewrite-clj's `parse-string` and `parse-string-all` take ~16% less time
+  and `clojure.tools.reader/read-string` ~13% less.
+- **`get` on nil, a static method call and `String.indexOf` of a char cost
+  less (#1713).** `(get nil k)` and `(:k nil)` walked every registered `get`
+  arm before answering the default: 90 ns down to 15. A static method's
+  call-site cache is open-coded, so `Character/isWhitespace` takes ~15 ns
+  instead of ~24. `.indexOf` of a char scans without bounds checks, which
+  takes a short scan from ~54 ns to ~32.
+- **A dynamic var bound far down the binding stack reads as fast as one bound
+  at the top (#1713).** A read walked every binding frame on the thread to
+  find its binding, and readers bind one frame per nesting level. The
+  innermost frame now remembers its last four lookups: a bound var's read
+  went from ~32 ns to ~18, and from ~10x to ~1x beneath thirty frames.
+- **`try` and `finally` cost a small constant wherever they run (#1713).** A
+  catch was R6RS `guard`, which takes a full continuation: returning through
+  one copies the frames beneath it back in, so a `try` under a deep stack cost
+  about 1.2 µs. Both a catch and a finally also handed their body to a thunk,
+  a closure over every free variable of the body, allocated on each entry.
+  On Chez the body now runs in place behind a one-shot escape, with the same
+  handler and winder semantics. A flat `try` takes ~38 ns instead of ~111,
+  `binding` gets cheaper too, and `clojure.tools.reader/read-string`, which
+  enters a `try` for every form it reads, takes ~7% less time.
+- **A call of more than four arguments through a var costs what a short one
+  does (#1713).** There was no fixed-arity entry past four, so `jolt-invoke`
+  built a rest list, measured it and applied it: 42 ns for a six-argument
+  call against 6 for four. On Chez it is now open-coded at any arity.
+  `clojure.tools.reader`'s `read*` takes six arguments for every form it
+  reads.
+- **A record carries its metadata in a slot of its own (#1713).** `with-meta`
+  on a defrecord or deftype instance used to copy the record and insert it into
+  a weak identity table under a lock: ~440 ns, against ~32 for a vector, and
+  every record carrying metadata was a weak entry for the collector. It is now
+  one copy with the metadata in the record (~66 ns), and `assoc` keeps it.
+  rewrite-clj attaches position metadata to every node it parses:
+  `parse-string` takes ~30% less time and `parse-string-all` ~26% less. As on
+  the JVM, `with-meta` on a record always returns a new record. State images
+  move to format 15; older images still restore.
+- **A call through a var is open-coded at the call site (#1713).** On Chez,
+  compiled code reads the var's value and applies a procedure directly,
+  where it used to call into the runtime twice first. A protocol fn's inline
+  cache also reads its receiver's type inline. A var-routed call costs about
+  6 ns instead of 9.5, and a protocol call about 17.6 ns instead of 20.
 - **Indexed reads of a vector make no call past `nth`, `get` or the vector
   itself (#1652).** The in-range read and the trie descent are inline in
   each, where `(nth v i)` used to chain three calls to reach a `vector-ref`.
@@ -242,6 +1276,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load against the previous release.
 
 ### Fixed
+- `.ready` on `*in*` is false at end of input, as on the JVM. It answered true there, so a loop reading a `BufferedReader` over `*in*` while `.ready` never ended.
+- `LocalDate/parse` (and the ISO date reads built on it) is as strict as the JDK's: `2024-13-45` rolled over to 2025-02-14 and `2024-1-2` was accepted. Bad text throws `DateTimeParseException` with the JDK's message instead of a plain ex-info.
+- core.async: a put pending when its channel closes stays queued and completes when a take consumes it, as on the JVM. `close!` failed parked `alts!`/`>!` puts, a take on a closed channel answered nil before draining parked putters, a blocking `>!!` on a full buffer gave up at the close, and a `put!` could lose its value to a `close!` right after it.
+- `java.time.zone.ZoneRulesException` is a `DateTimeException`: it had no constructor and a `DateTimeParseException` catch clause caught it.
+- A direct-linked call can no longer race a redefinition of the var it calls. A call during the root write could run the old fn's code over the new closure, or keep calling the old fn afterwards.
+- Two processes sharing an AOT cache no longer fail with `FileNotFoundException` on a namespace's `.ct` sidecar: sidecars are written to a temp file and renamed into place.
+- `Character/isWhitespace`, `clojure.string/trim` and `blank?` follow Java's rule for U+001C..U+001F (whitespace) and U+0085 (not whitespace).
+- `alength` of something that is not an array throws `IllegalArgumentException`, as on the JVM.
+- `"".split(",")` and `(.split #"," "")` give `[""]`, not `[]`: with no match Java returns the input whole.
+- `(==)` with no arguments is an `ArityException`; it answered true.
+- `System/getProperty "user.home"` reads the passwd entry once, under a lock, instead of on every call through libc's shared `getpwuid` buffer, which another thread could overwrite mid-read.
+- The install script sends `$GITHUB_TOKEN`/`$GH_TOKEN` to the GitHub API only, and never on a command line where `ps` would show it (curl reads the header from stdin, wget from a private wgetrc). When the API is unreachable or rate-limited, the latest version comes from the releases page redirect.
+- Building with a Chez from a Nix profile on macOS: `bin/jolt` finds the dev boot cache when Chez is reached through a symlinked directory, and the launcher links Nix's lz4/zlib/ncurses/iconv.
+- A `recur` in a `deftype`, `defrecord` or `reify` method passes the method's arguments without `this`, as on the JVM; jolt wanted `this` as well, so JVM code recurring in a method did not compile.
+- Number interop answers as the JVM's boxes do: `.doubleValue`/`.floatValue` give a double and a Float (they gave the number back unchanged, so `(.doubleValue 1/2)` was `1/2`), `.intValue`/`.longValue`/`.shortValue`/`.byteValue` keep the low bits of an integer or ratio and saturate a double (NaN is 0) instead of failing on NaN or answering a bignum, `.compareTo` and a Ratio's `.numerator`/`.denominator` work, and BigInteger's `.bitLength`, `.negate`, `.abs`, `.signum` and shifts refuse a double or a ratio.
+- `Year/parse`, `YearMonth/parse` and `MonthDay/parse` are as strict as the JDK's and throw its `DateTimeParseException` messages; `YearMonth/parse "2024-13"` rolled over to 2025-01 and `MonthDay/parse` accepted any text. `(str (YearMonth/of 10000 1))` is `10000-01`, not `+10000-01`.
+- `(hash-map)` is the empty array map `{}`, as on the JVM; `(empty m)` of a hash map, and `PersistentHashMap/EMPTY`, are an empty hash map, so what is added next iterates in the JVM's order.
+- `get-in` with a not-found value answered it for a key mapped to an empty map.
+- A Float NaN is unequal to itself under `=`, like a double NaN.
+- `(binding [x] ...)` with an odd binding vector raises, as the JVM's does; it ran the body.
+- `Boolean/valueOf` and `Boolean/toString` exist, and a `Matcher` method given an argument it has no overload for raises instead of ignoring it.
+- With guarded inlining off (`JOLT_GUARDED_INLINE=0`) the AOT cache keeps its own generation, and the token a guarded splice carries now includes the pid, so two processes started in the same millisecond cannot share one.
+- `defprotocol` answers the protocol's name, as on the JVM; it answered its last method's var, or nil for a protocol with no methods.
+- A protocol call on a value whose type declares the protocol in its own body (`deftype`, `defrecord`, `reify`) ignores `with-redefs`, `alter-var-root` or a redef of the protocol fn, as the JVM's interface call does; extended types, nil and host values still call what the var holds (jolt-9l97g). The call site now also applies when an argument is not a plain local, and in a bare top-level expression.
+- On the Gambit host, `.indexOf`/`.lastIndexOf` of a char code no string holds raised from `integer->char`; they answer -1, as on Chez and the JVM.
+- `(.indexOf s c)` and `.lastIndexOf` given a char code no string holds (a lone surrogate, a negative int, or one past `0x10FFFF`) answered a `ClassCastException` from `integer->char`; they answer -1, as the JVM does.
+
+- **A multimethod no longer answers with a method it has since replaced.** On
+  arm64, a thread dispatching while another ran `defmethod` (or
+  `remove-method`, `.addMethod`, `prefer-method`) could see the new cache epoch
+  together with the old methods table, and cache the old method stamped as
+  current, so every later call took it. A stress run with one writer swapping a
+  method and three dispatching threads hit it 2 times in 200k swaps. Every
+  epoch bump now goes through one helper with a release fence, the dispatch
+  path reads the epoch with an acquire fence, and `make mmepochcheck` fails on a
+  bump that skips the helper.
 
 - **A stack trace keeps the caller a running tail call erased.** When `c`
   tail-called `k`, and `k` threw from a call of its own (into host code, or
@@ -260,6 +1330,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defrecord's `.entrySet` is `(set this)`, in hash order, as on the JVM,
   and `jsonista.core` writes a record's fields in that order, as Jackson
   does.
+
+- **Multimethod and record metadata costs a parser pays per node (#1713).** A
+  multimethod's inline cache keeps the last eight dispatch values rather than
+  four: rewrite-clj's `parse-next*` cycles through five to seven, so it missed
+  on every call and hashed into the methods table. `meta` and `with-meta` test
+  for a record first and read its type's IObj flags inline (`meta` on a record
+  ~14 -> ~5 ns). An indexed vector read's range test is open-coded. rewrite-clj
+  `parse-string` x5000: ~128 -> ~118 ms.
+
+- **A number's interop method is kept at its call site (#1713).** `(.bitLength
+  n)`, `(.longValue n)` and the rest of the number method surface walked the
+  method arms and a string compare per name on every call; tools.reader reads
+  every integer through them, so `read-number` of `"2"` goes from ~1.2 to
+  ~0.85 us. A number method given too few arguments, `(.shiftLeft 1)`, raises
+  the JVM's no-matching-method error rather than faulting in `car`.
 
 - **A deftype no longer answers for a host class that shares its simple
   name.** A qualified class with no constructor of its own, such as
@@ -309,6 +1394,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format, `readPassword` turns echo off and puts it back even on ^C, and
   `writer`, `reader`, `format`, `printf`, `flush`, `charset` and `isTerminal`
   are there too. Windows still answers nil.
+- **`.read` on `*in*` returns what stdin has, without waiting for a newline.**
+  A character read, or a bulk read into a char array, waited for a whole line
+  or end of input, so on a pipe that stayed open a program never saw input
+  with no newline after it. An LSP server reading a message body was the
+  common case. A read now waits for the first character only and takes the
+  rest that has arrived, up to the end of its line, and `.ready` is true when
+  stdin has input waiting. `read-line` after a character read still returns
+  the whole rest of that line.
 - **`user.home` comes from the passwd entry, as on the JVM.** It was `HOME`
   or `""`, so with `HOME` unset `(fs/expand-home "~/.config")` gave the
   relative path `.config`, and a tool defaulting to it read and wrote under
@@ -317,6 +1410,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/`). A `HOME` pointing somewhere else no longer moves it, which is the
   JVM's behaviour too. Windows still reads `HOME`. Android reads `HOME`
   first, because bionic's passwd entries are made up.
+- **A `defmacro` var carries `:line`, `:column` and `:file`.** A `defn`
+  beside it did, but the macro's var had none, so go-to-definition and
+  apropos-style tools couldn't point at a macro. A `:line` in the macro's
+  attr-map used to stand in for the real one. Now the form's position wins,
+  as on the JVM. That holds for a macro loaded from source and for one baked
+  into a built app or the image. clojure.core's macros, such as `when`, now
+  carry their line in jolt's own `clojure/core/*.clj` sources.
 - **Malformed special forms report the reference compiler's error.**
   `(throw)`, `(def)`, `(set! x)`, `(let* x 1)`, `(loop* x 1)` and
   `(letfn* x 1)` failed inside the analyzer and surfaced as
@@ -374,6 +1474,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument per collection, the walk ends at the shortest one, and the result
   stays lazy and is `()` when empty (#1664). A `(mapcat f)` xform
   takes several inputs per step too, as `(comp (map f) cat)` does on the JVM.
+- Starting several subprocesses at once as a process's first spawns no longer fails with "variable … is not bound": a lazily loaded host shim (here ProcessBuilder's) could have a method registered and called on one thread before another thread's load had defined what it calls. A lazy shim now defines everything before it registers anything (burinc/jolt#24).
+- An unbound-variable error names the variable instead of printing `#object[:object …]`.
+- `==` casts each pair to Number left to right as the JVM does: a nil operand throws `NullPointerException` (it threw `ClassCastException`), a non-number is the `ClassCastException` first, and `(== 1 2 :a)` answers false at the first unequal pair instead of throwing (burinc/jolt#6).
+- `(System/getProperty "user.name")` is the login name from the passwd entry for the process's uid, as on the JVM, so an unset or borrowed `USER` no longer makes it nil or someone else's; `"?"` when there is no entry (burinc/jolt#19).
+- `clojure.test` prints what the JVM's prints (burinc/jolt#18). `run-tests`,
+  `test-ns` and `run-test-var` print `Testing <ns>` before a namespace's tests,
+  and the summary reads `Ran N tests containing M assertions.` /
+  `F failures, E errors.` instead of jolt's own one-line wording. An `:error`
+  report prints the throwable through `print-cause-trace` (class, message,
+  ex-data, then frames) and takes its file and line from the top frame; the
+  `:default` report method prints the map. Each namespace counts into its own
+  `*report-counters*` ref, so a reporter reading it at `:end-test-ns` sees that
+  namespace's counts. `run-test-var` and `run-test` print the Testing line and
+  summary and return the summary map, `try-expr` reports the throwable itself as
+  `:actual`, and `clojure.stacktrace/print-stack-trace` indents frames by four
+  spaces as the JVM's does.
+
+- `run-tests` runs a namespace's tests in `(ns-interns ns)` order through
+  `test-all-vars`, as the reference's `test-ns` does, and `ns-interns` /
+  `ns-publics` iterate in the JVM's hash order (an array map of up to 8 entries
+  holds them in that order) instead of definition order. `(into {} m)`,
+  `(merge {} m)` and `(conj {} m)` of a hash map reversed its entries; they keep
+  its iteration order now.
+
+- Source positions follow the JVM's reader and compiler. A quoted list keeps
+  its reader `:line`/`:column`, nested lists too, so `(meta '(a b))` is
+  `{:line 1, :column 2}`, and `^meta` on a list takes the caret's position
+  unless the metadata names its own. `read-string`, `clojure.edn/read-string`
+  and a read off a plain `PushbackReader` stamp no position; a
+  `LineNumberingPushbackReader`, a file load, `load-string`, `-e`, the REPL and
+  nREPL still do. A syntax-quoted form keeps its position beside user metadata,
+  and a syntax-quoted map is a hash map in hash order. `eval` of a form with no
+  position compiles at the enclosing form's line and column in the enclosing
+  file, so its fns' frames, a def it makes and an `is` in it name that line, and
+  a def with no file of its own records `*file*` (or `"NO_SOURCE_FILE"`).
+  `macroexpand-1` returns the expansion without the call's position, and a
+  macro called with the wrong number of arguments throws the bare
+  ArityException, as the JVM's `macroexpand1` does.
+
+- The built-in nREPL server decodes a completion request's `prefix` and `ns` as UTF-8, so a non-ASCII symbol or namespace completes with no middleware loaded, as jolt-lang/nrepl#27 does for the middleware stack. A request that middleware already decoded is not decoded again.
+
+- `(methods print-method)` holds the JVM's built-in printers under the same
+  class keys (`IPersistentMap`, `ISeq`, `String`, `Object`, ...) and its
+  prefer-method pairs, so a library that borrows one, as duratom does with
+  `(get (methods print-method) clojure.lang.IPersistentMap)`, prints the map
+  instead of failing with "nil cannot be cast to IFn". A user method keyed on
+  an interface or superclass now applies through isa? and prefer-method as on
+  the JVM: one on `IPersistentMap` prints sorted maps too but not records.
+- A class-keyed print-method no longer slows printing of values it cannot
+  match: numbers, strings, keywords, vectors, hash maps and seqs skip the class
+  lookup once their classes are known not to reach a user method, and a
+  number, string, keyword, char or boolean skips the user-method lookup
+  entirely when nothing could match it. Printing a 10k-entry map of maps is
+  about 1.5x faster with or without class-keyed methods installed.
+- `(class (tagged-literal 'a 1))` is `clojure.lang.TaggedLiteral`; a sorted
+  map and a queue have their own type tags.
+- A namespace and a `PersistentQueue` print as the JVM prints them, Object's
+  `#object[clojure.lang.Namespace 0x… "user"]` form (the queue's `str` is
+  `clojure.lang.PersistentQueue@<hash>`), and `pprint` writes a queue as
+  `<-(1 2)-<`. An Eduction prints its seq only under `pr` (`print` writes its
+  `#object` form), and its print-method is a built-in keyed by the class.
+- A core.async channel prints as the JVM prints it,
+  `#object[clojure.core.async.impl.channels.ManyToManyChannel 0x… "…@…"]`,
+  instead of `#<channel>`.
+- Printing a host object is faster: `(class x)` walks only the class arms that
+  can claim the value's type, the `#object` form is built with one guard and
+  one string-append, and print-method's user lookup is skipped outright when
+  only the built-in printers are installed. `pr-str` of a fresh `java.io.File`
+  is about 0.65x what it was before this release.
+- Every value answers `java.lang.Object`'s `hashCode`, `equals`, `toString` and
+  `getClass`, so `(.hashCode #"a")` and the `str` of a record holding a regex
+  no longer throw "No matching field found".
+- Comparing a keyword with a class or another host value no longer walks every
+  registered equality arm: `(= String :a)` is 20x faster, and so is a lookup in
+  a multimethod table keyed by both classes and keywords.
+- **Redefining a protocol or a type follows the JVM.** Re-evaluating a
+  `defprotocol` drops the impls a `deftype`, `defrecord` or `reify` declared
+  inline before it (they implement the old interface), so calls on them miss and
+  `satisfies?`/`instance?` say no until the type is defined again; impls from
+  `extend`/`extend-type`/`extend-protocol` survive, as the JVM's merge keeps
+  them. Re-evaluating a `deftype`/`defrecord` makes a new class: instances built
+  before are not `instance?` of it, their `class`/`type` is not `=` to it, an old
+  record is not `=` to a new one, and they keep the old class's own and
+  extended impls instead of picking up the new definition's. A protocol call
+  compiled before the protocol was redefined still makes the old interface's
+  call, so a type that declared the protocol back then answers it there, and
+  `extenders`/`extends?` name a redefined type's extended old class as the JVM
+  does. A reify site keeps the protocols it was compiled against even when its
+  first instance is built after one of them is redefined.
+
+- **A reify's class is named as the JVM's compiler names it.** The enclosing
+  fn's class (a defn's `ns$f`, a nested `fn`, a named fn, a top-level form's
+  `ns$evalN`, the fn a `try` or expression-position `loop` is wrapped in, a
+  deftype's own class) with its trailing `__N` trimmed, then `$reify__N`, where
+  every reify used to be `ns$reify__N`. Only the counters differ from the JVM's.
+
+- **A fn's class is named as the JVM's compiler names it.** `(class f)` of a fn
+  literal is the class Compiler compiles it into -- `ns$mk$fn__N` inside `mk`, a
+  named fn's `name__N`, a let-bound fn's local, nested fns, letfn, `#()`, a
+  top-level form's `ns$evalN$fn__N` -- where every such fn was
+  `clojure.lang.AFunction$fn__0`, so class-keyed dispatch and `instance?` on a
+  fn's class now tell two sites apart. `.getName`, `str`, `pr-str`'s
+  `#object[...]`, stack trace elements and ArityException's fn name
+  (`my.ns/mk/fn--N`) agree. clojure.core's closures and transducers report the
+  reference's classes. Only the counters differ from the JVM's. Protocol
+  dispatch on a fn value memoizes on its class now (about 3x faster), and
+  `(class f)` of a fn literal is about 2x faster.
+- **`every-pred` and `some-fn` are the reference's**, arity for arity: the
+  predicates are tested in its order, so the first truthy value `some-fn`
+  answers and the side effects match, and `(every-pred)` is an arity error.
+  `(replace smap)` returns a transducer. An auto-gensym is spelled
+  `x__N__auto__`.
+
+- **`instance?` casts its type argument to `Class`.** A protocol (its map), a
+  keyword, a string or a quoted symbol throws the JDK's `ClassCastException`,
+  and nil the `NullPointerException`, where jolt answered as if the protocol
+  were its interface. The interface itself (`(instance? my.ns.P x)`) still
+  answers.
+- Printing a `jolt.loader` loader, or a hit from one, no longer overflows the stack once the loader has loaded something. A loader prints as `#object[jolt.loader.LoaderImpl 0x… "loader <id>"]`.
+
+- **The reference fns call a user type's `clojure.lang` interface methods.**
+  `swap!`, `reset!`, `compare-and-set!`, `swap-vals!`, `reset-vals!`,
+  `add-watch`, `remove-watch`, `set-validator!` and `get-validator` now work on
+  a deftype, defrecord or reify implementing `IAtom` / `IAtom2` / `IRef`, as on
+  the JVM, where each is one interface call (a durable atom like duratom's no
+  longer has to rebind them). `alter-meta!` / `reset-meta!` on a value that is
+  not an `IReference` throw the JVM's `ClassCastException` instead of storing
+  metadata `meta` never reads back, and `reset-meta!` answers the type's
+  `resetMeta`. A failed cast now names the interface the JVM does: `IAtom2` for
+  the `-vals!` pair, `IRef` for the watch/validator fns, and
+  `java.util.concurrent.Future` for `deref` (it was `IDeref` /
+  `IBlockingDeref`). The built-in atom path is unchanged.
+
+- **The unchecked ops follow the JVM's operand categories (jolt-cdjgi).**
+  `unchecked-add`, `-subtract`, `-multiply`, `-inc`, `-dec` and `-negate` wrap
+  only a long/long pair now. An operand past the long range takes BigInt
+  contagion, so `(unchecked-add 9223372036854775808N 1)` is
+  `9223372036854775809N`, not a wrapped long; a BigDecimal or Float operand is
+  ordinary arithmetic (they raised before), and `(unchecked-multiply 0 1.5)` is
+  `0.0`. The `-int` family casts each operand to int before the op, as the JVM
+  compiler does: `(unchecked-add-int 1/2 1/2)` is 0, and an operand outside int
+  range raises the ArithmeticException, unless the file sets `*unchecked-math*`,
+  where a compiled call wraps it. A nil operand of these ops and of `+`, `-`,
+  `*` and the comparisons is the NullPointerException even beside a
+  non-number, and `(int 9223372036854775808N)` is the IllegalArgumentException
+  naming the long range. A small BigInt such as `1N` still reads as a Long,
+  since jolt classes an integer by its range.
 
 ## [0.8.27] - 2026-11-12
 

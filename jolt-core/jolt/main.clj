@@ -122,6 +122,7 @@
                  [:config-files (:config-files env)]
                  [:config-user (:config-user env)]
                  [:config-project (:config-project env)]
+                 [:config-local (:config-local env)]
                  [:gitlibs-dir (:gitlibs-dir env)]
                  [:mvn-local-repo (:mvn-local-repo env)]
                  [:repro (:repro env)]
@@ -139,6 +140,7 @@
       (println (str "project_dir    = " (:project-dir env)))
       (println (str "user_deps      = " (or (:config-user env) "(skipped)")))
       (println (str "project_deps   = " (:config-project env)))
+      (println (str "local_deps     = " (or (:config-local env) "(skipped)")))
       (println (str "gitlibs_dir    = " (:gitlibs-dir env)))
       (println (str "mvn_local_repo = " (:mvn-local-repo env))))))
 
@@ -286,27 +288,64 @@
 ;; :main-opts and the command line combine exactly like the clj CLI, which
 ;; prepends the alias's :main-opts to the argv. `named?` goes to run-script!:
 ;; false only for a task running beside others under `run --parallel`.
-(declare repl-session run-script!)
+(declare repl-session run-script! run-main-opt)
 
 (defn- apply-main-opts [main-opts extra-args named?]
-  (let [opts (concat main-opts extra-args)]
+  ;; clojure.main's shape (main.clj `main`): any number of init options, in
+  ;; order, then at most one main option, whose trailing args are
+  ;; *command-line-args*. -i/--init loads a file (@path: a classpath resource),
+  ;; -e/--eval evaluates and prints each non-nil value; --report takes a target
+  ;; jolt does not use. The inits run after *command-line-args* is bound and
+  ;; before the main option acts, as initialize runs them.
+  (loop [opts (seq (concat main-opts extra-args)) inits []]
+    (let [o (first opts)]
+      (cond
+        (#{"-i" "--init"} o) (recur (nnext opts) (conj inits [:init (second opts)]))
+        (#{"-e" "--eval"} o) (recur (nnext opts) (conj inits [:eval (second opts)]))
+        (= "--report" o) (recur (nnext opts) inits)
+        :else (run-main-opt opts inits named?)))))
+
+;; One init option, as clojure.main's init-opt / eval-opt run it.
+(defn- run-init-opt [[kind arg] app-args]
+  (case kind
+    :eval (eval-expr-string arg app-args true)
+    :init (do (when (nil? arg)
+                (throw (ex-info "-i needs a path" {})))
+              (if (str/starts-with? arg "@")
+                (let [r (subs arg (if (str/starts-with? arg "@/") 2 1))
+                      url ((requiring-resolve 'clojure.java.io/resource) r)]
+                  (when-not url
+                    (throw (java.io.FileNotFoundException.
+                            (str "Could not locate " r " on classpath."))))
+                  (load-string (slurp url)))
+                (load-file (file-arg arg))))))
+
+(defn- run-inits [inits app-args]
+  (binding [*command-line-args* (seq (drop-end-of-options app-args))]
+    (doseq [i inits] (run-init-opt i app-args))))
+
+(defn- run-main-opt [opts inits named?]
+  (let [o (first opts)
+        args (rest opts)]
     (cond
-      (= "-m" (first opts)) (run-ns (second opts) (drop 2 opts))
-      (= "-e" (first opts)) (eval-expr-string (second opts) (drop 2 opts) true)
+      (#{"-m" "--main"} o)
+      (do (run-inits inits (rest args)) (run-ns (first args) (rest args)))
       ;; clojure.main -r / --repl: a REPL, the rest as *command-line-args*.
-      (#{"-r" "--repl"} (first opts))
-      (do (push-thread-bindings
-            {#'clojure.core/*command-line-args* (seq (drop-end-of-options (rest opts)))})
+      (#{"-r" "--repl"} o)
+      (do (run-inits inits args)
+          (push-thread-bindings
+            {#'clojure.core/*command-line-args* (seq (drop-end-of-options args))})
           (repl-session))
-      ;; clojure.main: a bare non-option first arg is a script path and the
-      ;; rest is *command-line-args* — `jolt -M file.clj a b`, or an alias
+      ;; no main option: the inits are the program
+      (nil? o) (run-inits inits nil)
+      ;; clojure.main: a bare non-option arg is a script path ("-" is stdin) and
+      ;; the rest is *command-line-args* -- `jolt -M file.clj a b`, or an alias
       ;; whose :main-opts name a script. Same load shape as `run FILE`.
-      (and (string? (first opts))
-           (seq (first opts))
-           (not (str/starts-with? (first opts) "-")))
-      (run-script! (first opts) (rest opts) named?)
+      (and (string? o) (seq o)
+           (or (= "-" o) (not (str/starts-with? o "-"))))
+      (do (run-inits inits args) (run-script! o args named?))
       :else (throw (ex-info (str "unsupported :main-opts " (pr-str (vec opts))
-                                 " (accepted: -m NS, -e EXPR, -r, or a script FILE)")
+                                 " (accepted: init options -i PATH and -e EXPR, then -m NS, -r, or a script FILE)")
                             {:main-opts (vec opts)})))))
 
 (defn- parse-aliases [s]            ; "-M:a:b" / ":a:b" -> [:a :b]
@@ -739,7 +778,7 @@
 ;; needs no dependency expansion, and a project whose deps don't resolve should
 ;; still be able to say what it can run.
 (defn- cmd-tasks []
-  ((requiring-resolve 'jolt.tasks/list-tasks!) (deps/project-tasks (project-dir))))
+  ((requiring-resolve 'jolt.tasks/list-tasks!) (deps/project-tasks (project-dir) *cli-repro?*)))
 
 ;; `jolt completions <shell>` prints the function to source; `completions tasks`
 ;; prints the name/doc lines that function asks for when a project's config
@@ -752,7 +791,7 @@
       nil (throw (ex-info "completions needs a shell: zsh, bash, fish, or tasks" {}))
       "tasks" (run! println
                     ((requiring-resolve 'jolt.completions/task-lines)
-                     (deps/project-tasks (project-dir))))
+                     (deps/project-tasks (project-dir) *cli-repro?*)))
       (print ((requiring-resolve 'jolt.completions/snippet) what "jolt")))))
 
 ;; `jolt org.babashka.cli/completions complete --shell zsh -- <task> <token>…`
@@ -775,7 +814,7 @@
       ;; back here, and for which tasks
       "snippet" (print ((requiring-resolve 'jolt.completions/snippet) shell "jolt"))
       "complete"
-      (let [tasks (try (deps/project-tasks (project-dir)) (catch :default _ nil))
+      (let [tasks (try (deps/project-tasks (project-dir) *cli-repro?*) (catch :default _ nil))
             t     (and (seq toks) (get tasks (symbol (first toks))))]
         ;; a handler lives on the project's paths, or on the task's own, so the
         ;; project is applied before the tree is described — tolerantly (a task
@@ -804,7 +843,7 @@
 ;; a small file read rather than loading the task runner on every command.
 ;; A task that does not claim the name is warned about on the way past.
 (defn- builtin-overridden? [cmd]
-  (let [t (get (deps/project-tasks (project-dir)) (symbol cmd))]
+  (let [t (get (deps/project-tasks (project-dir) *cli-repro?*) (symbol cmd))]
     (cond
       (nil? t)                             false
       (and (map? t) (:override-builtin t)) (not (some #{(override-key cmd)} (override-active)))
@@ -1059,6 +1098,10 @@
      ;; No effect on --library (build-shared is always signable) or on
      ;; a --target build (already forced onto this path).
      :signable? (boolean (some #{"--signable"} flag-args))
+     ;; tail-frame tracing is baked into a built binary by default; --no-trace
+     ;; (or deps.edn :jolt/build {:trace false}, or JOLT_TRACE=0 in the build's
+     ;; environment) bakes an untraced one: no entry prologue, no site markers.
+     :trace? (not (or (some #{"--no-trace"} flag-args) (false? (:trace build))))
      :profile (build-profile flag-args pdir)}))
 
 (defn- cmd-build [more]
@@ -1073,6 +1116,7 @@
                         {:target target})))
       ;; embed-dirs (absolute) are walked + baked into the binary by the driver;
       ;; project-paths (relative) become runtime io/resource roots (ship-alongside).
+      (when-not (:trace? opts) (jolt.host/set-trace-off!))
       (let [natives (natives/build-natives resolved opts)]
         (if library?
           (jolt.host/build-library entry out mode natives embed-dirs project-paths direct-link? tree-shake? target target-pack boot-mode allow-dynamic nil include-names exclude-resources profile)
@@ -1153,7 +1197,7 @@
      "                         executable script, with or without an extension"]]
    ["build"
     ["  build -m NS [-o OUT] [--opt|--dev] [--direct-link] [--closed-world] [--dynamic]"
-     "              [--boot fast|small|plain] [--library] [--signable]"
+     "              [--boot fast|small|plain] [--library] [--signable] [--no-trace]"
      "              [--include NS] [--target MACHINE --target-pack DIR]"
      "                         compile a standalone binary, or with --library a"
      "                         shared object an embedder dlopens and calls through"
@@ -1224,6 +1268,8 @@
   (println "  -X:alias [ns/fn] [k v …]  invoke :exec-fn (or ns/fn) with :exec-args")
   (println "  -T:alias [ns/fn] [k v …]  like -X, with the project paths/deps replaced")
   (println "  -Sdeps '<edn>' …       merge an extra deps.edn map, run the rest")
+  (println "  --no-trace …           first option only: compile without tail-frame")
+  (println "                         tracing (as JOLT_TRACE=0 does), run the rest")
   (println)
   (println "The report options answer something about the project and run nothing.")
   (println "Each takes the aliases around it, so -A:test -Spath and -Spath -M:test")

@@ -11,10 +11,11 @@
 ;; (a code point, -1 at end of input), all off one cursor so they interleave.
 ;; clojure.main/repl-read is what wants the character: it skips whitespace one
 ;; character at a time before handing the rest to a form read. The default *in*
-;; reads real stdin through the host seam __stdin-read-line, with a shared
-;; leftover buffer; with-in-str rebinds *in* to a string reader over one
-;; atom-held buffer, so (read) consumes its form and a following (read-line)
-;; returns the REST of that line — as in Clojure.
+;; reads real stdin through the host seams __stdin-read-line and, for a
+;; character read, __stdin-read-chunk, with a shared leftover buffer;
+;; with-in-str rebinds *in* to a string reader over one atom-held buffer, so
+;; (read) consumes its form and a following (read-line) returns the REST of
+;; that line — as in Clojure.
 ;;
 ;; Forms are parsed by the host seam __parse-next-numbered (one form + the index
 ;; just past it, nil when only whitespace remains). A JVM *in* is a
@@ -73,7 +74,7 @@
 
 ;; read(cbuf, off, len): the first character blocks as .read does, the rest
 ;; come while more? says the reader already holds them, so over stdin this
-;; answers what has arrived instead of waiting on the next line. The count, or
+;; answers what has arrived, up to the end of its line. The count, or
 ;; -1 at end of input.
 (defn- read-chars [rdr more? buf off len]
   (if (zero? len)
@@ -187,6 +188,20 @@
     (let [l (str line "\n")] (__numbering-advance! stdin-numbering l 0 (count l))))
   line)
 
+;; A character read can leave the buffer holding part of a line. A form parse
+;; must not see that part as the whole input, or a token cut off at its end
+;; reads short ("ab" of "abc"), so the rest of the line comes first. nil from
+;; the line seam means the input ended there, unterminated.
+(defn- stdin-finish-line! []
+  (let [sp @stdin-buf
+        s (nth sp 0)
+        p (nth sp 1)]
+    (when (and (< p (count s)) (not= \newline (nth s (dec (count s)))))
+      (let [line (__stdin-read-line)]
+        (when-not (nil? line)
+          (stdin-drop! s p)
+          (reset! stdin-buf [(str (subs s p) line "\n") 0]))))))
+
 (def ^:dynamic *in*
   (reify IReader
     (-read-line [_]
@@ -198,13 +213,20 @@
         (if (< p (count s))
           (let [i (str-find "\n" s p)]
             (if (nil? i)
-              (do (stdin-drop! s (count s)) (reset! stdin-buf ["" 0]) (subs s p))
+              ;; a character read left part of a line: the rest of it is still
+              ;; to come off stdin, and nil there means it ended unterminated
+              (let [head (subs s p)]
+                (stdin-drop! s (count s))
+                (reset! stdin-buf ["" 0])
+                (let [tail (stdin-line! (__stdin-read-line))]
+                  (if (nil? tail) head (str head tail))))
               (do (reset! stdin-buf [s (inc i)]) (subs s p i))))
           (do (stdin-drop! s (count s))
               (reset! stdin-buf ["" 0])
               (stdin-line! (__stdin-read-line))))))
     (-read-form [_]
       (reader-open! stdin-closed)
+      (stdin-finish-line!)
       (loop []
         (let [sp @stdin-buf
               s (nth sp 0)
@@ -221,6 +243,7 @@
                 (nth r 0))))))
     (-read+string [_ eof-error? eof-value]
       (reader-open! stdin-closed)
+      (stdin-finish-line!)
       (loop []
         (let [sp @stdin-buf
               s (nth sp 0)
@@ -242,8 +265,9 @@
     ;; A character comes off the same buffer the form and line ops read, so the
     ;; three interleave: clojure.main/repl-read skips whitespace character by
     ;; character, unreads the one that ended the skip, and then reads a form
-    ;; from the very next position. The pull when the buffer runs dry blocks on
-    ;; a line, as .read on the JVM's stdin reader blocks on input.
+    ;; from the very next position. The pull when the buffer runs dry takes
+    ;; what stdin already holds, up to the end of its line, and waits only
+    ;; for the first character, as .read on the JVM's stdin reader does.
     (-read-char [_]
       (reader-open! stdin-closed)
       (loop []
@@ -255,11 +279,11 @@
               (reset! stdin-buf [s (inc p)])
               (line-start! stdin-line-start (or (= c 10) (= c 13)))
               c)
-            (let [line (__stdin-read-line)]
-              (if (nil? line)
+            (let [chunk (__stdin-read-chunk)]
+              (if (nil? chunk)
                 (do (line-start! stdin-line-start true) -1)
                 (do (stdin-drop! s (count s))
-                    (reset! stdin-buf [(str line "\n") 0]) (recur))))))))
+                    (reset! stdin-buf [chunk 0]) (recur))))))))
     (-unread-char [_ _c]
       (let [sp @stdin-buf
             p (nth sp 1)]
@@ -275,8 +299,8 @@
     (readLine [this] (-read-line this))
     (unread [this c] (reader-open! stdin-closed) (-unread-char this c))
     (atLineStart [this] (-at-line-start? this))
-    ;; only what is already buffered is known to be there
-    (ready [_] (reader-open! stdin-closed) (stdin-more?))
+    ;; buffered here, or waiting on stdin for the next read to take
+    (ready [_] (reader-open! stdin-closed) (or (stdin-more?) (__stdin-ready?)))
     (close [_] (reset! stdin-closed true) nil)))
 
 (defn read-line
@@ -367,16 +391,15 @@
                            (if (keyword? t) t (__type-tag x)))))
 
 (defmethod print-method :default [o w]
-  (.write w (__pr-str1 o))
+  (__pr-to o w)
   nil)
 
-;; print-dup: jolt has one print representation, so dup routes to print-method
-;; (as Clojure's default does for most types).
-(defmulti print-dup (fn [x writer]
-                      (let [t (get (meta x) :type)]
-                        (if (keyword? t) t (__type-tag x)))))
-
-(defmethod print-dup :default [o w] (print-method o w))
+;; print-dup dispatches on (class x) as core.clj's does, through the class
+;; lattice, so a method keyed by an interface reaches its implementers. Its
+;; methods are core_print.clj's, at the end of this file. There is no :default:
+;; a value with no method throws the multimethod's IllegalArgumentException
+;; rather than print as something that would not read back.
+(defmulti print-dup (fn [x writer] (class x)))
 
 ;; The reference's private print entry, reached by libraries through
 ;; @#'clojure.core/pr-on (nREPL's print middleware binds it as its default
@@ -420,19 +443,19 @@
           (recur ns entries (conj kvs [(strip-ns k) v])))
         [ns kvs]))))
 
-;; An Eduction prints as the seq it yields — (2 3 4), not the deftype's fields.
-;; Registered against the type rather than derived from its interfaces because
-;; that is what the JVM does: a bare Sequential/Seqable deftype prints as
-;; #object[…] there, and only Eduction renders sequentially.
-;; (dispatch value is the __type-tag STRING for a deftype, not a symbol)
-(defmethod print-method "clojure.core.Eduction" [e w]
-  (print-method (apply list (seq e)) w))
+;; An Eduction prints as the seq it yields — (2 3 4), not the deftype's fields —
+;; and only under pr: print writes its #object form. That is the JVM's built-in
+;; print-method for clojure.core.Eduction, so it is registered with the other
+;; built-ins under the class (java/io-streams.ss) and rendered natively
+;; (printing.ss eduction-write!), which keeps the user-method lookup off every
+;; printed value. A bare Sequential/Seqable deftype prints as #object[…] on the
+;; JVM; only Eduction renders sequentially.
 
-;; A channel has no readable form, so name it here; every other host type the
-;; printer knows renders through :default, which is the native renderer.
-(defmethod print-method :jolt/chan [c w]
-  (.write w "#<channel>")
-  nil)
+;; A channel has no print-method of its own on the JVM: it prints Object's
+;; #object form over its toString, as every host type here does through the
+;; native renderer (:default). Its toString is the class and identity hash
+;; (java/async.ss). There used to be a :jolt/chan method writing #<channel>,
+;; which the JVM never prints.
 
 ;; Minimal synchronous agent shim. jolt has no thread pool or STM, so this is
 ;; enough for libraries that hold an agent but don't depend on asynchronous
@@ -528,10 +551,6 @@
      (with-meta (persistent! (stream-transduce! xform conj! (transient to) stream)) (meta to))
      (stream-transduce! xform conj to stream))))
 
-;; print-simple — print without print-method dispatch (no print-meta in jolt).
-(defn print-simple [o w]
-  (.write w (str o)))
-
 ;; StackTraceElement->vec — [class method file line], class and method as
 ;; symbols, as the reference returns them.
 (defn StackTraceElement->vec [o]
@@ -614,3 +633,167 @@
   {:deprecated "1.1"}
   [url]
   (throw (UnsupportedOperationException. "add-classpath: not supported in Jolt")))
+
+;; --- print-dup -----------------------------------------------------
+;; core_print.clj's print-dup methods and the helpers they share with its
+;; print-methods. The printer dispatches every value through print-dup while
+;; *print-dup* is on (java/io-streams.ss: pr, print, pr-str, str and
+;; print-method's :default enter it, and printing.ss sends a collection's
+;; elements back here), so a method that hands a value to print-method gets jolt's
+;; native printer for it and that printer's elements come back to print-dup.
+
+;; ^meta before o, under *print-dup* or a readable *print-meta*; a lone :tag
+;; prints as the tag
+(defn- print-meta [o w]
+  (when-let [m (meta o)]
+    (when (and (pos? (count m))
+               (or *print-dup*
+                   (and *print-meta* *print-readably*)))
+      (.write w "^")
+      (if (and (= (count m) 1) (:tag m))
+        (pr-on (:tag m) w)
+        (pr-on m w))
+      (.write w " "))))
+
+(defn print-simple [o w]
+  (print-meta o w)
+  (.write w (str o)))
+
+;; print-sequential's element walk: at most limit elements (nil for all), then
+;; "..." when more remain
+(defn- print-elements [print-one sep limit xs w]
+  (loop [[x & xs] xs
+         n limit]
+    (if (and n (zero? n))
+      (.write w "...")
+      (do
+        (print-one x w)
+        (when xs
+          (.write w sep)
+          (recur xs (when n (dec n))))))))
+
+(defn- print-sequential [begin print-one sep end sequence w]
+  (binding [*print-level* (and (not *print-dup*) *print-level* (dec *print-level*))]
+    (if (and *print-level* (neg? *print-level*))
+      (.write w "#")
+      (do
+        (.write w begin)
+        (when-let [xs (seq sequence)]
+          (print-elements print-one sep (and (not *print-dup*) *print-length*) xs w))
+        (.write w end)))))
+
+(defn- print-map [m print-one w]
+  (print-sequential
+    "{"
+    (fn [[k v] w]
+      (print-one k w)
+      (.write w " ")
+      (print-one v w))
+    ", "
+    "}"
+    (seq m) w))
+
+(defmethod print-dup nil [o w] (print-method o w))
+(defmethod print-dup clojure.lang.Keyword [o w] (print-method o w))
+
+(defmethod print-dup Number [o w]
+  (print-ctor o
+              (fn [o w]
+                (print-dup (str o) w))
+              w))
+
+(defmethod print-dup clojure.lang.Fn [o w]
+  (print-ctor o (fn [o w]) w))
+
+(prefer-method print-dup clojure.lang.IPersistentCollection clojure.lang.Fn)
+(prefer-method print-dup java.util.Map clojure.lang.Fn)
+(prefer-method print-dup java.util.Collection clojure.lang.Fn)
+
+(defmethod print-dup Boolean [o w] (print-method o w))
+(defmethod print-dup clojure.lang.Symbol [o w] (print-method o w))
+
+(defmethod print-dup clojure.lang.Var [o w]
+  (.write w (str "#=(var " (.name (.ns o)) "/" (.sym o) ")")))
+
+(defmethod print-dup clojure.lang.ISeq [o w] (print-method o w))
+(defmethod print-dup clojure.lang.IPersistentList [o w] (print-method o w))
+(prefer-method print-dup clojure.lang.ISeq clojure.lang.IPersistentCollection)
+(prefer-method print-dup clojure.lang.ISeq java.util.Collection)
+
+(defmethod print-dup java.util.Collection [o w]
+  (print-ctor o #(print-sequential "[" print-dup " " "]" %1 %2) w))
+
+(defmethod print-dup clojure.lang.IPersistentCollection [o w]
+  (print-meta o w)
+  (.write w "#=(")
+  (.write w (.getName (class o)))
+  (.write w "/create ")
+  (print-sequential "[" print-dup " " "]" o w)
+  (.write w ")"))
+
+(prefer-method print-dup clojure.lang.IPersistentCollection java.util.Collection)
+
+(defmethod print-dup String [s w] (print-method s w))
+
+(defmethod print-dup java.util.Map [m w]
+  (print-ctor m #(print-map %1 print-dup %2) w))
+
+(defmethod print-dup clojure.lang.IPersistentMap [m w]
+  (print-meta m w)
+  (.write w "#=(")
+  (.write w (.getName (class m)))
+  (.write w "/create ")
+  (print-map m print-dup w)
+  (.write w ")"))
+
+(defmethod print-dup clojure.lang.IRecord [r w]
+  (print-meta r w)
+  (.write w "#")
+  (.write w (.getName (class r)))
+  (if *verbose-defrecords*
+    (print-map r print-dup w)
+    (print-sequential "[" pr-on ", " "]" (vals r) w)))
+
+(prefer-method print-dup clojure.lang.IRecord clojure.lang.IPersistentMap)
+(prefer-method print-dup clojure.lang.IPersistentCollection java.util.Map)
+(prefer-method print-dup clojure.lang.IRecord clojure.lang.IPersistentCollection)
+(prefer-method print-dup clojure.lang.IRecord java.util.Map)
+
+(defmethod print-dup Character [c w] (print-method c w))
+(defmethod print-dup Long [o w] (print-method o w))
+(defmethod print-dup Double [o w] (print-method o w))
+(defmethod print-dup clojure.lang.Ratio [o w] (print-method o w))
+(defmethod print-dup java.math.BigDecimal [o w] (print-method o w))
+(defmethod print-dup clojure.lang.BigInt [o w] (print-method o w))
+(defmethod print-dup clojure.lang.PersistentHashMap [o w] (print-method o w))
+(defmethod print-dup clojure.lang.PersistentHashSet [o w] (print-method o w))
+(defmethod print-dup clojure.lang.PersistentVector [o w] (print-method o w))
+(defmethod print-dup clojure.lang.LazilyPersistentVector [o w] (print-method o w))
+
+(defmethod print-dup Class [c w]
+  (cond
+    (.isPrimitive c) (do
+                       (.write w "#=(identity ")
+                       (.write w (primitives-classnames c))
+                       (.write w ")"))
+    (.isArray c) (do
+                   (.write w "#=(java.lang.Class/forName \"")
+                   (.write w (.getName c))
+                   (.write w "\")"))
+    :else (do
+            (.write w "#=")
+            (.write w (.getName c)))))
+
+(defmethod print-dup java.util.regex.Pattern [p w] (print-method p w))
+
+(defmethod print-dup clojure.lang.Namespace [n w]
+  (.write w "#=(find-ns ")
+  (print-dup (.name n) w)
+  (.write w ")"))
+
+;; clojure/instant.clj's and clojure/uuid.clj's, which print the #inst and #uuid
+;; literals print-method writes
+(defmethod print-dup java.util.Date [o w] (print-method o w))
+(defmethod print-dup java.util.Calendar [o w] (print-method o w))
+(defmethod print-dup java.sql.Timestamp [o w] (print-method o w))
+(defmethod print-dup java.util.UUID [o w] (print-method o w))

@@ -361,12 +361,12 @@
     ((string=? method-name "addMethod")
      (jolt-with-mutex mm-tbl-mu
        (hashtable-set! (jolt-multifn-methods obj) (car rest) (cadr rest))
-       (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1)))
+       (mm-epoch-bump!))
      obj)
     ((string=? method-name "removeMethod")
      (jolt-with-mutex mm-tbl-mu
        (hashtable-delete! (jolt-multifn-methods obj) (car rest))
-       (set! jolt-mm-epoch (fx+ jolt-mm-epoch 1)))
+       (mm-epoch-bump!))
      obj)
     ((string=? method-name "getMethod")
      (or (hashtable-ref (jolt-multifn-methods obj) (car rest) #f) jolt-nil))
@@ -794,7 +794,7 @@
       ((rd-coll-mutator? obj method-name (length rest))
        (rd-coll-mutator-call obj method-name rest))
       ;; universal Object methods on any remaining value (boolean, etc.).
-      ((string=? method-name "toString") (jolt-str-render-one obj))
+      ((string=? method-name "toString") (jolt-str-one obj))
       ;; a seq or list is a java.util.List: List.hashCode (31*h + e.hashCode),
       ;; which an infinite one refuses (CLJ-2839) — not its hasheq
       ((string=? method-name "hashCode")
@@ -1280,6 +1280,19 @@
        (not (eq? k jolt-deftype-kw))
        (fx=? (jrdesc-nfields (jrec-desc obj)) n)
        (eqv? (jrec-field-index obj k) i)))
+;; A deftype method's one receiver test (lambda.clj self-receiver, #1713): OBJ
+;; is a record whose layout puts each field the method reads -- LAYOUT is
+;; #(k i n ...) -- where the method reads it. A descriptor that passes is kept in
+;; SITE, so the next call's test is one eq?. #f sends every read to jrec-field.
+(define (jrec-self-site-fill! site obj layout)
+  (let ((len (vector-length layout)))
+    (let loop ((j 0))
+      (cond
+        ((fx=? j len) (set-box! site (jrec-desc obj)) #t)
+        ((jrec-own-slot-layout? obj (vector-ref layout j) (vector-ref layout (fx+ j 1))
+                                (vector-ref layout (fx+ j 2)))
+         (loop (fx+ j 3)))
+        (else #f)))))
 (define (jrec-own-slot-miss site obj k i n)
   (if (jrec-own-slot-layout? obj k i n)
       (begin (set-box! site (jrec-desc obj)) (jrec-field-ref obj i))
@@ -1313,16 +1326,27 @@
 (def-var! "clojure.core" "__deftype-slot" jrec-slot-read)
 (def-var! "clojure.core" "__deftype-mutable-slot" jrec-slot-read)
 (def-var! "clojure.core" "__deftype-slot-set!" jrec-slot-write!)
+;; The box holds (desc . place): the receiver's descriptor and where the field
+;; sits in a record of it -- the record slot (4 + I, after the base's desc ext
+;; hasheq meta) for a type of up to eight fields, or -1 - I into jrec*'s value
+;; vector. A descriptor fixes its type's field count, so the place holds while
+;; the receiver has that descriptor. Chez's emitted code reads the hit itself,
+;; as an unchecked load (rt.ss jrec-field-site-ref/i); this file is shared with
+;; the Gambit runtime, so the read here goes through the field's index.
+(define (jrec-field-place obj i)
+  (if (fx<=? (jrdesc-nfields (jrec-desc obj)) 8) (fx+ 4 i) (fx- -1 i)))
+(define (jrec-place-ref o p)
+  (jrec-field-ref o (if (fx<? p 0) (fx- -1 p) (fx- p 4))))
 (define (jrec-field-site-ref site obj method-name)
   (let ((c (unbox site)))
     (if (and c (jrec? obj) (eq? (jrec-desc obj) (car c))
              (not (fx=? (caar method-dispatch-arms) arm-priority-user-override)))
-        (jrec-field-ref obj (cdr c))
+        (jrec-place-ref obj (cdr c))
         (let ((slot (and (jrec? obj)
                          (not (fx=? (caar method-dispatch-arms) arm-priority-user-override))
                          (jrec-dash-field-index obj method-name))))
           (if slot
-              (begin (set-box! site (cons (jrec-desc obj) slot))
+              (begin (set-box! site (cons (jrec-desc obj) (jrec-field-place obj slot)))
                      (jrec-field-ref obj slot))
               (record-method-dispatch obj method-name (jolt-vector)))))))
 
@@ -1404,20 +1428,26 @@
   (or (reify-method-ref x "hasheq") (reify-method-ref x "hashCode")))
 (register-hash-arm! (lambda (x) (and (jreify? x) (reify-declared-hash x) #t))
                     (lambda (x) (call-declared-hash (reify-declared-hash x) x)))
-;; = on a reify or proxy follows Util.equiv. pcequiv asks the left operand's
-;; equiv when it is a collection, so a jolt collection on the left decides by its
-;; own rules (and a reify is none of them), and only otherwise the right
-;; operand's declared equiv. Neither a collection: the LEFT operand's equals,
-;; else identity. (= 1 r) is Long.equals and stays false whatever r declares.
+;; = on a reify or proxy follows Util.equiv(Object, Object): nil on the left is
+;; = only to nil; then if EITHER operand is an IPersistentCollection, pcequiv
+;; asks the left one's equiv when it is one, else the right one's; only when
+;; neither is does the LEFT operand's equals decide, else identity. So
+;; (= r [1]) is the vector's answer, false, whatever r's equals says, while
+;; (= r (java.util.ArrayList.)) is r's equals. A jolt collection compares false
+;; against a reify; a record or deftype answers through its own arm's rules
+;; (records-coll.ss jrec-equiv=?). (= 1 r) is Long.equals, false.
+(define (eq-ipc? x)
+  (jolt-truthy? (jolt-invoke1 (var-deref "clojure.core" "coll?") x)))
 (define (reify-equiv=? a b)
-  (let ((ea (reify-method-ref a "equiv")))
-    (cond (ea (jolt-truthy? (jolt-invoke ea a b)))
-          ((and (not (jreify? a))
-                (or (jolt-sequential? a) (jolt-lazyseq? a) (jolt-coll? a)))
-           #f)
-          ((reify-method-ref b "equiv") => (lambda (eb) (jolt-truthy? (jolt-invoke eb b a))))
-          ((reify-method-ref a "equals") => (lambda (m) (jolt-truthy? (jolt-invoke m a b))))
-          (else (eq? a b)))))
+  (cond ((eq? a b) #t)
+        ((jolt-nil? a) #f)
+        ((reify-method-ref a "equiv") => (lambda (ea) (jolt-truthy? (jolt-invoke ea a b))))
+        ((and (not (jreify? a)) (eq-ipc? a)) (and (jrec? a) (jrec-equiv=? a b)))
+        ((reify-method-ref b "equiv") => (lambda (eb) (jolt-truthy? (jolt-invoke eb b a))))
+        ((and (not (jreify? b)) (eq-ipc? b)) (and (jrec? b) (jrec-equiv=? b a)))
+        ((reify-method-ref a "equals") => (lambda (m) (jolt-truthy? (jolt-invoke m a b))))
+        ((jrec? a) (jrec-equiv=? a b))
+        (else #f)))
 ;; Claimed only when a side declares something that can answer: a reify that
 ;; overrides neither is = only to itself, and leaving it unclaimed keeps it on
 ;; the identity hash (jolt-identity-hashed?) instead of the record catch-all.
@@ -1481,8 +1511,8 @@
       (let* ((names (seq->list (jolt-nth shape 0)))
              (slots (make-hashtable string-hash string=?))
              (protos (reify-proto-names (seq->list (jolt-nth shape 1))))
-             ;; #(slots protos class-name impls-noted?)
-             (layout (vector slots protos (and (fx>? (jolt-count shape) 2) (jolt-nth shape 2)) #f)))
+             ;; #(slots protos class-name impls-noted? method-names)
+             (layout (vector slots protos (and (fx>? (jolt-count shape) 2) (jolt-nth shape 2)) #f names)))
         (let loop ((ns names) (i 0))
           (unless (null? ns)
             (hashtable-set! slots (car ns) i)
@@ -1491,8 +1521,56 @@
         ;; it to every instance; code compiled before that reports the shared
         ;; placeholder
         (when (vector-ref layout 2) (reify-class-graph-hook (vector-ref layout 2) protos))
-        (jolt-with-mutex reify-shape-mu (hashtable-set! reify-shape-memo shape layout))
+        (jolt-with-mutex reify-shape-mu
+          (hashtable-set! reify-shape-memo shape layout)
+          (hashtable-set! reify-site-protos slots protos))
         layout)))
+;; A reify site's shape, laid out as the code holding the site LOADS (the reify
+;; macro wraps it in load-time-value): that is when the JVM compiles the reify's
+;; class against the protocol interfaces of the moment, so a protocol redefined
+;; after it is one the site does not implement, whenever its first instance is
+;; built (forget-reify-protocol! finds the layout).
+;; It answers the LAYOUT, which the site then hands make-reified-at in place of
+;; the shape, so building an instance skips the shape memo's lookup.
+(def-var! "jolt.host" "reify-site-shape" (lambda (shape) (reify-shape-layout shape)))
+;; Every reify site's slot table -> its protocols, held as long as an instance
+;; the site built is (each holds the table), whether or not the site's shape
+;; literal still is: what a protocol redefinition walks
+;; (forget-reify-protocol!).
+(define reify-site-protos (make-weak-eq-hashtable))
+;; A protocol REDEFINED after a reify site was laid out: the site's class was
+;; compiled against the old protocol interface, so its instances -- those built
+;; before and those it builds after -- no longer implement the protocol
+;; (protocols.ss forget-protocol-declarations!). Recorded per site, by the
+;; site's slot table, which every instance it builds shares (the car of its
+;; methods); a reify form evaluated again is a new site and implements the new
+;; protocol. Copy-on-write like the retired descriptors (records.ss): written
+;; only by a redefinition, #f until the first.
+(define reify-retired-box (box #f))
+;; Entries are (proto . gen): the generation the site implemented.
+(define (reify-retired-entries obj)
+  (let ((t (unbox reify-retired-box)))
+    (if (and t (jreify? obj)) (hashtable-ref t (car (jreify-methods obj)) '()) '())))
+(define (reify-retired-protos obj) (map car (reify-retired-entries obj)))
+(define (reify-proto-retired-at? obj proto gen)
+  (and (member (cons proto gen) (reify-retired-entries obj)) #t))
+(define (reify-proto-retired? obj proto)
+  (and (unbox reify-retired-box) (member proto (reify-retired-protos obj)) #t))
+(define (forget-reify-protocol! proto gen)
+  (jolt-with-mutex reify-shape-mu
+    (let-values (((sites protos) (hashtable-entries reify-site-protos)))
+      (let ((t #f))
+        (do ((i 0 (fx+ i 1))) ((fx=? i (vector-length sites)))
+          (let ((slots (vector-ref sites i)) (ps (vector-ref protos i)))
+            (when (member proto ps)
+              (unless t
+                (set! t (if (unbox reify-retired-box)
+                            (hashtable-copy (unbox reify-retired-box) #t)
+                            (make-weak-eq-hashtable))))
+              (let ((cur (hashtable-ref t slots '())))
+                (unless (assoc proto cur) (hashtable-set! t slots (cons (cons proto gen) cur)))))))
+        (when t (set-box! reify-retired-box t))))))
+
 ;; A reify form's or a proxy's generated class name, or #f. A proxy's is worked
 ;; out on first ask by the host (proxy-class-name-hook, java/proxy.ss on Chez).
 (define proxy-class-name-hook (lambda (x) #f))
@@ -1505,8 +1583,10 @@
 ;; Placing a reify form's class in the class graph is the host's (the Chez half
 ;; installs it with the graph, proxy.ss); a host without one keeps just the name.
 (define reify-class-graph-hook (lambda (name ifaces) #f))
+;; SHAPE is the site's layout itself when the site laid it out as it loaded
+;; (reify-site-shape), else the shape literal of code compiled before that.
 (define (make-reified-at shape . fns)
-  (let ((layout (reify-shape-layout shape)))
+  (let ((layout (if (vector? shape) shape (reify-shape-layout shape))))
     ;; every instance from a site runs the same method code, so the first one
     ;; tells protocol-impl-hook (protocols.ss) and the rest pay one slot read.
     ;; Unlocked: two threads racing here tell it the same names twice.
@@ -1514,7 +1594,7 @@
       (vector-set! layout 3 #t)
       (for-each (lambda (m fn)
                   (for-each (lambda (p) (protocol-impl-hook p m fn)) (vector-ref layout 1)))
-                (seq->list (jolt-nth shape 0)) fns))
+                (vector-ref layout 4) fns))
     (make-jreify (cons (vector-ref layout 0) (list->vector fns)) (vector-ref layout 1) #f (vector-ref layout 2))))
 ;; Every reify from one site declares the same protocols, but the names arrive
 ;; as rest args, so each instance got its own fresh list. The questions asked of
@@ -1601,9 +1681,22 @@
 ;; code means rather than the error. Any other non-protocol throws, with a
 ;; message naming what was passed.
 (define (jolt-satisfies? proto obj)
-  (if (jclass? proto)
-      (if (instance-check proto obj) #t #f)
-      (jolt-satisfies-protocol? proto obj)))
+  (if (and (jrec? obj) (pmap? proto))
+      ;; a record against a protocol value (#1713): the type's satisfies? table
+      ;; (slot 10, jrec-satisfies? below) also keeps the answer under the
+      ;; protocol MAP itself, eq?, so a repeat skips reading :name out of it.
+      ;; A protocol map is immutable, so its name and the answer stay the ones
+      ;; the name key holds, and the table retires with the rest of the vector.
+      (let* ((t (vector-ref (jrdesc-ifc-of obj) 10))
+             (hit (hashtable-ref t proto 'none)))
+        (if (eq? hit 'none)
+            (let ((ans (jolt-satisfies-protocol? proto obj)))
+              (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t proto ans))
+              ans)
+            hit))
+      (if (jclass? proto)
+          (if (instance-check proto obj) #t #f)
+          (jolt-satisfies-protocol? proto obj))))
 (define kw-proto-name (keyword #f "name"))
 (define (jolt-satisfies-protocol? proto obj)
   (let* ((pn (jolt-get proto kw-proto-name jolt-nil))
@@ -1642,8 +1735,16 @@
          (epoch (fx+ jolt-proto-epoch jch-graph-epoch))
          (inner (hashtable-ref reify-satisfies-memo protos #f))
          (e (and inner (hashtable-ref inner pn-str #f))))
-    (if (and e (fx= (car e) epoch))
-        (cdr e)
+    (cond
+      ;; a site whose protocol was redefined answers apart from the sites that
+      ;; share its protocol list, which is what the memo is keyed by. The box is
+      ;; #f until a protocol is first redefined, so a hit pays one unbox for
+      ;; this and no call (fastpathratio satisfies-reify).
+      ((and (unbox reify-retired-box) (pair? (reify-retired-entries obj)))
+       (and (jolt-satisfies-walk obj pn-str) #t))
+      ((and e (fx= (car e) epoch))
+        (cdr e))
+      (else
         (let ((ans (and (jolt-satisfies-walk obj pn-str) #t)))
           (jolt-with-mutex reify-satisfies-mu
             (let ((t (or (hashtable-ref reify-satisfies-memo protos #f)
@@ -1651,15 +1752,16 @@
                            (hashtable-set! reify-satisfies-memo protos t)
                            t))))
               (hashtable-set! t pn-str (cons epoch ans))))
-          ans))))
+          ans)))))
 (define (jolt-satisfies-walk obj pn-str)
     (or
       ;; direct: a record type's own registry, a reify's declared list.
       (cond
-        ((jrec? obj) (and (type-satisfies? (jrec-tag obj) pn-str) #t))
+        ((jrec? obj) (and (type-satisfies? (jrec-rtag obj) pn-str) #t))
         ((jreify? obj)
          (and (memp (lambda (p) (or (string=? p pn-str) (proto-class-match? p pn-str)))
                     (jreify-protos obj))
+              (not (reify-proto-retired? obj pn-str))
               #t))
         (else #f))
       ;; extended: the protocol may be extended to an interface or class the
@@ -1728,16 +1830,25 @@
 ;; extenders: type-tags that extend a protocol via extend/extend-type/extend-
 ;; protocol, as symbols (extends? reads this). Inline deftype/defrecord impls are
 ;; excluded — only tags carrying the extend mark count, matching the JVM.
+;; A redefined type's OLD class that was extended answers as that class (its
+;; retired class token, class-model.ss), named as the JVM names it; extends?
+;; compares it by identity.
 (define (extenders proto)
   (let* ((pn (jolt-get proto kw-proto-name jolt-nil))
          (pn-str (if (symbol-t? pn) (symbol-t-name pn) pn))
+         (retired (retired-descs))
          (out '()))
     (vector-for-each
       (lambda (tag)
         (let ((ti (hashtable-ref type-registry tag #f)))
           (when ti (let ((pi (hashtable-ref ti pn-str #f)))
                      (when (and pi (hashtable-ref pi extend-mark #f))
-                       (set! out (cons (jolt-symbol jolt-nil tag) out)))))))
+                       (let ((r (let loop ((rs retired))
+                                  (cond ((null? rs) #f)
+                                        ((string=? (cdar rs) tag) (caar rs))
+                                        (else (loop (cdr rs)))))))
+                         (set! out (cons (if r (jolt-retired-class-token r) (jolt-symbol jolt-nil tag))
+                                         out))))))))
       (jolt-with-mutex rec-tbl-mu (hashtable-keys type-registry)))
     (if (null? out) jolt-nil (list->cseq out))))
 
@@ -1750,7 +1861,7 @@
 ;; used to be the record's print form with the # dropped.
 (register-str-render! jrec?
   (lambda (v)
-    (let ((f (find-method-any-protocol (jrec-tag v) "toString")))
+    (let ((f (find-method-any-protocol (jrec-rtag v) "toString")))
       (if f
           (jolt-invoke f v)
           (string-append (jolt-class-name v) "@" (jolt-hex32 (jolt-java-hashcode v)))))))
@@ -1825,6 +1936,7 @@
 (def-var! "clojure.core" "register-record-type!" register-record-type!)
 (def-var! "clojure.core" "make-protocol" make-protocol)
 (def-var! "clojure.core" "register-protocol-methods!" register-protocol-methods!)
+(def-var! "clojure.core" "register-protocol-fn!" register-protocol-fn!)
 (def-var! "clojure.core" "register-method" register-method)
 (def-var! "clojure.core" "register-inline-method" register-inline-method)
 (def-var! "clojure.core" "register-inline-protocol!" register-inline-protocol!)
@@ -1853,7 +1965,7 @@
     (let loop ((as args))
       (or (null? as)
           (let ((d (jrec-pic-desc (car as))))
-            (and d (string=? (jrdesc-tag d) (cadr as)) (loop (cddr as))))))))
+            (and d (string=? (jrdesc-rtag d) (cadr as)) (loop (cddr as))))))))
 ;; The dispatch key for the protocol SYM names — resolved the way any other
 ;; reference resolves, through :refer and :as — or nil when the symbol names no
 ;; protocol (a host class or interface, which keeps its bare name). deftype /

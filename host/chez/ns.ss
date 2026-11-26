@@ -454,11 +454,19 @@
 ;; updates only the RUNTIME current ns — subsequent defs in the same program were
 ;; already ns-baked by the analyzer, so it does not redirect them. It is enough
 ;; for *ns* / str-of-ns to track the switch.
+;; ns-entered-hook: called by in-ns with the namespace's name. The loader
+;; (loader.ss) installs one that records which file a namespace was loaded from,
+;; so a :reload that cannot find it on the source roots can say so; ns.ss is also
+;; loaded by runtimes with no loader, where it stays a no-op.
+(define ns-entered-hook (lambda (nm) #f))
+(define (set-ns-entered-hook! f) (set! ns-entered-hook f))
+
 (define (jolt-in-ns desig)
   (let* ((nm (ns-desig->name desig)) (_ (ns-undefer! nm)) (n (intern-ns! nm)))
     ;; set the THREAD-LOCAL current ns; *ns* reads derive from it (dyn-binding.ss),
     ;; so this is per-thread — concurrent nREPL sessions don't clobber each other.
     (set-chez-ns! nm)
+    (ns-entered-hook nm)
     n))
 
 ;; ns-name: a namespace's name as a (no-ns) symbol. Overrides the overlay (which
@@ -496,13 +504,21 @@
 (define (ns-vars-pmap-when nm keep?)
   ;; the namespace's own bucket (rt.ss ns-cells-index): O(vars in nm), where a
   ;; var-table-cells scan cost O(every var in the image) per call
-  (let ((m (jolt-hash-map)))
+  ;;
+  ;; The order is the JVM's. Its ns-interns / ns-publics are filter-key over the
+  ;; namespace's mapping table, a PersistentHashMap, reduced into {}: the keys
+  ;; come out in hash order, and a result of 8 or fewer is an array map holding
+  ;; them in that order. clojure.test's test-all-vars runs tests in exactly this
+  ;; order, so definition order here reordered a namespace's test output.
+  (let ((h empty-pmap-hash))
     (for-each
       (lambda (c)
         (when (and (var-cell-defined? c) (keep? c) (not (ns-cell-class-mapping? c)))
-          (set! m (jolt-assoc m (jolt-symbol #f (var-cell-name c)) c))))
+          (set! h (pmap-put-hash h (jolt-symbol #f (var-cell-name c)) c))))
       (ns-cells-list nm))
-    m))
+    (if (fx>? (pmap-cnt h) 8)
+        h
+        (pmap-fold-fwd h (lambda (k v acc) (jolt-assoc acc k v)) (jolt-hash-map)))))
 (define (ns-vars-pmap nm) (ns-vars-pmap-when nm (lambda (c) #t)))
 ;; The name of a namespace that exists. ns-publics, ns-interns, ns-map,
 ;; ns-refers, ns-aliases and ns-imports all go through the-ns on the JVM, so a
@@ -1225,6 +1241,13 @@
 ;; def evaluated inside sci lost its metadata, which un-marked every macro sci
 ;; defined and made a macro call arrive at its expander as an ordinary call.
 ;; .alterMeta takes (f args-seq), matching the JVM's two-argument method.
+;;
+;; The built-in IReferences besides a var — atom, ref, agent, namespace — keep
+;; theirs in the identity side table. Nothing else is an IReference on the JVM (a
+;; map, a record, a fn), so anything that neither is one of those nor declares
+;; the interface is the JVM's failed cast, not a write `meta` never reads back.
+(define (jolt-builtin-ireference? ref)
+  (or (jolt-atom? ref) (jns? ref) (jolt-ref? ref) (jolt-agent? ref)))
 (define (jolt-alter-meta! ref f . args)
   (cond
     ((var-cell? ref)
@@ -1233,22 +1256,23 @@
        (var-cell-meta-set! ref new)
        (var-meta-sync-macro! ref new)
        new))
-    ((iface-method ref "alterMeta" 3)
-     => (lambda (m) (jolt-invoke m ref f (list->cseq args))))
-    (else
+    ((jolt-builtin-ireference? ref)
      (let* ((cur (let ((m (jolt-meta ref))) (if (jolt-nil? m) (jolt-hash-map) m)))
             (new (apply jolt-invoke f cur args)))
        (meta-table-set! ref new)
-       new))))
+       new))
+    (else
+     (jolt-invoke (jolt-ref-iface-method ref "clojure.lang.IReference" "alterMeta" 3)
+                  ref f (list->cseq args)))))
 (define (jolt-reset-meta! ref m)
   (cond
     ((var-cell? ref)
      (var-cell-meta-set! ref m)
      (var-meta-sync-macro! ref m)
      m)
-    ((iface-method ref "resetMeta" 2)
-     => (lambda (impl) (jolt-invoke impl ref m) m))
-    (else (meta-table-set! ref m) m)))
+    ((jolt-builtin-ireference? ref) (meta-table-set! ref m) m)
+    (else
+     (jolt-invoke (jolt-ref-iface-method ref "clojure.lang.IReference" "resetMeta" 2) ref m))))
 
 ;; --- RESOLVE FRICTION: native-op cells -------------------------------------
 ;; Native-op primitives (+ map reduce …) are INLINED at emit, so they have no
@@ -1350,6 +1374,10 @@
                (not (jolt-var-unbound? (var-cell-root c))))
           c jolt-nil))))
 
-;; --- printer patches: a namespace renders as its name (str / pr-str / -e) ----
-(register-pr-arm! jns? jns-name)
+;; --- printer patches ----------------------------------------------------------
+;; A Namespace has no printer of its own on the JVM, so pr and print write
+;; Object's #object[clojure.lang.Namespace 0x... "user"] form (the name unquoted
+;; under print); its toString, which str is, is the name.
+(register-pr-str-arm! jns? (lambda (x) (jolt-object-repr x #f)))
+(register-pr-readable-arm! jns? (lambda (x) (jolt-object-repr x #t)))
 (register-str-render! jns? jns-name)

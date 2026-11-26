@@ -337,22 +337,41 @@
 (define (jolt-regex? x) (regex-t? x))
 (define (jolt-re-pattern x) (if (regex-t? x) x (jolt-regex x)))
 
+;; Group N's text of match M, or #f for a group that took no part (#1713). A
+;; match over a plain string carries irregex's string chunker, whose chunk is
+;; (str start end) with absolute indices, so the group is one substring of
+;; str: irregex-match-substring reached the same substring through its index
+;; check and the chunker's closures, ~50 ns of a ~95 ns .group against the
+;; JVM's 6. Any other chunker goes through irregex. N is a valid group index.
+;; The slots are read with fixnum arithmetic: irregex's own accessors
+;; (irregex.scm %irregex-match-start-chunk and friends: group n's start chunk,
+;; start index, end chunk and end index at 3+4n .. 6+4n) and its
+;; irregex-match-num-submatches use generic + * quotient, which cost more than
+;; the substring.
+(define (irx-group-substring m n)
+  (if (eq? (vector-ref m 1) irregex-basic-string-chunker)   ; irregex-match-chunker
+      (let* ((b (fx+ 3 (fx* n 4))) (sc (vector-ref m b)))
+        (and sc
+             (substring (car sc) (vector-ref m (fx+ b 1)) (vector-ref m (fx+ b 3)))))
+      (irregex-match-substring m n)))
+;; irregex-match-num-submatches, in fixnums
+(define (irx-num-submatches m) (fx- (fxquotient (fx- (vector-length m) 3) 4) 2))
 ;; An irregex match -> the Clojure result: whole string (no groups) or the
 ;; [whole g1 ... gn] vector (nil for a non-participating group).
 ;; The groups vector is built straight into its slot vector: it used to go
 ;; through a list and apply (a cons per group plus the list->vector copy) on
 ;; every capturing match.
 (define (irx-result m)
-  (let ((n (irregex-match-num-submatches m)))
-    (if (= n 0)
-        (irregex-match-substring m 0)
-        (let ((out (make-vector (+ n 1))))
+  (let ((n (irx-num-submatches m)))
+    (if (fx=? n 0)
+        (irx-group-substring m 0)
+        (let ((out (make-vector (fx+ n 1))))
           (let loop ((i 0))
-            (if (> i n)
+            (if (fx>? i n)
                 (make-pvec out)
-                (let ((s (irregex-match-substring m i)))
+                (let ((s (irx-group-substring m i)))
                   (vector-set! out i (if s s jolt-nil))
-                  (loop (+ i 1)))))))))
+                  (loop (fx+ i 1)))))))))
 
 (define (jolt-re-matches re s)
   (let* ((s (rx-charseq->string s))
@@ -512,24 +531,62 @@
 ;; could not select — the same shape of bug as a raw host condition escaping.
 (define (jolt-matcher-no-match)
   (jolt-throw (jolt-host-throwable "java.lang.IllegalStateException" "No match found")))
-(define (jolt-matcher-group m . n)
+;; .group with a group number in range is the common call (tools.reader reads
+;; every number literal through eight of them): no rest list, and no index
+;; check beyond the bounds test itself. Anything else (a name, an index out of
+;; range, no match yet) takes the general path and its JVM-worded errors.
+(define jolt-matcher-group
+  (case-lambda
+    ((m) (jolt-matcher-group-n m 0))
+    ((m n) (jolt-matcher-group-n m n))
+    ((m . n) (apply jolt-matcher-group-slow m n))))
+(define (jolt-matcher-group-n m n)
+  (let ((last (matcher-t-last m)))
+    (if (and last (fixnum? n) (fx>=? n 0) (fx<=? n (irx-num-submatches last)))
+        (let ((s (irx-group-substring last n))) (if s s jolt-nil))
+        (jolt-matcher-group-slow m n))))
+(define (jolt-matcher-group-slow m . n)
   (let ((last (matcher-t-last m)))
     (if last
-        (let ((arg (if (pair? n) (car n) 0)))
-          (if (string? arg)
-              ;; JVM .group(String) is name-only: an unknown name is an error,
-              ;; even when the string looks like a group number.
-              (let ((sym (string->symbol arg)))
-                (if (assq sym (irregex-match-names last))
-                    (let ((s (irregex-match-substring last sym)))
-                      (if s s jolt-nil))
-                    (jolt-throw (jolt-host-throwable
-                                 "java.lang.IllegalArgumentException"
-                                 (string-append "No group with name <" arg ">")))))
-              (let ((s (irregex-match-substring last (->idx arg))))
-                (if s s jolt-nil))))
+        (let* ((arg (if (pair? n) (car n) 0))
+               (s (irx-group-substring last (matcher-group-ref last arg))))
+          (if s s jolt-nil))
         (jolt-matcher-no-match))))
 (define (jolt-matcher-group-count m) (irregex-num-submatches (matcher-t-irx m)))
+;; The submatch index a Matcher group argument names: a String is a group NAME
+;; (name-only, as on the JVM: an unknown one is IllegalArgumentException even
+;; when it looks like a number, and nil is the NPE Objects.requireNonNull
+;; raises), anything else a group number. group/start/end all read through here.
+(define (matcher-group-ref mm arg)
+  (cond
+    ((string? arg)
+     (let ((p (assq (string->symbol arg) (irregex-match-names mm))))
+       (if p
+           (cdr p)
+           (jolt-throw (jolt-host-throwable
+                        "java.lang.IllegalArgumentException"
+                        (string-append "No group with name <" arg ">"))))))
+    ((jolt-nil? arg) (jolt-throw (jolt-host-throwable "java.lang.NullPointerException" "Group name")))
+    (else (matcher-group-index mm arg))))
+;; A group number as the index irregex takes, or the JVM's IndexOutOfBounds
+;; ("No group N") when it is negative or past the match's group count. Every
+;; numbered-group read on a Matcher (group/start/end) goes through here.
+(define (matcher-group-index mm n)
+  (let ((i (->idx n)))
+    (if (and (fixnum? i) (fx>=? i 0) (fx<=? i (irregex-match-num-submatches mm)))
+        i
+        (jolt-throw (jolt-host-throwable
+                     "java.lang.IndexOutOfBoundsException"
+                     (string-append "No group " (jolt-str-render-one i)))))))
+;; .start(g)/.end(g) of the last match: -1 for a group that took no part in it,
+;; as the JVM answers (irregex says #f).
+(define (jolt-matcher-bound m n end?)
+  (let ((mm (matcher-t-last m)))
+    (if mm
+        (let* ((i (matcher-group-ref mm n))
+               (b (if end? (irregex-match-end-index mm i) (irregex-match-start-index mm i))))
+          (if b b -1))
+        (jolt-matcher-no-match))))
 ;; .lookingAt: anchored at the region START, matching a PREFIX — the middle ground
 ;; between .matches (the whole region) and .find (anywhere). It does NOT resume
 ;; from the find cursor: on the JVM both .matches and .lookingAt anchor at the

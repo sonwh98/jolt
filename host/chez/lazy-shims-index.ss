@@ -24,10 +24,10 @@
        ("java.util.concurrent.atomic.AtomicLongArray" "java.io.Serializable")))
     ("host/chez/java/concurrency-sync.ss"
      (deps)
-     (classes "ReentrantReadWriteLock" "Semaphore" "java.util.concurrent.Semaphore" "java.util.concurrent.locks.ReentrantReadWriteLock")
+     (classes "CyclicBarrier" "ReentrantReadWriteLock" "Semaphore" "java.util.concurrent.CyclicBarrier" "java.util.concurrent.Semaphore" "java.util.concurrent.locks.ReentrantReadWriteLock")
      (statics)
      (methods)
-     (tags "rw-lock" "rw-read-lock" "rw-write-lock" "semaphore")
+     (tags "cyclic-barrier" "rw-lock" "rw-read-lock" "rw-write-lock" "semaphore")
      (supers
        ("java.util.concurrent.Semaphore" "java.io.Serializable")
        ("java.util.concurrent.locks.ReentrantReadWriteLock" "java.util.concurrent.locks.ReadWriteLock" "java.io.Serializable")
@@ -36,7 +36,7 @@
     ("host/chez/java/enum-colls.ss"
      (deps)
      (classes "EnumMap" "EnumSet" "java.util.EnumMap" "java.util.EnumSet")
-     (statics)
+     (statics ("PosixFilePermissions" "fromString") ("java.nio.file.attribute.PosixFilePermissions" "fromString"))
      (methods)
      (tags "enum-map" "enum-map-entry" "enum-map-entryset" "enum-map-entryset-iterator" "enum-map-keyset" "enum-map-keyset-iterator" "enum-map-values" "enum-map-values-iterator" "enum-set-jumbo" "enum-set-jumbo-iterator" "enum-set-regular" "enum-set-regular-iterator")
      (supers))

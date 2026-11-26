@@ -253,9 +253,10 @@
     (set! jolt-standalone-binary #t)
     (set-source-roots! " (ldr-install-roots-str) ")
     (jolt-startup-profile-mark! \"source roots + data readers\")
-    ;; JOLT_TRACE at RUNTIME (the env is unset at heap-build), before any app ns
-    ;; compiles, so a `-M:run` traces the app's own code.
-    (jolt-trace-init-from-env!)
+    ;; JOLT_TRACE / a leading --no-trace at RUNTIME (the env is unset at
+    ;; heap-build), before any app ns compiles, so a `-M:run` traces the app's
+    ;; own code.
+    (set! args (jolt-trace-init! args))
     (jolt-stdlib-fasls-attach! '" (jb-stdlib-index-str) ")
     (jolt-startup-profile-mark! \"trace init + fasl index attach\")
     ;; shared dispatch (cli-core.ss, inlined via the runtime manifest): the -e
@@ -418,9 +419,17 @@
           "(fasl-compressed " (jb-bool jb-release?) ")\n"
           (apply string-append
             (map (lambda (sp)
-                   (string-append "(compile-file "
-                     (ei-str-lit (car sp)) " "
-                     (ei-str-lit (cdr sp)) ")\n"))
+                   (if (pair? (car sp))
+                       ;; a lazy host shim: its definition forms first, then the
+                       ;; rest, the order lazy-shims.ss lazy-shim-hoist gives a
+                       ;; source load (see the note there, burinc/jolt#24)
+                       (string-append "(let ((op (open-file-output-port "
+                         (ei-str-lit (cdr sp)) " (file-options no-fail))))"
+                         " (compile-to-port (lazy-shim-hoisted-forms "
+                         (ei-str-lit (cadr (car sp))) ") op) (close-port op))\n")
+                       (string-append "(compile-file "
+                         (ei-str-lit (car sp)) " "
+                         (ei-str-lit (cdr sp)) ")\n")))
                  pairs))))
       (close-port p))))
 
@@ -501,7 +510,7 @@
       (lambda (path)
         (let ((so (string-append jb-stdlib-dir "/" (jb-sanitize (jb-lazy-fasl-name path)) ".so")))
           (set! order (cons (cons (jb-lazy-fasl-name path) so) order))
-          (set! to-compile (cons (cons path so) to-compile))))
+          (set! to-compile (cons (cons (list 'lazy path) so) to-compile))))
       (jb-collect-lazy-paths))
     (jb-write-stdlib-compile-script! (reverse to-compile))
     (values (reverse order) (reverse skips)
@@ -509,7 +518,8 @@
             ;; hash stands in for their bytes in the runtime fingerprint
             (aot-content-hash
               (apply string-append
-                (map (lambda (sp) (read-file-string (car sp))) (reverse to-compile)))))))
+                (map (lambda (sp) (read-file-string (if (pair? (car sp)) (cadr (car sp)) (car sp))))
+                     (reverse to-compile)))))))
 
 ;; Capture the stdlib namespaces (jb-compile-stdlib-fasls!) and record which go
 ;; in the blob. The blob is linked into the binary as the C array
@@ -996,6 +1006,67 @@
 ;; (jb-emit-source-embeds). Always written by that step, so no absent-file arm.
 (jb-c-array jb-source-blob-path (string-append jb-build "/source_blob_data.h") "jolt_source_blob")
 
+;; --- the native-region JIT -----------------------------------------------------
+;; MIR (vendor/mir) and jolt's shim over it (host/chez/stub/jolt_mir.c), linked
+;; into jolt so a native region runs as native code in the REPL and under jolt
+;; run (stdlib/jolt/native, host/chez/java/natives-array.ss). Nothing calls into
+;; it until a region's call site loads. Each object is rebuilt only when its
+;; source, or any C file or header MIR's sources include (jb-mir-deps-mtime), is
+;; newer: mir.c and the rest #include the per-machine .c files and mir.h, whose
+;; structs the shim reads, so a submodule bump touching only those must not link
+;; a stale object. A machine MIR has no code generator for, or JOLT_NO_MIR=1,
+;; leaves it out: regions then raise there unless a jolt build linked them.
+(define jb-mir-sources
+  '("vendor/mir/mir.c" "vendor/mir/mir-gen.c" "vendor/mir/c2mir/c2mir.c" "host/chez/stub/jolt_mir.c"))
+(define (jb-mir-machine?)
+  (let ((m (bld-eff-machine)))
+    (or (bld-contains? m "a6") (bld-contains? m "arm64") (bld-contains? m "rv64")
+        (bld-contains? m "ppc64le"))))
+(define (jb-mir-deps-mtime)
+  ;; vendor/mir/*.[ch], c2mir/*.[ch] and c2mir/<machine>/*.[ch]: what the three
+  ;; library sources #include (not MIR's tests, which are most of the tree)
+  (define (c-or-h? f)
+    (let ((n (string-length f)))
+      (and (> n 2) (char=? (string-ref f (- n 2)) #\.)
+           (memv (string-ref f (- n 1)) '(#\c #\h)))))
+  (define (newest dir)
+    (fold-left (lambda (m f)
+                 (let ((full (string-append dir "/" f)))
+                   (cond ((file-directory? full) m)
+                         ((c-or-h? f) (max m (sa-file-mtime-ms full)))
+                         (else m))))
+               0 (directory-list dir)))
+  (apply max (newest "vendor/mir") (newest "vendor/mir/c2mir")
+         (map (lambda (d) (newest (string-append "vendor/mir/c2mir/" d)))
+              (filter (lambda (d) (file-directory? (string-append "vendor/mir/c2mir/" d)))
+                      (directory-list "vendor/mir/c2mir")))))
+(define jb-mir-objects
+  (cond
+    ((bld-env-override "JOLT_NO_MIR")
+     (display "build-jolt: JOLT_NO_MIR set, linking no native-region JIT\n") '())
+    ((not (jb-mir-machine?))
+     (display (string-append "build-jolt: MIR has no code generator for " (bld-eff-machine)
+                             ", linking no native-region JIT\n"))
+     '())
+    ((not (file-exists? "vendor/mir/c2mir/c2mir.c"))
+     (error 'build-jolt "vendor/mir is empty: run git submodule update --init vendor/mir (or set JOLT_NO_MIR=1)"))
+    (else
+     (let ((dir (string-append jb-build "/mir")) (deps (jb-mir-deps-mtime)))
+       (bld-system (string-append "mkdir -p '" dir "'"))
+       (map (lambda (src)
+              (let* ((file (path-last src))
+                     (base (substring file 0 (- (string-length file) 2)))
+                     (o (string-append dir "/" base ".o")))
+                (unless (and (file-exists? o)
+                             (<= (max deps (sa-file-mtime-ms src)) (sa-file-mtime-ms o)))
+                  (display (string-append "build-jolt: compiling " src "\n"))
+                  (bld-system (string-append
+                               (bld-cc) " " (bld-arch-flag)
+                               " -O2 -DNDEBUG -std=gnu11 -fsigned-char -w -Wno-psabi -Ivendor/mir -c '"
+                               src "' -o '" o "'")))
+                o))
+            jb-mir-sources)))))
+
 (jb-write-embed-s!)
 (define jb-main-c (string-append jb-build "/main.c"))
 (let ((mc (open-output-file jb-main-c 'replace)))
@@ -1036,5 +1107,7 @@
   ;; the embedded jolt_* arrays must be foreign-entry-visible at runtime:
   ;; -rdynamic on ELF; on Windows an exe needs an export table (GetProcAddress).
   (bld-cc) " " (bld-arch-flag) " -O2 " (if (bld-tgt-nt?) "-Wl,--export-all-symbols " "-rdynamic ") "-I'" (bld-csv-dir) "' -I'" jb-build "' -I'host/chez/stub' '" jb-main-c "' '" jb-embed-s "' '"
-  (bld-csv-dir) "/libkernel.a' -o '" jb-out "' " (bld-link-libs)))
+  (bld-csv-dir) "/libkernel.a' "
+  (apply string-append (map (lambda (o) (string-append "'" o "' ")) jb-mir-objects))
+  "-o '" jb-out "' " (bld-link-libs)))
 (display (string-append "build-jolt: wrote " jb-out "\n"))

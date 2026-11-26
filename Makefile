@@ -114,18 +114,18 @@ endif
 JOLT-TARGETS-NEEDING-DEPS := \
   aotcacheperf aotcachesmoke aotfingerprint asynctimer buildlibsmoke buildsmoke reprobuildsmoke profilebuildsmoke embeddedresources \
   aotcachepathsmoke aotcachesourcepathsmoke aotcachestarfilesmoke compilepathsmoke contagion corpus cts dcerefs depssmoke depsunit devboot \
-  readscaling vecscaling pipescaling chunkscaling printscaling complexity ioscaling hotscaling applyscaling zipmemory lazyscaling \
+  readscaling vecscaling pipescaling chunkscaling printscaling pmoverhead complexity ioscaling hotscaling applyscaling zipmemory lazyscaling \
   devbootsmoke devirt directlink linkedrace mintgate ffi fibers fiberspoll fieldjoin fieldnum fieldread flarr fnform poolshape coreproc grenadine \
-  gateboot gatebootsmoke gosm hasheq httpsfetch infer inferscaling inline inline-body irvalidate statlayout \
+  gateboot gatebootsmoke gosm hasheq httpsfetch infer inferscaling inline inline-body guardedinline irvalidate statlayout \
   jolt jolt-debug jolt-release joltsmoke libconformance libperf mandelbrot-num mathfl mvnhttp defmetacells staticsite gcpolicy stacklimit lazyretain \
   deadhost recordshadow emittedheads mirrordrift mirrordrift-regen regexdfacheck regexdfacheck-regen regexdfa regexanchor regexanchorprims regexanchorcheck regexsyntax regexbacktrack \
-  hostarity enummodel enumregistrymodel cowpublishmodel doseqperf failfastmodel imagecoverage lazyshims narrow narrowhash numeric numwp oparity s64wrap pic protoret printperf remint sbperf sci selfhost shakelocal \
+  hostarity enummodel enumregistrymodel cowpublishmodel doseqperf failfastmodel imagecoverage lazyshims narrow narrowhash numeric numwp oparity s64wrap toplevelinline pic protoret printperf remint sbperf sci selfhost shakelocal \
   traceemit tracecompilecost vfaslceiling \
   shakesmoke smoke sortedcoll staticnativesmoke stateimage test testbin transient unit unitcontext zlibregistersmoke zlibnativesmoke noexecsmoke \
   threadsafety maskedacquire ioerrno values wp ci
 
 # Only mark PHONY targets for names that have file system conflicts:
-.PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
+.PHONY: nsaudit kondocheck build install test ci mirlib bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
         gambitcheck gambitkernel gambiteval gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -176,16 +176,16 @@ install: build
 # naming the covered tree is written ONLY on a complete pass. `make gate-status`
 # answers "is this working tree gated?" — which is not something to remember.
 
-CI-GATES := submodules values recordinline corpus nsaudit unit documented grenadine clishim mvnhttp readscaling gcpolicy stacklimit footprint lazyretain compilescaling applyscaling lazyscaling vecscaling pipescaling chunkscaling printscaling complexity ioscaling hotscaling fastpathratio stdlibratio depssmoke taskssmoke scriptsmoke exitwait completionssmoke depscpcache depsunit \
+CI-GATES := submodules values flonumprint recordinline corpus nsaudit unit documented grenadine clishim mvnhttp readscaling gcpolicy stacklimit footprint lazyretain compilescaling applyscaling lazyscaling vecscaling pipescaling chunkscaling printscaling pmoverhead complexity ioscaling hotscaling fastpathratio stdlibratio depssmoke taskssmoke scriptsmoke exitwait completionssmoke depscpcache depsunit \
   smoke tracesmoke errorreport errorkinds buildsmoke embeddedresources reprobuildsmoke profilebuildsmoke buildlibsmoke staticnativesmoke zlibregistersmoke sci scifunctional cts loaderconf loadercache ffi ffidupsym ffiloadfail continuations stdlibfasl zlibunit depsnounzip zlibnativesmoke zipmemory noexecsmoke \
   transient sortedcoll rrbprop rrbscaling stateimage infer inferscaling wp devirt fieldread numwp fieldnum fieldjoin contagion \
   hasheq narrowhash \
-  protoret accfix pic narrow directlink linkedrace mintgate directcall defmetacells staticsite arraymap recfast recfold arraybacking largebytesgc largefxgc unitcontext numeric oparity s64wrap mathfl flonumdisp flarr \
+  protoret accfix pic narrow directlink linkedrace mintgate directcall defmetacells staticsite arraymap hamt recfast recfold arraybacking largebytesgc largefxgc unitcontext numeric oparity s64wrap toplevelinline mathfl flonumdisp flarr \
   fnform poolshape coreproc traceemit traceeval tracecompilecost degradedbacktrace \
-  inline inline-body dcerefs shakelocal manifestcheck readmecheck portcheck mirrordrift regexdfacheck regexdfa regexanchor regexanchorprims regexanchorcheck regexreplace regexsyntax regexbacktrack deadhost recordshadow emittedheads adaptercheck hostprops normalizecheck hostregistry hostarity enummodel imagecoverage lazyshims foreignhandles dispatchalloc hostsite regexmatcher winpath winplatform winparity statlayout lockcheck parkcheck shelloutcheck errnocheck irvalidate seeddefs devbootsmoke \
-  gatebootsmoke aotcachesmoke aotcachepathsmoke aotcachesourcepathsmoke aotcachestarfilesmoke aotfingerprint vfaslceiling vfaslstrings buildscaling buildnatives buildsegments compilepathsmoke makefilesmoke versionsmoke attributioncheck noticecheck \
-  systemstreams closedstdout stderrsplit userdirpaths mimetypes utf8decode \
-  certify gambitcheck gambitkernel gambitgencheck gambitseedcheck gambitboot gambiteval gambitunbound gambitvars gambitstatics gambittwins gambitprofile grenadinecheck fibers fiberspoll gosm asynctimer ticks interruptnest monitorescape windescape threadsafety maskedacquire ioerrno cas flow
+  inline inline-body guardedinline dcerefs shakelocal manifestcheck readmecheck portcheck mirrordrift regexdfacheck regexdfa regexanchor regexanchorprims regexanchorcheck regexreplace regexsyntax regexbacktrack deadhost recordshadow emittedheads adaptercheck hostprops normalizecheck hostregistry hostarity enummodel imagecoverage lazyshims foreignhandles dispatchalloc hostsite regexmatcher winpath winplatform winparity statlayout lockcheck mmepochcheck parkcheck shelloutcheck errnocheck irvalidate seeddefs devbootsmoke \
+  gatebootsmoke aotcachesmoke aotworkersmoke aotcachepathsmoke aotcachesourcepathsmoke aotcachestarfilesmoke aotfingerprint vfaslceiling vfaslstrings buildscaling buildnatives buildsegments compilepathsmoke makefilesmoke versionsmoke attributioncheck noticecheck \
+  systemstreams closedstdout stderrsplit filelock deleteonclose userdirpaths mimetypes utf8decode \
+  certify gambitcheck gambitkernel gambitgencheck gambitseedcheck gambitboot gambiteval gambitunbound gambitvars gambitstatics gambittwins gambitprofile grenadinecheck fibers fiberspoll gosm asynctimer ticks interruptnest monitorescape windescape threadsafety maskedacquire ioerrno cas flow native nativesan nativebuild
 TEST-GATES := submodules selfhost ci
 
 GATE-RECEIPT := target/gate-receipt
@@ -270,9 +270,15 @@ bionic-ci:
 # the same commit's other run passing where there was one. A quiet machine reads
 # well inside every ceiling. stdlibratio is the same kind of gate and failed
 # the same way beside its shard (clojure.string/blank? 1.74 against 1.3, the same
-# commit's rerun 0.95; jolt-h1d). A scaling gate (n vs 4n of the same work) is not
-# listed: interference moves both of its arms alike.
-QUIET-GATES := fastpathratio stdlibratio
+# commit's rerun 0.95; jolt-h1d). pmoverhead is the same kind again: beside its
+# shard it read 0.65-1.87 for a ratio quiet runs put at 1.05-1.15. A scaling
+# gate (n vs 4n of the same work) is not listed: interference moves both of its
+# arms alike.
+# gambitunbound is listed for memory, not timing: its gsc -target js compile of
+# the whole boot peaks at ~14GB on the 16GB runner (main and branches alike,
+# measured 2026-11-24), so a neighbour's binary build landing on that peak ran
+# the runner out of memory and GitHub reported it lost, with no log.
+QUIET-GATES := fastpathratio stdlibratio pmoverhead gambitunbound
 # Runs the QUIET-GATES of $(1) one at a time. -j1 takes the sub-make off the
 # jobserver, so nothing else this make started is running beside them.
 define run-quiet
@@ -339,6 +345,12 @@ selfhost:
 values:
 	@$(CHEZ) --script test/chez/values-test.ss
 
+# A double's printed form: number-print.ss's flonum fast path (short decimals)
+# against the host's shortest digits, pinned Double.toString text, and the fast
+# path's speed as a ratio of the host path's in one process.
+flonumprint:
+	@$(CHEZ) --script test/chez/flonum-print-test.ss
+
 # Record predicates/accessors/mutators/constructors are open-coded: the
 # define-record-type in scheme-adapter-runtime.ss binds them as syntax over the
 # constant rtd. The gate pins the expansion shape and the semantics kept.
@@ -400,7 +412,7 @@ fiberspoll:
 	@JOLT_IO_POLLER=poll $(CHEZ) --script test/chez/fibers-io-test.ss
 	@out="$$(JOLT_IO_POLLER=poll $(CHEZ) --script host/chez/cli.ss test/chez/socket-test.clj 2>&1)"; \
 	  if printf '%s' "$$out" | grep -q 'SOCKET-TEST OK'; then echo "fiberspoll: socket-test OK"; \
-	  else printf '%s\n' "$$out" | tail -5; echo "fiberspoll: socket-test FAILED"; exit 1; fi
+	  else printf '%s\n' "$$out" | tail -40; echo "fiberspoll: socket-test FAILED"; exit 1; fi
 	@JOLT_IO_POLLER=poll $(CHEZ) --script host/chez/cli.ss test/chez/win-parity-smoke.clj
 	@JOLT_IO_POLLER=poll $(CHEZ) --script host/chez/cli.ss test/chez/poller-registration.clj
 	@JOLT_IO_POLLER=poll $(CHEZ) --script host/chez/cli.ss test/chez/poller-retirement.clj
@@ -507,7 +519,7 @@ documented-record:
 # buildlibsmoke` slower with the prerequisite than without it. The staleness
 # check covers the same inputs build-jolt.ss embeds: the runtime .ss files, the
 # install roots, and the launcher stub. JOLT_FORCE_TESTBIN=1 rebuilds anyway.
-TESTBIN-INPUTS := host/chez jolt-core stdlib compatibility vendor/fs/src vendor/process/src vendor/cli/src vendor/grenadine/src vendor/grenadine-generated vendor/irregex
+TESTBIN-INPUTS := host/chez jolt-core stdlib compatibility vendor/fs/src vendor/process/src vendor/cli/src vendor/grenadine/src vendor/grenadine-generated vendor/irregex vendor/mir
 testbin:
 	@if [ -n "$${JOLT_FORCE_TESTBIN:-}" ] || [ ! -x target/release/jolt ] || \
 	   [ -n "$$(find $(TESTBIN-INPUTS) -type f -newer target/release/jolt -print -quit 2>/dev/null)" ]; then \
@@ -567,6 +579,13 @@ seeddefs:
 # `jolt build` produces a working standalone binary.
 buildsmoke: testbin
 	@JOLT_BIN="$${JOLT_BIN:-target/release/jolt}" sh host/chez/build-smoke.sh
+
+# The AOT cache's worker removes everything it wrote once its run is gone: after
+# a cold run, after a ^C to the run's process group, and (swept by the next run)
+# after the worker itself was killed. Needs a built binary: source mode has no
+# worker to spawn.
+aotworkersmoke: testbin
+	@JOLT_BIN="$${JOLT_BIN:-target/release/jolt}" sh test/chez/aot-worker-cleanup-smoke.sh
 
 embeddedresources: testbin
 	@JOLT_BIN="$${JOLT_BIN:-target/release/jolt}" sh host/chez/embedded-resource-smoke.sh
@@ -709,8 +728,10 @@ footprint: testbin
 
 # The nursery follows the collector's time share, bounded by the live set
 # (rt.ss jolt-install-gc-policy!): a churning program grows it past the 16MB floor
-# but not past its footprint bound (the fixed-cap policy grew the same loop's to
-# 512MB+), a light one leaves it at the floor, and the JVM-named knobs take
+# and no further than one checked probe past its live-set bound, the bound and
+# the check on growth past it decide exactly on supplied readings (the decide
+# mode; the fixed-cap policy grew the churn loop to 512MB+), a light program
+# leaves it at the floor, and the JVM-named knobs take
 # effect: JOLT_GC_TRIP_BYTES pins it, JOLT_MAX_NEW_SIZE caps it, JOLT_MAX_HEAP
 # bounds the total heap (not only the live data) within the collector's working
 # room -- 10%: Chez cannot compact in place, so a full collection over live data
@@ -725,13 +746,16 @@ footprint: testbin
 gcpolicy: testbin
 	@floor=16777216; t=test/gc_policy_test.clj; j=target/release/jolt; \
 	 trip() { env JOLT_NO_USER_DEPS=1 "$$@" $$j run $$t churn 2>&1 | sed -n 's/^trip //p'; }; \
-	 churn=$$(trip); \
+	 set -- $$(JOLT_NO_USER_DEPS=1 $$j run $$t churn 2>&1 | sed -n 's/^trip //p;s/^live //p'); churn=$${1:-}; live=$${2:-0}; \
 	 light=$$(JOLT_NO_USER_DEPS=1 $$j run $$t light 2>&1 | sed -n 's/^trip //p'); \
 	 pinned=$$(trip JOLT_GC_TRIP_BYTES=33554432); \
 	 capped=$$(trip JOLT_MAX_NEW_SIZE=24m); \
-	 echo "gcpolicy: churn $$churn, light $$light, pinned $$pinned, max-new-size 24m -> $$capped"; \
+	 echo "gcpolicy: churn $$churn (live $$live), light $$light, pinned $$pinned, max-new-size 24m -> $$capped"; \
 	 [ -n "$$churn" ] && [ "$$churn" -gt "$$floor" ] || { echo "FAIL gcpolicy: a churning program kept the $$floor floor"; exit 1; }; \
-	 [ "$$churn" -lt 536870912 ] || { echo "FAIL gcpolicy: a ~40MB-live loop grew its nursery to $$churn, past the live-set bound"; exit 1; }; \
+	 [ "$$live" -gt 0 ] && [ "$$churn" -le $$((live * 8)) ] || { echo "FAIL gcpolicy: a ~40MB-live loop grew its nursery to $$churn, past 8x its live set $$live (the bound is the live set at the default free ratio, and one checked growth past it reaches 8x)"; exit 1; }; \
+	 paths=$$(JOLT_NO_USER_DEPS=1 JOLT_MAX_HEAP=off $$j run $$t decide 2>&1 | sed -n 's/^path //p' | paste -sd' ' -); \
+	 echo "gcpolicy: nursery paths (MB) on supplied readings, 64MB live: $$paths"; \
+	 [ "$$paths" = "over-target 16,32,64 paid 16,32,64,128 costlier 16,32,64,128,512,64 big-window 16,32,64,128,512" ] || { echo "FAIL gcpolicy: the live-set bound or the check on growth past it decided differently on the same readings: collection over the target stops at the 64MB bound, a doubling past it that pays is kept, one that costs more jumps once to 8x, then comes back and holds unless that paid"; exit 1; }; \
 	 [ "$$light" = "$$floor" ] || { echo "FAIL gcpolicy: a light program left the floor ($$light)"; exit 1; }; \
 	 [ "$$pinned" = "33554432" ] || { echo "FAIL gcpolicy: JOLT_GC_TRIP_BYTES did not pin the nursery ($$pinned)"; exit 1; }; \
 	 [ -n "$$capped" ] && [ "$$capped" -le 25165824 ] || { echo "FAIL gcpolicy: JOLT_MAX_NEW_SIZE=24m did not cap the nursery ($$capped)"; exit 1; }; \
@@ -830,6 +854,12 @@ chunkscaling: testbin
 printscaling: testbin
 	@JOLT_NO_USER_DEPS=1 target/release/jolt run test/print_scaling_test.clj
 
+# A user print-method must not tax printing the values it does not reach: the
+# lookup answers a plain value of a runtime kind once per method-table
+# generation instead of computing its type tag (io-streams.ss user-print-method).
+pmoverhead: testbin
+	@JOLT_NO_USER_DEPS=1 target/release/jolt run test/print_method_overhead_test.clj
+
 # Operations that must not be linear in the collection's size: count/drop on a
 # vector-backed seq, rseq, first on a sorted collection. Every one of these was
 # O(n) here while the reference answers from the shape, and none of it is visible
@@ -849,8 +879,26 @@ ioscaling: testbin
 # recognition that keeps split/replace off the regex engine. Deliberately not a
 # scaling gate — every regression here is linear with a terrible constant, which
 # a 1x-vs-4x ratio cannot see (see the file's header).
+#
+# A row that fails is judged once more in a FRESH process, and only a row that
+# fails both times fails the gate. The test already re-samples a row over its
+# ceiling, but inside the same process, and a CI process can sit in a slow state
+# for a row's whole life: instance-site-type read 3.17 on all three of its
+# samplings in one shard and host-object-pr 2.35 in another (ceilings 1.9), on
+# a binary whose re-run read 1.66 and 1.47. A real regression fails both runs.
+# The CPU is printed first: some rows' ratios are a property of the runner's
+# microarchitecture (see instance-site-type in the test), not of the moment.
 fastpathratio: testbin
-	@JOLT_NO_USER_DEPS=1 target/release/jolt run test/fastpath_ratio_test.clj
+	@echo "fastpathratio: cpu $$( (grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m) | sed 's/.*: //')"
+	@if JOLT_NO_USER_DEPS=1 target/release/jolt run test/fastpath_ratio_test.clj >target/fastpathratio.out 2>&1; then \
+	  cat target/fastpathratio.out; \
+	else \
+	  cat target/fastpathratio.out; \
+	  only=$$(sed -n 's/^  - \([^:]*\): .*/\1/p' target/fastpathratio.out | paste -sd, -); \
+	  if [ -z "$$only" ]; then exit 1; fi; \
+	  echo; echo "fastpathratio: judging $$only again in a fresh process"; \
+	  FASTPATH_ONLY="$$only" JOLT_NO_USER_DEPS=1 target/release/jolt run test/fastpath_ratio_test.clj; \
+	fi
 
 # A stdlib fn against the same source compiled from a user file, as a ratio in
 # one process. The embedded stdlib fasls and the seed-embedded namespaces are
@@ -934,7 +982,7 @@ grenadine:
 # Build jolt as a self-contained native binary into target/<profile>/jolt. The
 # binary bundles the runtime, compiler, jolt-core + stdlib source, the Chez boots,
 # and a launcher stub, so it runs AND compiles jolt apps with no Chez or cc on the
-# machine. Built on a dev/CI host that HAS Chez + cc. release = optimize-level 3,
+# machine. Built on a dev/CI host that HAS Chez + cc. release = optimize-level 2,
 # no inspector info, compressed; debug = optimize-level 0 + inspector + debug info.
 # JOLT_CROSS_TARGET (optional) cross-compiles jolt for another Chez machine — it is
 # passed as build-jolt.ss's 3rd arg and needs $JOLT_TARGET_PACK (empty = native).
@@ -1031,6 +1079,7 @@ ffi:
 	@bin/jolt run test/chez/jolt-ffi-typed-array-test.clj
 	@bin/jolt run test/chez/jolt-ffi-callback-preempt-test.clj
 	@bin/jolt run test/chez/jolt-ffi-string-arg-test.clj
+	@bin/jolt run test/chez/jolt-ffi-docs-test.clj
 	@sh test/chez/ffi-native-error-test.sh "$(CHEZ)"
 	@sh test/chez/ffi-foreign-thread-test.sh
 	@sh test/chez/ffi-gc-stall-test.sh
@@ -1074,6 +1123,79 @@ sortedcoll:
 # Transients: mutable backing, snapshot on persistent!, and linear-time builds.
 transient:
 	@$(CHEZ) --script test/chez/transient-test.ss
+
+# The native-region JIT for a source checkout: MIR (vendor/mir) and jolt's shim
+# (host/chez/stub/jolt_mir.c) as one shared object, which bin/jolt loads the
+# first time a region's call site does (host/chez/java/natives-array.ss). A
+# built jolt links the same objects in (build-jolt.ss) and needs none of this.
+MIR-SRCS := vendor/mir/mir.c vendor/mir/mir-gen.c vendor/mir/c2mir/c2mir.c host/chez/stub/jolt_mir.c
+MIR-CC = $(or $(JOLT_CC),cc)
+MIR-SO := target/mir/libjoltmir$(if $(filter Darwin,$(shell uname -s)),.dylib,.so)
+mirlib: $(MIR-SO)
+$(MIR-SO): $(MIR-SRCS) $(wildcard vendor/mir/*.h vendor/mir/c2mir/*.h vendor/mir/*/*.c vendor/mir/*/*.h)
+	@test -f vendor/mir/c2mir/c2mir.c || { echo "mirlib: vendor/mir is empty: git submodule update --init vendor/mir"; exit 1; }
+	@mkdir -p target/mir
+	@for f in $(MIR-SRCS); do \
+	  $(MIR-CC) -O2 -DNDEBUG -std=gnu11 -fsigned-char -fPIC -w -Wno-psabi -Ivendor/mir -c $$f -o target/mir/$$(basename $$f .c).o || exit 1; \
+	done
+	@$(MIR-CC) -shared -o $@ $(patsubst %.c,target/mir/%.o,$(notdir $(MIR-SRCS))) -lm -lpthread $(if $(filter Linux,$(shell uname -s)),-ldl)
+	@echo "mirlib: wrote $@"
+
+# Native regions (stdlib/jolt/native): every accepted program compiled with a
+# tracking allocator twice, by cc and by the JIT (MIR); the two must agree on
+# result, exception and input mutation, match the plain Clojure body where it
+# means the same and test/native/golden.edn where it does not, and leave no
+# live block or bad free; the rejected programs must fail to compile. Needs cc.
+native: mirlib
+	@bin/jolt run test/chez/native-test.clj
+
+# The native gate with cc's regions built under AddressSanitizer and UBSan, and
+# with JN_VERIFY_FACTS: every check a range fact dropped is put back, raising
+# if it would fire. jolt is not instrumented, so the ASan runtime is preloaded
+# (cc names its own: clang's on macOS, gcc's libasan on Linux). Needs cc.
+nativesan: mirlib
+	@if [ -n "$${TERMUX_VERSION:-}$${ANDROID_ROOT:-}" ]; then \
+	  echo "nativesan: skipped on bionic (no preloadable ASan runtime for a termux process)"; exit 0; fi; \
+	rt=""; for n in libclang_rt.asan_osx_dynamic.dylib libasan.so \
+	  libclang_rt.asan-$$(uname -m).so libclang_rt.asan.so; do \
+	  p=$$(cc -print-file-name=$$n); case "$$p" in /*) [ -f "$$p" ] && { rt=$$p; break; } ;; esac; \
+	done; \
+	[ -n "$$rt" ] || { echo "nativesan: cc has no ASan runtime"; exit 1; }; \
+	if [ "$$(uname -s)" = Darwin ]; then pre="JOLT_DYLD_INSERT_LIBRARIES=$$rt"; else pre="LD_PRELOAD=$$rt"; fi; \
+	env $$pre ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 NATIVE_SANITIZE=1 \
+	  bin/jolt run test/chez/native-test.clj
+
+# What each native region emits, compared between this checkout and BASE (a
+# path to another built checkout, e.g. a worktree of main): the same harness
+# (this one's) runs in both with NATIVE_EMIT_DUMP, and tools/native-emit-diff.clj
+# fails on a region whose C differs unless ALLOW (a regex over the region's
+# source) names it, and on a region only the base compiled. The base's run may
+# fail (the harness is this checkout's, with rows the base cannot pass); the
+# candidate's may not. A change that must not touch the emitted C proves it here.
+nativeemitgate: mirlib
+	@[ -n "$(BASE)" ] || { echo "nativeemitgate: BASE=<path to the other checkout>"; exit 1; }
+	@$(MAKE) --no-print-directory -C "$(BASE)" mirlib >/dev/null
+	@rm -rf target/native-emit && mkdir -p target/native-emit
+	@NATIVE_EMIT_DUMP=$(CURDIR)/target/native-emit/candidate bin/jolt run test/chez/native-test.clj \
+	  > target/native-emit/candidate.log 2>&1; echo $$? > target/native-emit/candidate.exit
+	@cd "$(BASE)" && NATIVE_EMIT_DUMP=$(CURDIR)/target/native-emit/base bin/jolt run $(CURDIR)/test/chez/native-test.clj \
+	  > $(CURDIR)/target/native-emit/base.log 2>&1 || true
+	@bin/jolt run tools/native-emit-diff.clj target/native-emit/base target/native-emit/candidate '$(ALLOW)'
+	@st=$$(cat target/native-emit/candidate.exit); [ "$$st" = 0 ] || { \
+	  echo "nativeemitgate: the candidate's native gate exited $$st (target/native-emit/candidate.log):"; \
+	  tail -20 target/native-emit/candidate.log; exit 1; }
+
+# A program with native regions: C in a jolt build binary, JIT'd under jolt
+# run, same output, every region linked in the binary and JIT'd under run.
+nativebuild: testbin
+	@JOLT_BIN="$${JOLT_BIN:-target/release/jolt}" sh host/chez/native-build-smoke.sh
+
+# The ownership and cast rules native regions rely on, proved with z3 (each file
+# must answer unsat). Manual: the CI images do not carry z3.
+nativeproofs:
+	@for f in test/native/proofs/*.smt2; do \
+	  r=$$(z3 "$$f"); [ "$$r" = unsat ] || { echo "FAIL nativeproofs: $$f answered $$r"; exit 1; }; \
+	done; echo "native proofs OK"
 
 # RRB vector: catvec/slice against a list model with structural invariants
 # (seeded sequences, seed printed on failure), and the n-vs-4n complexity
@@ -1158,6 +1280,13 @@ fieldread:
 # must emit jrec-field-at (bare index) instead of jolt-get.
 inline-body:
 	@$(CHEZ) --script host/chez/run-inline-body.ss
+
+# Guarded inlining in the open-world spine (#1713): a small fn splices into its
+# callers behind a test that its var still holds the fn the body came from, and
+# a redefinition, with-redefs, alter-var-root, or a caller replayed after its
+# callee was redefined all take the call; ^:dynamic and protocol methods stay calls.
+guardedinline:
+	@$(CHEZ) --script host/chez/run-guarded-inline.ss
 
 # DCE reference collection (dce.ss): an app form's refs must union an IR walk
 # (:var/:the-var nodes) with a text scan of the emitted Scheme, so a macro-spliced
@@ -1279,6 +1408,13 @@ staticsite:
 arraymap:
 	@$(CHEZ) --script test/chez/arraymap-test.ss
 
+# Hash-mode maps and sets: random assoc/dissoc, persistent and through a
+# transient, against an alist model over collision families and nil/false keys;
+# the trie must iterate in hash-chunk order and keep its key/value slot-pair
+# node layout (test/chez/hamt-test.ss).
+hamt:
+	@$(CHEZ) --script test/chez/hamt-test.ss
+
 # A plain defrecord (no collection methods of its own) answers count, contains?,
 # seq, assoc, reduce-kv, into, = and hash from its slots ahead of the arm walk
 # (records-coll.ss jrec-plain?): which types are plain, that no arm claims one,
@@ -1360,6 +1496,13 @@ unitcontext:
 # that proc takes, so this is what pins the two together.
 oparity:
 	@$(CHEZ) --script test/chez/op-arity-test.ss
+
+# Inlining through a top-level definition (chez-patches/0010): a callee defined
+# with sa-define-inlinable! is inlined into a guarded call compiled afterward,
+# the guard falls back, and a symbol is defined once. The inlining rows skip on
+# a stock Chez unless JOLT_REQUIRE_LOCKFREE_CHEZ=1 (CI).
+toplevelinline:
+	@$(CHEZ) --script test/chez/top-level-inline-test.ss
 
 # unchecked-add/-subtract/-multiply past the fixnum range: the kernel's 64-bit
 # wraparound entries (chez-patches/0008) and seq.ss's fallback without them,
@@ -1561,6 +1704,7 @@ enummodel:
 lazyshims:
 	@CHEZ='$(CHEZ)' $(CHEZ) --script tools/lazy-shims-gen.ss --check
 	@CHEZ='$(CHEZ)' $(CHEZ) --script test/chez/lazy-shims-test.ss
+	@$(CHEZ) --script test/chez/lazy-hoist-test.ss
 
 # Every java.util collection shim round-trips through a state image (its
 # contents, order, comparator and class), or is refused naming its class.
@@ -1717,6 +1861,12 @@ statlayout:
 # allowlist records today's unmigrated sites and must only ever shrink.
 lockcheck:
 	@sh host/chez/lock-check.sh
+
+# Every multimethod epoch bump goes through mm-epoch-bump!, whose release fence
+# (paired with mm-resolve-table's acquire) keeps the dispatch caches from pairing
+# a new epoch with an old method on arm64.
+mmepochcheck:
+	@sh host/chez/mm-epoch-check.sh
 
 # The other half of the same rule: a fiber never leaves the CPU while its carrier
 # holds a counted lock. lockcheck above proves the runtime can TELL that a lock is
@@ -2153,6 +2303,21 @@ closedstdout:
 # windows-deps job runs it too.
 stderrsplit:
 	@sh test/chez/stderr-split-smoke.sh $(CHEZ)
+
+# FileChannel.lock/tryLock exclude other processes: a held lock makes another
+# process's tryLock answer nil and its lock() wait until the holder lets go or
+# exits. Needs two processes, so it is a script; the single-process rows are in
+# unit.edn's nio-filelock suite.
+filelock:
+	@sh test/chez/file-lock-smoke.sh $(CHEZ)
+
+# Files/newInputStream, newOutputStream and newByteChannel with DELETE_ON_CLOSE
+# read and write the file until they close and leave nothing behind, with the
+# other open options beside it. Here that is the unlink after open(2); the rows
+# it exists for are Windows' (FILE_FLAG_DELETE_ON_CLOSE on a HANDLE), which run
+# against jolt.exe in windows-static and under tools/wine.
+deleteonclose:
+	@$(CHEZ) --script host/chez/cli.ss test/chez/delete-on-close-smoke.clj
 
 # Relative paths under bin/jolt resolve against the caller's directory, not the
 # checkout the launcher cd's to: the jolt.host filesystem functions, load-file,

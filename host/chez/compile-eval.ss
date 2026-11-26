@@ -21,7 +21,10 @@
 ;; The compiler reads source as FORMS (set literals stay {:jolt/type :jolt/set},
 ;; which the analyzer lowers) — the raw reader, not clojure.core/read-string,
 ;; whose data conversion would turn those into real sets.
-(define jolt-ce-read jolt-read-form-raw)
+;; Source text read for compiling, so its lists carry the positions a
+;; Compiler.load of the text would give (reader.ss rdr-data-pos); read-string's
+;; own read carries none, as the reference's does.
+(define (jolt-ce-read s) (parameterize ((rdr-data-pos #t)) (jolt-read-form-raw s)))
 
 ;; --- current source location ------------------------------------------------
 ;; The position of the top-level form currently compiling/evaluating, so an
@@ -66,44 +69,9 @@
     (fold-left (lambda (m s) (jolt-assoc1 m (jolt-symbol #f s) #t))
                (jolt-assoc1 (jolt-hash-map) (jolt-symbol "clojure.core" "import*") #t)
                unq)))
-;; clojure.lang.Compiler/demunge — reverse the name munging Clojure applies to
-;; build JVM class/method names, so "clojure.core$odd_QMARK_" -> clojure.core/odd?.
-;; clojure.spec.alpha's fn-sym uses it to recover a symbol from a fn's class name.
-;; Longest tokens first; a standalone _ is a hyphen; $ separates ns from name.
-;;
-;; Derived from class-munge-map (java/host-class.ss), the forward table, so the two
-;; directions cannot drift: every escape demunge reverses is one munge emits. The
-;; hyphen row is dropped — its escape is a bare "_", which demunge handles as its
-;; own rule below rather than as a token — and "_DOT_" is added, an escape jolt
-;; reverses although Clojure's CHAR_MAP never produces it. Sorted longest token
-;; first so a scan cannot stop at a shorter token that prefixes a longer one.
-(define demunge-token-map
-  (sort (lambda (a b) (fx>? (string-length (car a)) (string-length (car b))))
-        (cons '("_DOT_" . ".")
-              (fold-left (lambda (acc p)
-                           (if (string=? (cdr p) "_")
-                               acc
-                               (cons (cons (cdr p) (string (car p))) acc)))
-                         '()
-                         class-munge-map))))
-(define (compiler-demunge s)
-  (let* ((s (if (string? s) s (jolt-str-render-one s)))
-         (n (string-length s))
-         (out (open-output-string)))
-    (let loop ((i 0))
-      (if (>= i n) (get-output-string out)
-          (let ((tok (let scan ((ts demunge-token-map))
-                       (cond ((null? ts) #f)
-                             ((let ((t (caar ts)))
-                                (and (<= (+ i (string-length t)) n)
-                                     (string=? (substring s i (+ i (string-length t))) t)))
-                              (car ts))
-                             (else (scan (cdr ts)))))))
-            (cond
-              (tok (display (cdr tok) out) (loop (+ i (string-length (car tok)))))
-              ((char=? (string-ref s i) #\_) (write-char #\- out) (loop (+ i 1)))
-              ((char=? (string-ref s i) #\$) (write-char #\/ out) (loop (+ i 1)))
-              (else (write-char (string-ref s i) out) (loop (+ i 1)))))))))
+;; Compiler/demunge (compiler-demunge) lives in java/host-class.ss beside
+;; class-munge-map: the runtime names a fn in an ArityException with it, and a
+;; built program carries no compiler.
 ;; clojure.lang.Compiler/CHAR_MAP — the forward munge map (special char -> escape
 ;; token) as a jolt map, which is what a Clojure caller reading the field expects.
 ;; class-munge-map is already exactly that table; this only changes its shape.
@@ -316,8 +284,18 @@
 ;; Tail-frame history. Turning it on makes the emitter add a per-fn history push to
 ;; every fn compiled AFTERWARD, and allocates this thread's ring. Suppressed when
 ;; JOLT_TRACE is a falsey value, so JOLT_TRACE=0 / off / no disables it in dev mode.
+;; Off when JOLT_TRACE is a falsey value or --no-trace was given: the one test
+;; every enable and the build's emission switch (build.ss) go through, so the
+;; environment variable and the option cannot answer differently.
+(define jolt-trace-off-flag? #f)
+(define (jolt-trace-off?)
+  (or jolt-trace-off-flag? (jolt-trace-env-off? (getenv "JOLT_TRACE"))))
+;; --no-trace, set before the enable it suppresses: the launcher takes it ahead
+;; of jolt-trace-init!, and `jolt build` reads its own before it emits.
+(define (jolt-trace-set-off!) (set! jolt-trace-off-flag? #t))
+(def-var! "jolt.host" "set-trace-off!" (lambda () (jolt-trace-set-off!) jolt-nil))
 (define (jolt-enable-trace!)
-  (unless (jolt-trace-env-off? (getenv "JOLT_TRACE"))
+  (unless (jolt-trace-off?)
     (let ((stf (var-deref "jolt.backend-scheme" "set-trace-frames!")))
       (when (procedure? stf) (stf #t)))
     (jolt-trace-enable!)))
@@ -340,11 +318,16 @@
 ;; affected (the seed prelude is already compiled), which is why a seq/string/map
 ;; workload measures the same either way. It is only visible in code that is almost
 ;; entirely user-level calls — a fib microbenchmark pays ~7x, which is the case to
-;; set JOLT_TRACE=0 for. A `jolt build` binary is unaffected: its prologues are
-;; baked at build time, so this runtime switch cannot add them.
-(define (jolt-trace-init-from-env!)
-  (unless (jolt-trace-env-off? (getenv "JOLT_TRACE"))
-    (jolt-enable-trace!)))
+;; set JOLT_TRACE=0 for, or pass --no-trace as the first argument (`jolt
+;; --no-trace run …`), which this takes off ARGS before it decides. A `jolt build`
+;; binary is unaffected: its prologues are baked at build time, so this runtime
+;; switch cannot add them. Returns the arguments left to dispatch.
+(define (jolt-trace-init! args)
+  (let ((args (if (and (pair? args) (equal? (car args) "--no-trace"))
+                  (begin (jolt-trace-set-off!) (cdr args))
+                  args)))
+    (jolt-enable-trace!)
+    args))
 ;; Host-side mirror of the emitter's trace-frames? flag: whether the emitted
 ;; text carries #|L<line>|# markers (backend_scheme.clj with-site). When it is
 ;; off, no markers exist, so the annotated read below would attach source
@@ -525,9 +508,15 @@
          ;; the form runs as soon as it compiles (hc-late-bound-namespace?)
          (node (parameterize ((hc-compiling-to-run #t)) (jolt-ce-analyze ctx form))))
     (jolt-lint-node! node)
-    (if (hc-compiler-direct-linking?)
-        (jolt-direct-link-emit node ctx)
-        (jolt-ce-emit (jolt-ce-run-passes node ctx)))))
+    (cond
+      ((hc-compiler-direct-linking?) (jolt-direct-link-emit node ctx))
+      ;; guarded inlining stashes and splices on the back end's unit, the one
+      ;; the inline pass reads (run-passes' invariant), as direct-linking does.
+      ;; Only untraced: a traced report names each fn from its own frame.
+      ((and hc-guarded-inline-on (not (jolt-ce-trace-frames?)))
+       (parameterize ((hc-form-guarded #t))
+         (jolt-ce-emit (jolt-ce-run-passes node ctx (jolt-ce-current-unit)))))
+      (else (jolt-ce-emit (jolt-ce-run-passes node ctx))))))
 
 ;; A form compiled under (binding [*compiler-options* {:direct-linking true}] ...)
 ;; gets what `jolt build` gives every app form: calls to the vars defined this
@@ -682,7 +671,16 @@
          (fn-sym (jolt-symbol "clojure.core" "fn")))
     (values (symbol-t-name name-sym)
             (apply jolt-list (cons fn-sym (ce-macro-arities after-meta)))
-            (ce-defmacro-meta name-sym after-meta attr doc trail))))
+            (ce-with-form-position (ce-defmacro-meta name-sym after-meta attr doc trail) f))))
+
+;; The form's reader position (:line/:column, and :file when compiling a file)
+;; merged last, as the analyzer's stamp-def-pos does for a runtime defmacro and
+;; the JVM Compiler does for every def: position beats an attr-map's :line.
+(define (ce-with-form-position m f)
+  (let ((p (hc-form-position f)))
+    (if (jolt-nil? p)
+        m
+        (pmap-fold p (lambda (k v acc) (jolt-assoc acc k v)) (or m (jolt-hash-map))))))
 
 ;; Clojure's compilation-unit rule applies to a top-level MACRO CALL too: the
 ;; form is macroexpanded first, and when the expansion lands on (do ...) its
@@ -760,7 +758,7 @@
      (let loop ((fs (cdr (seq->list form))) (result jolt-nil) (cur ns))
        (if (null? fs)
            result
-           (let ((r (jolt-compile-eval-form/outer (car fs) cur outer)))
+           (let ((r (jolt-compile-eval-form/outer (hc-propagate-pos form (car fs)) cur outer)))
              (loop (cdr fs) r (chez-current-ns))))))
     ;; a macro call whose expansion is a (do ...): unroll the expansion the same
     ;; way (each child re-enters, so nested macro-to-do chains unroll too). The
@@ -981,8 +979,34 @@
 ;; at runtime). eval takes an already-read FORM (e.g. from quote / list); it and
 ;; load-string compile+eval in the current ns. eval is removed from the analyzer's
 ;; special-symbol lists (host-contract.ss) so it resolves as an ordinary core var.
+;;
+;; A form with no position of its own (built by code, or read by read-string,
+;; which stamps none) compiles at the position of the form being evaluated
+;; around it, as the reference's Compiler takes LINE/COLUMN from the enclosing
+;; load for any expression without :line metadata: its fns' frames, an `is` in
+;; it and a def it makes name that line. A form that has one compiles at its
+;; own, and the enclosing position is back once the eval returns, as the
+;; reference's binding of LINE is popped.
+(define (ce-eval-at-enclosing form)
+  (let ((line (jolt-atom-val compiler-line-cell))
+        (col (jolt-atom-val compiler-column-cell)))
+    (if (and (cseq? form) (fixnum? line) (fx>? line 0)
+             (jolt-nil? (hc-form-line form)))
+        (let ((m (jolt-meta form)))
+          (jolt-with-meta form
+            (let ((m (if (pmap? m) m (jolt-hash-map))))
+              (jolt-assoc (jolt-assoc m hc-kw-line line) hc-kw-column col))))
+        form)))
 (def-var! "clojure.core" "eval"
-  (lambda (form) (jolt-compile-eval-form form (chez-current-ns))))
+  (lambda (form)
+    (let ((line (jolt-atom-val compiler-line-cell))
+          (col (jolt-atom-val compiler-column-cell)))
+      (dynamic-wind
+        void
+        (lambda () (jolt-compile-eval-form (ce-eval-at-enclosing form) (chez-current-ns)))
+        (lambda ()
+          (jolt-atom-val-set! compiler-line-cell line)
+          (jolt-atom-val-set! compiler-column-cell col))))))
 ;; load-string is Compiler.load over a string: *ns* is bound for the load, so
 ;; an (ns …) in the string does not leave the caller in that namespace. A REPL
 ;; is the one place that wants the switch to stick, and it gets it the way

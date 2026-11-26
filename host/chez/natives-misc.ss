@@ -241,13 +241,12 @@
     ;; a sorted coll is a Map / Set too. Without this arm it fell to the else
     ;; clause, whose record-method-dispatch "hashCode" comes straight back here.
     ((htable-sorted-map? x)
-     (sc-tree-fold (jolt-ref-get x kw-tree)
-                   (lambda (n a) (i32 (+ a (bitwise-xor (jolt-java-hashcode (sc-nd-key n))
-                                                        (jolt-java-hashcode (sc-nd-val n))))))
-                   0))
+     (sc-tree-fold-kv (scoll-tree x)
+                      (lambda (k v a) (i32 (+ a (bitwise-xor (jolt-java-hashcode k) (jolt-java-hashcode v)))))
+                      0))
     ((htable-sorted-set? x)
-     (sc-tree-fold (jolt-ref-get x kw-tree)
-                   (lambda (n a) (i32 (+ a (jolt-java-hashcode (sc-nd-key n))))) 0))
+     (sc-tree-fold-kv (scoll-tree x)
+                      (lambda (k v a) (i32 (+ a (jolt-java-hashcode k)))) 0))
     ((pvec? x)
      (let ((n (pvec-count x)))
        (let loop ((i 0) (h 1))
@@ -264,7 +263,7 @@
     ;; else a record's is APersistentMap.mapHash over its entries, as defrecord's
     ;; hashCode is, and a deftype's is Object.hashCode, its identity. Both used
     ;; to answer the record hasheq.
-    ((jrec? x) (let ((m (find-method-any-protocol (jrec-tag x) "hashCode")))
+    ((jrec? x) (let ((m (find-method-any-protocol (jrec-rtag x) "hashCode")))
                  (cond (m (call-declared-hash m x))
                        ((jrec-record? x)
                         (fold-left (lambda (a e)

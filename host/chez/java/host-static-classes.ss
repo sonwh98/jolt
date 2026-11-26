@@ -553,12 +553,16 @@
 ;; An empty list is nil without an iterator: RT.seq's first hasNext answers it,
 ;; and a reader that asks (seq pending-forms) before every form it reads
 ;; (clojure.tools.reader's read*) asks it of an empty LinkedList almost always.
-(register-seq-arm! al-family?
+(define al-family-seq
   (lambda (x)
     (cond ((fx=? (al-cnt x) 0) jolt-nil)
           ((member (jhost-tag x) '("arraylist" "linkedlist"))
            (al-chunked-seq (al-iterator x)))
           (else (list->cseq (al->list x))))))
+(register-seq-arm! al-family? al-family-seq)
+;; ...and ahead of the arm walk (seq.ss jolt-seq-host-first): no later arm
+;; claims an ArrayList-family value, so answering it first changes no answer.
+(set-jolt-seq-host-first! (lambda (x) (and (al-family? x) (al-family-seq x))))
 
 ;; ---- StringWriter -----------------------------------------------------------
 ;; Writer.write(int) writes the CHAR for that code; append(char) appends the char.
@@ -2123,9 +2127,11 @@
 ;; JVM, to class and instance? alike, where a constructed StringReader is not.
 (define (string-reader-buffered? x)
   (let ((st (jhost-state x))) (and (fx>? (vector-length st) 3) (vector-ref st 3))))
-(register-class-arm! (lambda (x) (and (jhost? x) (string=? (jhost-tag x) "string-reader")
-                                      (string-reader-buffered? x)))
-                     (lambda (x) "java.io.BufferedReader"))
+(define (buffered-string-reader? x)
+  (and (jhost? x) (string=? (jhost-tag x) "string-reader") (string-reader-buffered? x)))
+;; live: whether it claims a string-reader depends on the reader, not its tag
+(class-arm-live! buffered-string-reader?)
+(register-class-arm! buffered-string-reader? (lambda (x) "java.io.BufferedReader"))
 ;; Reader.read(char[]) and Reader.read(char[], int, int) are BOTH overloads on
 ;; java.io.Reader, and the one-argument form means "fill the whole array". Only
 ;; the three-argument form was destructured here, so `(.read r cbuf)` — the
@@ -2663,7 +2669,9 @@
 (register-class-statics! "MapEntry" (list (cons "create" (lambda (k v) (make-map-entry k v)))))
 ;; JVM exception ctors -> a typed host throwable carrying the canonical :jolt/class
 ;; (so class / instance? / getMessage / ex-message reflect the real type) and the
-;; message. Supports (E. msg), (E. msg cause), (E. cause), and (E.).
+;; message. Supports (E. msg), (E. msg cause), (E. cause), and (E.), and the
+;; protected (E. msg cause enableSuppression writableStackTrace) a proxy calls:
+;; enableSuppression false makes addSuppressed record nothing.
 ;; Derived from the ONE exception hierarchy in class-hierarchy.ss: every
 ;; jch-isa? -> Throwable gets a ctor with no second list to maintain.
 (define (make-exc-ctor canonical)
@@ -2672,6 +2680,12 @@
            (rest (if (pair? args) (cdr args) '()))
            (cause (if (pair? rest) (car rest) jolt-nil)))
       (cond
+        ;; (E. msg cause enableSuppression writableStackTrace)
+        ((and (pair? rest) (pair? (cdr rest)))
+         (let ((t (jolt-host-throwable canonical (if (or (string? a0) (jolt-nil? a0)) a0 (jolt-str-render-one a0)) cause)))
+           (when (and (pair? (cddr rest)) (null? (cdddr rest)) (not (jolt-truthy? (cadr rest))))
+             (throwable-disable-suppression! t))
+           t))
         ((string? a0) (jolt-host-throwable canonical a0 cause))
         ((jolt-nil? a0) (jolt-host-throwable canonical jolt-nil))
         ;; (E. cause): a lone throwable arg is the cause, and the message is the
@@ -2997,9 +3011,112 @@
               (lambda (self) (make-jhost "b64-encoder"
                                (vector (b64-self-alphabet self) #f
                                        (b64-self-width self) (b64-self-sep self)))))))
+;; .wrap(InputStream) is the JDK 21 DecInputStream, step for step: it reads the
+;; source a byte at a time and decodes as it goes, so a source that stays open (a
+;; pipe, a socket) gives the bytes decoded so far without waiting for its end. A
+;; read decodes whole 4-character groups into the caller's range; a group that
+;; does not fit keeps its last bytes (rpos) for the next read. Characters outside
+;; the alphabet are skipped by a MIME decoder and an IOException naming the
+;; character for the others. `=` ends the stream (nothing after it is read), and
+;; so does the source's end, where a 2- or 3-character tail decodes and a lone
+;; character is an error. Each read starts a fresh group, so after an error the
+;; next read carries on from the source's next character.
+(define (b64-decode-table alphabet)
+  (let ((t (make-vector 256 -1)))
+    (vector-set! t (char->integer #\=) -2)
+    (do ((i 0 (fx+ i 1))) ((fx=? i 64) t)
+      (vector-set! t (char->integer (string-ref alphabet i)) i))))
+(define b64-decode-tbl (b64-decode-table b64-alphabet))
+(define b64url-decode-tbl (b64-decode-table b64url-alphabet))
+(define (b64-wrap-in-stream self src)
+  (let ((table (if (eq? (b64-self-alphabet self) b64url-alphabet) b64url-decode-tbl b64-decode-tbl))
+        (mime? (b64-self-mime? self))
+        (bits 0)      ; the group being decoded, 24 bits
+        (wpos 0)      ; where the next character's 6 bits go: 24, 18, 12, 6, 0
+        (rpos 0)      ; where the next byte to hand out sits: 24, 16, 8, 0
+        (eof? #f) (closed? #f))
+    (define (src-read) (jnum->exact (record-method-dispatch src "read" jolt-nil)))
+    (define (fail msg) (throw-jvm 'IOException msg))
+    (define (put! bv i x) (bytevector-u8-set! bv i (fxand x 255)))
+    (define (check) (when closed? (fail "Stream is closed")))
+    ;; the group's bytes still owed, once the stream has ended
+    (define (leftovers bv off pos limit)
+      (set! eof? #t)
+      (let loop ((pos pos))
+        (if (and (fx>=? (fx- rpos 8) wpos) (fx<? pos limit))
+            (begin (set! rpos (fx- rpos 8))
+                   (put! bv pos (fxsra bits rpos))
+                   (loop (fx+ pos 1)))
+            (if (or (fx>? pos off) (fx>=? (fx- rpos 8) wpos)) (fx- pos off) -1))))
+    (define (at-eof bv off pos limit)
+      (when (fx=? wpos 18) (fail "Base64 stream has one un-decoded dangling byte."))
+      (set! rpos 24)
+      (leftovers bv off pos limit))
+    ;; `=` after 2 characters needs a second one; anywhere but after 2 or 3 it is wrong
+    (define (padding bv off pos limit)
+      (when (or (fx>=? wpos 18) (and (fx=? wpos 12) (not (eqv? (src-read) 61))))
+        (fail (string-append "Illegal base64 ending sequence:" (number->string wpos))))
+      (set! rpos 24)
+      (leftovers bv off pos limit))
+    (define (decode bv off pos limit)
+      (set! bits 0)
+      (set! wpos 24)
+      (let loop ((pos pos))
+        (let ((i (src-read)))
+          (if (< i 0)
+              (at-eof bv off pos limit)
+              (let ((v (if (< i 256) (vector-ref table i) -1)))
+                (cond
+                  ((fx=? v -1)
+                   (if mime?
+                       (loop pos)
+                       (fail (string-append "Illegal base64 character 0x"
+                                            (string-downcase (number->string i 16))))))
+                  ((fx=? v -2) (padding bv off pos limit))
+                  (else
+                   (set! wpos (fx- wpos 6))
+                   (set! bits (fxior bits (fxsll v wpos)))
+                   (cond
+                     ((fx>? wpos 0) (loop pos))
+                     ((fx>=? (fx- limit pos) 3)
+                      (put! bv pos (fxsra bits 16))
+                      (put! bv (fx+ pos 1) (fxsra bits 8))
+                      (put! bv (fx+ pos 2) bits)
+                      (set! bits 0)
+                      (set! wpos 24)
+                      (if (fx=? (fx+ pos 3) limit) (fx- limit off) (loop (fx+ pos 3))))
+                     (else
+                      (put! bv pos (fxsra bits 16))
+                      (if (fx=? (fx+ pos 1) limit)
+                          (set! rpos 16)
+                          (begin (put! bv (fx+ pos 1) (fxsra bits 8))
+                                 (set! rpos 8)))
+                      (fx- limit off))))))))))
+    ;; read(byte[], off, len) on a bytevector range
+    (define (fill bv off len)
+      (check)
+      (let ((limit (fx+ off len)))
+        (cond
+          ((fx=? len 0) 0)
+          (eof? (leftovers bv off off limit))
+          (else
+           (let* ((pos (if (fx=? rpos 16)
+                           (begin (put! bv off (fxsra bits 8)) (set! rpos 8) (fx+ off 1))
+                           off))
+                  (pos (if (and (fx=? rpos 8) (fx<? pos limit))
+                           (begin (put! bv pos bits) (set! rpos 0) (fx+ pos 1))
+                           pos)))
+             (if (fx=? pos limit) len (decode bv off pos limit)))))))
+    (make-ops-in-stream
+     fill 3
+     (lambda () (check) (jnum->exact (record-method-dispatch src "available" jolt-nil)))
+     (lambda () (unless closed? (set! closed? #t) (record-method-dispatch src "close" jolt-nil)))
+     check
+     "java.io.InputStream")))
 (register-host-methods! "b64-decoder"
   (list (cons "decode" (lambda (self s)
-                         (na-bv->bytearray (b64-decode s (b64-self-alphabet self) (b64-self-mime? self)))))))
+                         (na-bv->bytearray (b64-decode s (b64-self-alphabet self) (b64-self-mime? self)))))
+        (cons "wrap" b64-wrap-in-stream)))
 ;; getMimeEncoder(lineLength, lineSeparator): the JDK rounds the length DOWN to a
 ;; multiple of 4 (so a line never splits a 4-character group), treats a
 ;; non-positive length as "no line separator at all", and refuses a separator
@@ -3016,7 +3133,7 @@
             ((or (char=? (string-ref sep i) #\=) (b64-in-alphabet? (string-ref sep i) b64-alphabet))
              (throw-jvm 'IllegalArgumentException
                         (string-append "Illegal base64 line separator character 0x"
-                                       (number->string (char->integer (string-ref sep i)) 16))))
+                                       (string-downcase (number->string (char->integer (string-ref sep i)) 16)))))
             (else (loop (+ i 1)))))))
 (register-class-statics! "Base64"
   (list (cons "getEncoder" (lambda () (make-jhost "b64-encoder" (vector b64-alphabet #t 0 ""))))
@@ -3120,7 +3237,12 @@
         ;; .groupCount, and the region controls .region / .regionStart /
         ;; .regionEnd / .reset.
         ((jolt-matcher? obj)
-         (cond ((string=? method-name "matches") (jolt-matcher-matches obj))
+         (cond ((let ((m (assoc method-name matcher-method-arities)))
+                  (and m (not (memv (length rest) (cdr m)))))
+                ;; (.matches m 1) answered true: the arms never read what they
+                ;; were not given. The JVM has no such overload.
+                (dispatch-miss obj method-name rest))
+               ((string=? method-name "matches") (jolt-matcher-matches obj))
                ((string=? method-name "lookingAt") (jolt-matcher-looking-at obj))
                ;; .find() resumes at the scan cursor; .find(from) resets and
                ;; scans from `from`.
@@ -3147,15 +3269,17 @@
                ((and (string=? method-name "reset") (null? rest)) (matcher-reset! obj))
                ;; start/end of the last successful find (whole match, or group n)
                ((string=? method-name "start")
-                (let ((mm (matcher-t-last obj)))
-                  (if mm (irregex-match-start-index mm (if (pair? rest) (jnum->exact (car rest)) 0))
-                      (jolt-matcher-no-match))))
+                (jolt-matcher-bound obj (if (pair? rest) (car rest) 0) #f))
                ((string=? method-name "end")
-                (let ((mm (matcher-t-last obj)))
-                  (if mm (irregex-match-end-index mm (if (pair? rest) (jnum->exact (car rest)) 0))
-                      (jolt-matcher-no-match))))
+                (jolt-matcher-bound obj (if (pair? rest) (car rest) 0) #t))
                (else (dispatch-miss obj method-name rest))))
         (else 'pass))))))
+
+;; Matcher's overloads by argument count; a name not here is unchecked.
+(define matcher-method-arities
+  '(("matches" 0) ("lookingAt" 0) ("find" 0 1) ("group" 0 1) ("groupCount" 0)
+    ("replaceAll" 1) ("replaceFirst" 1) ("region" 2) ("regionStart" 0) ("regionEnd" 0)
+    ("start" 0 1) ("end" 0 1)))
 
 ;; ---- def-var! the registry entry points so emit can also reach them ---------
 (def-var! "clojure.core" "host-static-ref" host-static-ref)
@@ -3438,6 +3562,20 @@
                     (list (cons p (lambda (x) (jt-jolt-strs->list (seam-invoke1 tags-fn x))))))))
     jolt-nil))
 
+;; Does a value tagged TAGS answer instance? for TNAME (its last segment IFACE)?
+;; By full name, or by simple name, but a qualified TNAME takes a simple tag only
+;; when no qualified tag in the list has that segment. jch-tags spells every class
+;; both ways, so demo.Process is not java.lang.Process (whose list holds "Process"
+;; only as java.lang.Process's short form), as jch-isa? has it. A library's
+;; simple-only tags (__register-class!) still match either spelling.
+(define (hsc-tags-name-class? tname iface tags)
+  (or (and (member tname tags) #t)
+      (and (member iface tags)
+           (or (string=? tname iface)
+               (not (exists (lambda (t) (and (not (string=? t iface))
+                                             (string=? (hsc-last-segment t) iface)))
+                            tags))))))
+
 ;; values that carry metadata (mirrors jolt-with-meta's set in natives-meta.ss).
 (define (hsc-imeta? x)
   (or (pvec? x) (pmap? x) (pset? x) (cseq? x) (empty-list-t? x)
@@ -3448,8 +3586,7 @@
       ;; the value's own class-graph tags (value-host-tags) are authoritative — the
       ;; SAME source protocol dispatch reads, so instance? and extend-protocol can't
       ;; disagree about the interfaces a builtin implements.
-      (if (let ((tags (value-host-tags val)))
-            (or (member (symbol-t-name type-sym) tags) (member iface tags)))
+      (if (hsc-tags-name-class? (symbol-t-name type-sym) iface (value-host-tags val))
           #t
       (let ((hit (cond
                    ;; IObj/IMeta — metadata-bearing values not tagged via jch-tags
@@ -3779,6 +3916,18 @@
     (let loop ((i f) (xs (list-sort less? items)))
       (if (null? xs) jolt-nil
           (begin (ja-set! a i (car xs)) (loop (fx+ i 1) (cdr xs)))))))
+;; Arrays.fill(a, [from, to,] v): the value narrowed to the element kind, and a
+;; typed reference array checks it against its component class once — the JVM
+;; stores it slot by slot, so a refused value leaves every slot as it was, and an
+;; empty range stores nothing and refuses nothing.
+(define (arrays-fill! a f t v)
+  (let* ((kind (jolt-array-kind a)) (v (na-elem-of kind v)))
+    (when (and (string? kind) (< f t)) (na-ref-store-check! a f kind v))
+    (do ((i f (fx+ i 1))) ((fx>=? i t) jolt-nil) (ja-set! a i v))))
+;; Arrays.rangeCheck's out-of-range index.
+(define (arrays-range-throw i)
+  (throw-jvm 'ArrayIndexOutOfBoundsException
+             (string-append "Array index out of range: " (number->string i))))
 (define arrays-sort
   (case-lambda
     ((a) (arrays-sort! a 0 #f jolt-compare))
@@ -3791,9 +3940,17 @@
                           (cond ((and (jolt-nil? a) (jolt-nil? b)) #t)
                                 ((or (jolt-nil? a) (jolt-nil? b)) #f)
                                 (else (ja-equal? a b)))))
-         (cons "fill" (lambda (a v)
-                        (let ((n (ja-len a)) (v (na-elem-of (jolt-array-kind a) v)))
-                          (do ((i 0 (fx+ i 1))) ((fx=? i n) jolt-nil) (ja-set! a i v)))))
+         (cons "fill" (case-lambda
+                        ((a v) (arrays-fill! a 0 (ja-len a) v))
+                        ((a from to v)
+                         (let ((f (jnum->exact from)) (t (jnum->exact to)))
+                           (cond ((> f t)
+                                  (throw-jvm 'IllegalArgumentException
+                                             (string-append "fromIndex(" (number->string f)
+                                                            ") > toIndex(" (number->string t) ")")))
+                                 ((< f 0) (arrays-range-throw f))
+                                 ((> t (ja-len a)) (arrays-range-throw t)))
+                           (arrays-fill! a f t v)))))
          ;; The tail past the source is the element kind's ZERO — nil in a
          ;; reference array, #\nul in a char[], false in a boolean[] — not the 0
          ;; every kind used to get regardless.
@@ -4275,22 +4432,18 @@
 ;; fn classes (ns$name) inherit AFunction (handled by jch-direct-supers).
 
 ;; (instance? Class e) on a throwable tagged-table carrying a JVM :class matches the
-;; carried class or any of its ancestors (full name or last segment), so a library's
-;; (catch UnknownHostException e …) / (catch IOException e …) matches the ex-info
-;; envelope it threw. Mirrors the (class e) arm (host-table.ss) for catch dispatch,
-;; which lowers to (instance? C e). Non-match returns 'pass so other arms still run.
+;; carried class or any of its ancestors, so a library's (catch UnknownHostException
+;; e …) / (catch IOException e …) matches the ex-info envelope it threw. jch-isa?
+;; decides: a simple name matches by segment, a qualified one only by its full name,
+;; so a record named IOException is not java.io.IOException. Mirrors the (class e)
+;; arm (host-table.ss) for catch dispatch, which lowers to (instance? C e).
+;; Non-match returns 'pass so other arms still run.
 (register-instance-check-arm!
   (lambda (type-sym val)
-    (if (and (htable? val) (string? (htable-str-ref val "class" #f)))
-        (let* ((cls (htable-str-ref val "class" #f))
-               (want (symbol-t-name type-sym))
-               (want-seg (hsc-last-segment want)))
-          (let loop ((names (cons cls (jch-closure cls))))
-            (cond ((null? names) 'pass)
-                  ((or (string=? want (car names))
-                       (string=? want-seg (hsc-last-segment (car names)))) #t)
-                  (else (loop (cdr names))))))
-        'pass)))
+    (let ((cls (and (htable? val) (htable-str-ref val "class" #f))))
+      (if (and (string? cls) (jch-isa? cls (symbol-t-name type-sym)))
+          #t
+          'pass))))
 
 ;; ---- (class x) for host-shim values ------------------------------------------
 ;; jhost-backed shims report their JVM class instead of falling through to the
@@ -4394,6 +4547,8 @@
 (define (reader-conditional-value? x)
   (jolt-reader-conditional-record? x))
 (register-class-arm! reader-conditional-value? (lambda (x) "clojure.lang.ReaderConditional"))
+;; so does a tagged literal
+(register-class-arm! jtagged? (lambda (x) "clojure.lang.TaggedLiteral"))
 ;; a multimethod reports its JVM class.
 (register-class-arm! (lambda (x) (jolt-multifn? x)) (lambda (x) "clojure.lang.MultiFn"))
 ;; …and answers its public constructor, MultiFn(String, IFn, Object,
@@ -4452,10 +4607,16 @@
   (cond ((al-family? coll) (list->cseq (al->list coll)))
         ((sb-jhost? coll) (sb-str* coll))
         (else coll)))
+;; jolt's own kinds go straight to the base nth: every nth the runtime makes --
+;; a vector called as a fn, PersistentList/create, a destructure's fallback --
+;; comes through here, and the shims' type tests (and jutil-views' on top of
+;; them) were most of its cost for a vector.
+(define-syntax shim-nth-native?
+  (syntax-rules () ((_ c) (or (pvec? c) (string? c) (cseq? c) (jolt-nil? c)))))
 (set! jolt-nth
   (case-lambda
-    ((coll i) (%shim-nth (shim-nth-target coll) i))
-    ((coll i d) (%shim-nth (shim-nth-target coll) i d))))
+    ((coll i) (if (shim-nth-native? coll) (%shim-nth coll i) (%shim-nth (shim-nth-target coll) i)))
+    ((coll i d) (if (shim-nth-native? coll) (%shim-nth coll i d) (%shim-nth (shim-nth-target coll) i d)))))
 (def-var! "clojure.core" "nth" jolt-nth)
 
 ;; --- java.nio.charset ---------------------------------------------------------

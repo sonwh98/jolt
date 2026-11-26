@@ -133,6 +133,10 @@
 (define (sa-gc-install-after-collect! maintain observe)
   #f)
 
+;; (sa-gc-set-collect-guard! guard): no collection hook to run it from (above),
+;; and Gambit's collector starts no threads of its own; nothing to do.
+(define (sa-gc-set-collect-guard! guard) (void))
+
 ;; (sa-gc-install-stall-watch! seconds on-stall) -> boolean
 ;; Permitted degradation: Gambit's collector is not a rendezvous of active
 ;; threads that a foreign call can hold off, and it exposes no hook on the
@@ -177,6 +181,12 @@
 ;; process must not share with code another emitted. Degradation: none.
 (define (sa-epoch-ms)
   (inexact->exact (floor (* (time->seconds (current-time)) 1000))))
+
+;; (sa-process-id) -> exact integer
+;; The operating-system id of this process. Contract: differs between two
+;; processes alive at the same time -- with sa-epoch-ms, the salt that keeps ids
+;; one process compiled from colliding with another's. Degradation: none.
+(define (sa-process-id) (##os-getpid))
 
 ;; ---- R5: io remainder (mtime) + the last GC hook -----------------------------
 
@@ -268,6 +278,10 @@
 (define (sa-flonum->bits x) (##flonum->ieee754-64 x))
 (define (sa-bits->flonum b) (##ieee754-64->flonum b))
 (define (sa-flonum-hi32 x) (quotient (##flonum->ieee754-64 x) 4294967296))
+(define (sa-flonum-lo32 x) (remainder (##flonum->ieee754-64 x) 4294967296))
+;; (sa-bignum-s64? x): whether a bignum lies in signed 64 bits, [-2^63, 2^63).
+(define (sa-bignum-s64? x)
+  (and (>= x -9223372036854775808) (<= x 9223372036854775807)))
 (define (sa-hi32->flonum h) (##ieee754-64->flonum (* h 4294967296)))
 
 (define (sa-endian)
@@ -718,9 +732,16 @@
 (define-syntax sa-ufx<? (syntax-rules () ((_ a b) (fx<? a b))))
 (define-syntax sa-ufx>=? (syntax-rules () ((_ a b) (fx>=? a b))))
 (define-syntax sa-ufx=? (syntax-rules () ((_ a b) (fx=? a b))))
+(define-syntax sa-ufxand (syntax-rules () ((_ a b) (fxand a b))))
+(define-syntax sa-ufxxor (syntax-rules () ((_ a b) (fxxor a b))))
+(define-syntax sa-ufx* (syntax-rules () ((_ a b) (fx* a b))))
+(define-syntax sa-ufxior (syntax-rules () ((_ a b) (fxior a b))))
+(define-syntax sa-ufxsra (syntax-rules () ((_ a b) (fxsra a b))))
+(define-syntax sa-ufxsll (syntax-rules () ((_ a b) (fxsll a b))))
 (define-syntax sa-uvector-ref (syntax-rules () ((_ v i) (vector-ref v i))))
 (define-syntax sa-uvector-set! (syntax-rules () ((_ v i x) (vector-set! v i x))))
 (define-syntax sa-ustring-ref (syntax-rules () ((_ s i) (string-ref s i))))
+(define-syntax sa-ustring-set! (syntax-rules () ((_ s i c) (string-set! s i c))))
 ;; The flonum family. Gambit binds no flvector and no R6RS bytevector-ieee
 ;; accessors: its flonum vector is the f64vector, a bytevector is a u8vector,
 ;; and an IEEE pattern converts through ##flonum->ieee754-32/64 and back. So

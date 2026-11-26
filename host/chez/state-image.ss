@@ -72,8 +72,25 @@
 ;; Version 12: a host collection shim travels as an image-hosted record (its
 ;; codec's kind and plain data, host-static.ss register-image-codec!) and an
 ;; enum constant as its class and name; formats 11 and older carry neither.
-(define jolt-image-format-version 14)
-(define jolt-image-read-versions '(2 3 4 5 6 7 8 9 10 11 12 13 14))
+;; Version 15: a defrecord/deftype instance carries its metadata in a slot of
+;; its own (chez-jrec-v6 and its children), so it travels inside the record and
+;; the sidecar no longer holds records. Formats 14 and older carry chez-jrec-v5
+;; (no meta slot), which restores through image-legacy-jrec? with its meta from
+;; the sidecar, like any slotless legacy kind.
+;; Version 16: a hash-mode map's trie is chez-hnode-v2 (an entry bitmap and a
+;; branch bitmap; entries as key/value slot pairs, branches after them) where v1
+;; held a (key . value) pair per slot under one bitmap. Formats 15 and older
+;; carry v1 tries, which restore through image-legacy-pmap? below. A rekeyed
+;; map now names its mode ('hash-map / 'array-map where 15 wrote 'map).
+(define jolt-image-format-version 16)
+(define jolt-image-read-versions '(2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))
+
+;; A map the walk rebuilds, from (key . value) entries in iteration order, in the
+;; mode the original had: a literal's rules would turn a small hash map into an
+;; array map, changing its class and its order.
+(define (image-map-in-mode array? entries)
+  (let ((kvs (apply append (map (lambda (e) (list (car e) (cdr e))) entries))))
+    (if array? (jolt-array-map-build kvs) (jolt-hash-map-build kvs))))
 
 ;; --- classification -----------------------------------------------------------
 ;; An eq hashtable is the ONE hashtable kind Chez can fasl; eqv/equal/string-hash
@@ -154,19 +171,19 @@
 ;; A jrec's descriptor is its TYPE, not its value: every instance of the type
 ;; shares one, and it rides raw in the fasl (which is why its layout is frozen —
 ;; see make-jrdesc). Walking it would copy it per instance, giving each restored
-;; record its own descriptor, and would drag the descriptor's internal eq
-;; hashtable through the transform. The record's own fields and its extension map
+;; record its own descriptor, and would drag the descriptor's dispatch vector
+;; through the transform. The record's own fields and its extension map
 ;; are the value, and those are walked.
 (define (image-opaque-field? v) (jrdesc? v))
 ;; The descriptor's ptable is the one part of it that is NOT type data: it is a
-;; per-process dispatch cache of impl procedures, keyed by per-process interned
-;; (proto . method) gensyms, filled the moment the type implements a protocol
+;; per-process dispatch vector of impl procedures, indexed by per-process
+;; interned protocol-method ids (protocols.ss intern-pm-key), filled the moment the type implements a protocol
 ;; (inline in defrecord/deftype, or by extend-protocol/extend-type). Riding raw
 ;; in the fasl it carried those procedures with it, so a record whose type
 ;; implemented any protocol refused at a bare #<procedure> the walk never saw
 ;; (scan, which does not look inside the descriptor, called it clean). The cache
-;; could not have been used after a restore anyway — its keys are gensyms of the
-;; writing process — and a #f ptable is the supported "use the string registry"
+;; could not have been used after a restore anyway — its slots are the ids the
+;; writing process issued, in its own order — and a #f ptable is the supported "use the string registry"
 ;; state (the one a redefinition leaves on a stale descriptor). So the write side
 ;; substitutes a ptable-less copy, one per descriptor so the instances still
 ;; share it, and the read side relinks to the live descriptor for the tag when
@@ -491,8 +508,8 @@
   (and (record? x)
        (record-rtd x)
        (eq? (record-type-uid (record-rtd x)) 'jolt-ref-v1)))
-;; A jrec from an image written before the hasheq slot (format <= 4): the
-;; family's nongenerative tags bumped, so the fasl materializes the OLD rtds and
+;; A jrec from an image written before the hasheq slot (format <= 4) or the meta
+;; slot (formats 5..14): the family's nongenerative tags bumped, so the fasl materializes the OLD rtds and
 ;; the instances answer #f to the current jrec?. Detected by uid prefix — every
 ;; family generation is chez-jrec… (chez-jrdesc… differs at the 8th char, and
 ;; the descriptor type is unchanged anyway) — and rebuilt into the current
@@ -521,22 +538,68 @@
 ;; fasl materializes the old rtd and its instances answer #f to pmap?. Detected
 ;; by uid prefix like a legacy jrec and rebuilt through the old rtd's
 ;; accessors: a v4 array-mode map's pairs become its slot vector, a hash-mode
-;; root is kept as is — hnode/hcoll are unchanged, so it IS a current trie.
+;; root is that generation's trie (converted as below).
 ;; Meta starts nil: the sidecar entry, walked with the body, lands on the
 ;; rebuilt map through image-reattach-meta! after the walk.
-(define (image-legacy-pmap? x)
-  (and (record? x) (not (pmap? x))
-       (let ((uid (record-type-uid (record-rtd x))))
-         (and (symbol? uid)
-              (let ((n (symbol->string uid)))
-                (and (fx>=? (string-length n) 9)
-                     (string=? (substring n 0 9) "chez-pmap")))))))
-(define (legacy-pmap->pmap x)
+;; A third case since format 16: a current map whose hash-mode root is a
+;; chez-hnode-v1 trie, (key . value) pair per slot, re-laid out as the current
+;; hnode (collections.ss hnode-v1->hnode). Any legacy map generation can carry
+;; one, so every arm converts its root.
+;; A chez-hnode-v1 trie (an image written before format 16) as a current one:
+;; each v1 slot was a (key . value) pair, an hnode-v1 or an hcoll, under one
+;; bitmap. The v1 rtd is the one the fasl materialized, so its fields are read
+;; through its own accessors. hcoll's layout did not change. Here, not in
+;; collections.ss: only an image restore meets one, and gambit (which shares
+;; collections.ss) has no record reflection to read it with.
+(define (hnode-v1? x)
+  (and (record? x) (not (hnode? x))
+       (eq? (record-type-uid (record-rtd x)) 'chez-hnode-v1)))
+(define (hnode-v1->hnode x)
   (let* ((rtd (record-rtd x))
-         (root ((record-accessor rtd 0) x))
+         (bm ((record-accessor rtd 0) x))
+         (src ((record-accessor rtd 1) x)))
+    (let loop ((bits bm) (j 0) (dm 0) (nm 0) (entries '()) (branches '()))
+      (if (hamt=? 0 bits)
+          (make-hnode dm nm (list->vector (append (reverse entries) branches)))
+          (let ((low (hamt-low-bit bits)) (c (vector-ref src j)) (rest (hamt-and bits (hamt-sub bits 1))))
+            (cond ((hnode-v1? c) (loop rest (fx+ j 1) dm (hamt-ior nm low) entries (cons (hnode-v1->hnode c) branches)))
+                  ((hcoll? c) (loop rest (fx+ j 1) dm (hamt-ior nm low) entries (cons c branches)))
+                  (else (loop rest (fx+ j 1) (hamt-ior dm low) nm (cons (cdr c) (cons (car c) entries)) branches))))))))
+(define (image-legacy-pmap? x)
+  (and (record? x)
+       (if (pmap? x)
+           (hnode-v1? (pmap-root x))
+           (let ((uid (record-type-uid (record-rtd x))))
+             (and (symbol? uid)
+                  (let ((n (symbol->string uid)))
+                    (and (fx>=? (string-length n) 9)
+                         (string=? (substring n 0 9) "chez-pmap"))))))))
+;;
+;; A v1 trie can also hold a bucket with a key of ANOTHER hash in it: the v1
+;; insert appended such a key to the bucket on its slot rather than nesting the
+;; bucket (collections.ss nest-bucket). Lookups still find it, but a later
+;; insert compares the bucket's hash and would file an equal key a second time.
+;; So a map converted from a v1 trie is rebuilt from its entries once the walk
+;; has restored them (walk-pmap / walk-pset consult this table); a rebuild
+;; before the walk would hash keys that may themselves still be legacy records.
+(define image-legacy-rehash (make-weak-eq-hashtable))
+(define (legacy-root->root r) (if (hnode-v1? r) (hnode-v1->hnode r) r))
+(define (legacy-pmap->pmap x)
+  (let ((m (legacy-pmap->pmap* x)))
+    ;; a v4 array map carried a v1 trie beside its order list, but comes back
+    ;; as slots: only a map still in hash mode is rebuilt
+    (when (and (hnode-v1? ((record-accessor (record-rtd x) 0) x)) (hnode? (pmap-root m)))
+      (hashtable-set! image-legacy-rehash m #t))
+    m))
+(define (legacy-pmap->pmap* x)
+  (let* ((rtd (record-rtd x))
+         (root (legacy-root->root ((record-accessor rtd 0) x)))
          (cnt ((record-accessor rtd 1) x)))
-    (if (eq? (record-type-uid rtd) 'chez-pmap-v5)
-        (make-pmap root cnt)
+    (cond
+      ;; a current record: only the root changes, its meta slot rides along
+      ((pmap? x) (%mk-pmap root cnt 0 (pmap-meta x)))
+      ((eq? (record-type-uid rtd) 'chez-pmap-v5) (make-pmap root cnt))
+      (else
         (let ((ord ((record-accessor rtd 2) x)))
           (if (or (pair? ord) (null? ord))
               (let* ((ps (reverse ord)) (n (length ps)) (arr (make-vector (fx* 2 n))))
@@ -546,7 +609,7 @@
                     (vector-set! arr (fx+ i 1) (cdar ps))
                     (loop (cdr ps) (fx+ i 2))))
                 (make-pmap arr n))
-              (make-pmap root cnt))))))
+              (make-pmap root cnt)))))))
 ;; The other collections from an image written before the meta slot (format
 ;; <= 7): chez-pvec-v3 (cnt shift root tail ent hasheq), chez-pset-v2 (m
 ;; hasheq), chez-cseq-v6 (head tail forced? kind cvec ci crest lock),
@@ -720,9 +783,9 @@
 ;; or the walked map.
 (define (image-carry-meta! new m)
   (unless (jolt-nil? m)
-    (if (coll-meta new)
-        (coll-meta-set! new m)
-        (meta-table-set! new m))))
+    (cond ((coll-meta new) (coll-meta-set! new m))
+          ((jrec? new) (jrec-meta-set! new m))
+          (else (meta-table-set! new m)))))
 
 ;; A procedure's substitution decision, shared by both modes so scan and dump
 ;; cannot disagree. Returns the registration (name . (form ns free-names)) for
@@ -1576,19 +1639,17 @@
                             (if (and rekey (not restore?))
                                 ;; a key's hash depends on a per-process fn id —
                                 ;; substitute the entries record; restore rebuilds
-                                (let ((r (make-image-rekey 'map
+                                (let ((r (make-image-rekey (if (pmap-array? x) 'array-map 'hash-map)
                                            (list->vector (reverse entries)))))
                                   (hashtable-set! memo x r)
                                   (image-carry-meta! r wm)
                                   r)
                             ;; on the read side a rekey verdict means the
                             ;; placement is stale: rebuild in this process
-                            (if (or dirty rekey (not (eq? wm m)))
+                            (if (or dirty rekey (not (eq? wm m))
+                                    (hashtable-contains? image-legacy-rehash x))
                                 (let ((nx (coll-unshared
-                                            (apply jolt-hash-map
-                                                   (apply append
-                                                          (map (lambda (e) (list (car e) (cdr e)))
-                                                               (reverse entries)))))))
+                                            (image-map-in-mode (pmap-array? x) (reverse entries)))))
                                   (hashtable-set! memo x nx)
                                   (image-carry-meta! nx wm)
                                   nx)
@@ -1630,13 +1691,13 @@
                         (if (hashtable-ref memo x #f)
                             (hashtable-ref memo x #f)
                             (if (and rekey (not restore?))
-                                (let ((r (make-image-rekey 'set
-                                           (list->vector (reverse pairs)))))
+                                (let ((r (make-image-rekey 'set (list->vector pairs))))
                                   (hashtable-set! memo x r)
                                   (image-carry-meta! r wm)
                                   r)
-                            (if (or dirty rekey (not (eq? wm m)))
-                                (let ((nx (coll-unshared (pset-from-pairs (reverse pairs)))))
+                            (if (or dirty rekey (not (eq? wm m))
+                                    (hashtable-contains? image-legacy-rehash (pset-m x)))
+                                (let ((nx (coll-unshared (pset-from-pairs pairs))))
                                   (hashtable-set! memo x nx)
                                   (image-carry-meta! nx wm)
                                   nx)
@@ -1915,10 +1976,12 @@
              ;; refs, image records, everything not special-cased above. The
              ;; rebuild applies record-constructor to the SAME list, which is why
              ;; the parent's fields have to be in it and in front.
-             ;; a pre-slot jrec (image-legacy-jrec?, format <= 4) rebuilds into
-             ;; the CURRENT family: fields read via its own rtd's accessors come
-             ;; back (desc ext fields...) root-first, the descriptor type is
-             ;; unchanged, and the ctor protocols start hasheq unset. The spill
+             ;; an older-layout jrec (image-legacy-jrec?: format <= 4 had no
+             ;; hasheq slot, formats 5..14 no meta slot) rebuilds into the
+             ;; CURRENT family: fields read via its own rtd's accessors come
+             ;; back (desc ext fields...) root-first once the hasheq cache is
+             ;; skipped, the descriptor type is unchanged, and the ctor protocols
+             ;; start hasheq unset and meta nil (the sidecar's lands after). The spill
              ;; type is told apart by its rtd name — field counts collide with a
              ;; one-field child.
              (walk-legacy-jrec
@@ -1926,18 +1989,24 @@
                 (or (hashtable-ref memo x #f)
                     (let* ((fs (image-record-fields (record-rtd x)))
                            (n (vector-length fs))
+                           ;; the slots that are not the record's VALUE: a
+                           ;; format 5..14 jrec (chez-jrec-v5) has the hasheq
+                           ;; cache after ext, and the current layout's meta is
+                           ;; taken from the sidecar
                            (vals (let loop ((i 0) (acc '()))
                                    (if (fx=? i n) (reverse acc)
                                        (let ((f (vector-ref fs i)))
                                          (loop (fx+ i 1)
-                                               (cons (walk (image-record-field-ref f x)
-                                                           (cons (symbol->string (car f)) path))
-                                                     acc)))))))
+                                               (if (memq (car f) '(hasheq meta))
+                                                   acc
+                                                   (cons (walk (image-record-field-ref f x)
+                                                               (cons (symbol->string (car f)) path))
+                                                         acc))))))))
                       (let* ((desc (car vals)) (ext (cadr vals)) (fvals (cddr vals))
                              (nx (if (eq? (record-type-name (record-rtd x)) 'jrec*)
                                      (make-jrec desc (car fvals) ext)
                                      (apply (vector-ref jrec-ctor-vec (length fvals))
-                                            desc ext 0 fvals))))
+                                            desc ext 0 jolt-nil fvals))))
                         (hashtable-set! memo x nx)
                         nx)))))
              ;; The legacy arms do not carry meta: a legacy record's meta is in
@@ -1947,7 +2016,10 @@
               (lambda (x path)
                 (or (hashtable-ref memo x #f)
                     (let ((nx (if (pset? x)
-                                  (walk-pset (make-pset (legacy-pmap->pmap (pset-m x))) path)
+                                  ;; a set reaching here is a current record
+                                  ;; (pset-v3 arrived with pmap-v6), so its meta
+                                  ;; slot carries over
+                                  (walk-pset (%mk-pset (legacy-pmap->pmap (pset-m x)) 0 (pset-meta x)) path)
                                   (walk-pmap (legacy-pmap->pmap x) path))))
                       (hashtable-set! memo x nx)
                       nx))))
@@ -2079,11 +2151,14 @@
                                                    wk
                                                    (walk (cdr e) (cons "<val>" path)))))
                                       (loop (fx+ i 1) (cons (cons wk wv) acc)))))))
-                  (let ((coll (if (eq? (image-rekey-kind x) 'map)
-                                  (apply jolt-hash-map
-                                         (apply append
-                                                (map (lambda (e) (list (car e) (cdr e))) pairs)))
-                                  (pset-from-pairs pairs))))
+                  (let ((coll (case (image-rekey-kind x)
+                                ;; format 16 names the map's mode; a format 15
+                                ;; 'map did not, and builds as a literal would
+                                ((hash-map) (image-map-in-mode #f pairs))
+                                ((array-map) (image-map-in-mode #t pairs))
+                                ((map) (apply jolt-hash-map
+                                              (apply append (map (lambda (e) (list (car e) (cdr e))) pairs))))
+                                (else (pset-from-pairs pairs)))))
                     (hashtable-set! memo x coll)
                     (image-meta-copy! x coll)
                     coll))))
@@ -2233,7 +2308,8 @@
                           ;; record's structural hash can embed one through a fn
                           ;; or deftype field. Same rule as the collections.
                           ((jrec? x) (jrec-hasheq-set! x 0)))
-                    (unless (or (var-cell? x) (coll-meta x))
+                    ;; a record's meta rides in its slot (format 15)
+                    (unless (or (var-cell? x) (coll-meta x) (jrec? x))
                       (let ((m (call/cc (lambda (k)
                                  (with-exception-handler (lambda (e) (k jolt-nil))
                                    (lambda () (jolt-meta x)))))))
@@ -2248,9 +2324,9 @@
 ;; what lets a collection's slot be written here.
 (define (image-reattach-meta! pairs)
   (for-each (lambda (p)
-              (if (coll-meta (car p))
-                  (coll-meta-set! (car p) (cdr p))
-                  (meta-table-set! (car p) (cdr p))))
+              (cond ((coll-meta (car p)) (coll-meta-set! (car p) (cdr p)))
+                    ((jrec? (car p)) (jrec-meta-set! (car p) (cdr p)))
+                    (else (meta-table-set! (car p) (cdr p)))))
             pairs))
 
 (define jolt-image-write!

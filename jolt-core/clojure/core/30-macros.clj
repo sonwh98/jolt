@@ -105,11 +105,17 @@
 ;; A symbol naming a PROTOCOL passes its ns-qualified key instead of the bare
 ;; name, so (instance? Shape x) asks about the Shape of THIS namespace — the JVM
 ;; resolves the same symbol to one specific generated interface.
+;; A type argument that is not a class name the macro resolves itself -- a local,
+;; an expression, a protocol's var (ns/P, or a bare P naming it; its value is the
+;; protocol's map), any non-symbol -- is cast to Class at run time, as the JVM's
+;; isInstance does (jolt.host/class-arg). A protocol's INTERFACE, the dotted
+;; my.ns.P, is a class name.
 (defmacro instance? [t x]
-  (let [local? (or (seq? t) (contains? &env t))
-        pkey (when (and (symbol? t) (not local?)) (jolt.host/protocol-key-of t))]
+  (let [local? (or (seq? t) (contains? &env t) (not (symbol? t)))
+        pkey (when (and (symbol? t) (not local?)) (jolt.host/protocol-key-of t))
+        pvar? (and pkey (or (namespace t) (not (some #(= % \.) (name t)))))]
     (cond
-      local? `(instance-check ~t ~x)
+      (or local? pvar?) `(instance-check (jolt.host/class-arg ~t) ~x)
       pkey `(instance-check ~pkey ~x)
       ;; an array class symbol (String/1, long/2) evaluates to its Class
       (and (symbol? t) (namespace t) (contains? #{"1" "2" "3" "4" "5" "6" "7" "8" "9"} (name t)))
@@ -135,7 +141,9 @@
 ;; became the recur TARGET: (loop [] (locking o (recur))) spun forever instead of
 ;; being refused.
 (defmacro locking [x & body]
-  `(jolt.host/with-monitor ~x (fn* [] (try ~@body))))
+  ;; the thunk is no class of the reference's (it has a let and a try), so it
+  ;; names nothing (jolt.analyzer *objx*)
+  `(jolt.host/with-monitor ~x (~(with-meta 'fn* {:jolt/same-objx true}) [] (try ~@body))))
 
 ;; STM macros over the host transaction seams (refs.ss). sync keeps the
 ;; reference's (sync flags & body) shape — flags are ignored, like the JVM.
@@ -385,11 +393,21 @@
 ;; Dynamic binding: install a thread-binding frame of var->value (array-map keeps
 ;; var-get happy, unlike a phm), restore on exit.
 (defmacro binding [bindings & body]
-  (let [pairs (reduce (fn [acc p] (conj (conj acc `(var ~(first p))) (second p)))
-                      [] (partition 2 bindings))]
-    `(let* [frame# (array-map ~@pairs)]
-       (push-thread-bindings frame#)
-       (try (do ~@body) (finally (pop-thread-bindings))))))
+  (assert-args
+    (vector? bindings) "a vector for its binding"
+    (even? (count bindings)) "an even number of forms in binding vector")
+  (if (= 2 (count bindings))
+    ;; one var: pushed without the frame map (dyn-binding.ss jolt-push-binding1!).
+    ;; let*, not do: a top-level do is split into separate top-level forms, which
+    ;; would drop the record of this expansion an error report names
+    `(let* []
+       (jolt.host/push-binding1! (var ~(first bindings)) ~(second bindings))
+       (try (do ~@body) (finally (pop-thread-bindings))))
+    (let [pairs (reduce (fn [acc p] (conj (conj acc `(var ~(first p))) (second p)))
+                        [] (partition 2 bindings))]
+      `(let* [frame# (array-map ~@pairs)]
+         (push-thread-bindings frame#)
+         (try (do ~@body) (finally (pop-thread-bindings)))))))
 
 ;; condp: clauses are test-expr result-expr, or test-expr :>> result-fn (calls
 ;; result-fn on the truthy (pred test-expr value)); a lone trailing expr is the
@@ -669,6 +687,45 @@
 ;; build one method clause (argv + field-bound body) from a method spec.
 ;; The clause is DATA, not a syntax-quote: a body that is itself a syntax-
 ;; quote would have its ~unquotes consumed a level early if re-spliced.
+;; Every name a method body could mean by a bare symbol, so a deftype or
+;; defrecord method binds only the fields its body mentions (#1713). Each field
+;; binding is a guarded slot read (a record's a get) on every call, and a method
+;; that names one field of four paid for all four -- rewrite-clj's node methods
+;; (tag, length, string) each touch one at most. Over-approximate by design:
+;; every symbol anywhere in the body counts, quoted or nested in a fn, so a field
+;; the body can reach is never left unbound.
+;;
+;; A macro's expansion can name a field the body never spells -- (defmacro
+;; use-x [] 'x) called as (use-x) -- and on the JVM every field is in scope for
+;; it. So a body that calls a macro from outside clojure.core binds every field
+;; (nil here); clojure.core's macros only pass on the symbols they are handed.
+(defn- foreign-macro-call? [x]
+  (and (seq? x) (symbol? (first x))
+       (let [v (resolve (first x))]
+         (and (var? v) (:macro (meta v))
+              (not= "clojure.core" (str (:ns (meta v))))))))
+(defn- body-sym-names [forms]
+  (let [walk (fn walk [acc x]
+               (cond (nil? acc) nil
+                     (symbol? x) (conj acc (name x))
+                     (foreign-macro-call? x) nil
+                     (coll? x) (reduce walk acc x)
+                     :else acc))]
+    (reduce walk #{} forms)))
+
+;; A recur in a deftype, defrecord or reify method body passes the method's
+;; arguments WITHOUT `this`, as on the JVM, where the method is the recur target
+;; and this is not one of its locals to rebind. The method is a fn taking this
+;; first, so the body goes inside a loop over the other parameters, which is
+;; the target the recur then finds. Only when the body can hold a recur (USED is
+;; the body's symbol names, nil when a foreign macro hides them) and every
+;; parameter is a plain symbol: a method without one compiles as before.
+(defn- method-recur-body [argv used body]
+  (if (and (or (nil? used) (contains? used "recur"))
+           (every? (fn [p] (and (symbol? p) (not= p (quote &)))) argv))
+    (list (list* 'clojure.core/loop (vec (mapcat (fn [p] [p p]) (rest argv))) body))
+    body))
+
 (defn- deftype-method-clause [fields mplace spec]
   ;; fresh-name each _ param so two _ params don't collide on the
   ;; field binds / live-read instance (see defrecord's mk-clause).
@@ -695,18 +752,30 @@
         ;; own — and never come back. It is also the cheaper read
         ;; (straight to the slot, no type cascade).
         nf (count fields)
+        used (body-sym-names (drop 2 spec))
         binds (loop [i 0 fs (seq fields) acc []]
                 (if fs
                   (let [f (first fs)]
                     (recur (inc i) (next fs)
-                           (if (or (mplace f) (contains? pnames (name f)))
+                           (if (or (mplace f) (contains? pnames (name f))
+                                   (and used (not (contains? used (name f)))))
                              acc
                              (conj acc f (deftype-slot-form "__deftype-slot" inst f [i nf] nil)))))
                   acc))
         mbody (map (fn [bf] (rewrite-field-access mplace inst shadowed bf)) (drop 2 spec))
         mbody (if (seq dlets) (list (list* 'clojure.core/let dlets mbody)) mbody)
         mbody (underscore-rebind (nth spec 1) raw mbody)]
-    (list argv (list* 'clojure.core/let binds mbody))))
+    (list* argv (method-recur-body argv used (list (list* 'clojure.core/let binds mbody))))))
+
+;; A type's inline method clause, its arglist marked so the analyzer knows it is
+;; a method of the class rather than a fn: the reference's NewInstanceMethod has
+;; no 20-param limit (jolt.analyzer.hints/arglist-type-method?).
+(defn- type-method-clause [clause]
+  (cons (vary-meta (first clause) assoc :jolt/type-method true
+                   ;; the class it is a method of, which names a reify inside it
+                   ;; (jolt.analyzer *objx*)
+                   :jolt/objx (str (munge (str *ns*)) "." (name (:jolt/type-name (meta (first clause))))))
+        (rest clause)))
 
 ;; inline impls register for dispatch but are NOT extenders of the
 ;; protocol (the JVM compiles them into the class) — register-inline-method,
@@ -720,7 +789,8 @@
               (cons `(register-inline-protocol! ~(name tname) ~proto)
                     (map (fn [nm]
                            `(register-inline-method ~(name tname) ~proto ~nm
-                                                    (fn ~@(get by-name nm))))
+                                                    (fn ~@(map (fn [c] (type-method-clause (cons (vary-meta (first c) assoc :jolt/type-name (name tname)) (rest c))))
+                                                               (get by-name nm)))))
                          names))))
           groups))
 
@@ -922,7 +992,12 @@
        ;; register method var-keys for devirtualization; the inference
        ;; reads this (via infer-unit!) to resolve a protocol call on a known record
        (register-protocol-methods! ~pkey [~@(map (fn [s] (name (first s))) sigs)])
-       ~@(map (fn [sig] (protocol-method-def pname pkey via-meta? sig)) sigs))))
+       ~@(map (fn [sig] (protocol-method-def pname pkey via-meta? sig)) sigs)
+       ;; each method's protocol fn as made here, which a protocol call site
+       ;; compares the var's value against (protocols.ss protocol-fn-of)
+       ~@(map (fn [sig] `(register-protocol-fn! ~(str *ns*) ~(name (first sig)) ~(symbol (str *ns*) (name (first sig))))) sigs)
+       ;; the protocol's name, which is what defprotocol answers on the JVM
+       (quote ~pname))))
 
 ;; Member threading: (.. x f g) => (. (. x f) g); a parenthesized member
 ;; carries args. Canonical Clojure shape, single-arity defmacro.
@@ -940,17 +1015,22 @@
 ;; record name matches its "ns.Name" tag, and a query for a qualified host class
 ;; (java.util.Map) matches the canonical short tag (Map) extend registered it as.
 (defn extends? [protocol atype]
-  (let [want (if (nil? atype) "nil" (if (jolt.host/class-object? atype) (.getName atype) (name atype)))
-        suffix? (fn [long short]
-                  (let [d (str "." short)]
-                    (and (> (count long) (count d))
-                         (= (subs long (- (count long) (count d))) d))))
-        pn-str (some-> protocol :name name)]
-    (boolean (or (some (fn [t]
-                         (let [tn (name t)]
-                           (or (= tn want) (suffix? tn want) (suffix? want tn))))
-                       (extenders protocol))
-                 (and pn-str (jolt.host/type-satisfies? want pn-str))))))
+  (if (jolt.host/retired-class? atype)
+    ;; a redefined type's OLD class, which extenders holds as itself (its name
+    ;; is the new class's, so only identity tells them apart)
+    (boolean (some (fn [t] (identical? t atype)) (extenders protocol)))
+    (let [want (if (nil? atype) "nil" (if (jolt.host/class-object? atype) (.getName atype) (name atype)))
+          suffix? (fn [long short]
+                    (let [d (str "." short)]
+                      (and (> (count long) (count d))
+                           (= (subs long (- (count long) (count d))) d))))
+          pn-str (some-> protocol :name name)]
+      (boolean (or (some (fn [t]
+                           (when-not (jolt.host/class-object? t)
+                             (let [tn (name t)]
+                               (or (= tn want) (suffix? tn want) (suffix? want tn)))))
+                         (extenders protocol))
+                   (and pn-str (jolt.host/type-satisfies? want pn-str)))))))
 
 ;; The canonical name for a protocol-extension type: a symbol/keyword via name, a
 ;; string as-is, nil as "nil" (extends on nil values), and a Class VALUE — e.g.
@@ -1106,6 +1186,29 @@
 (defmacro definterface [name-sym & body]
   `(do (def ~name-sym {}) (quote ~name-sym)))
 
+;; Compiler.trimGenID: s up to its last "__", if it has one. Plain seq fns, not
+;; String methods: the macro runs on every host.
+(defn- trim-gen-id [s]
+  (loop [i (- (count s) 2)]
+    (cond (neg? i) s
+          (and (= \_ (nth s i)) (= \_ (nth s (inc i)))) (subs s 0 i)
+          :else (recur (dec i)))))
+;; The enclosing class path and its spelling are the analyzer's (jolt.analyzer
+;; *objx*), the one place every generated class is named.
+(defn- reify-class-name [form]
+  (let [f (resolve 'jolt.analyzer/current-objx-name)
+        spell (resolve 'jolt.analyzer/objx-path-name)
+        id (resolve 'jolt.analyzer/objx-pos-id)
+        o (when f (f))
+        pos (meta form)
+        nsm (munge (str *ns*))]
+    (if (and spell id)
+      (str (cond (= o :top) (str nsm "$eval" (id pos))
+                 (vector? o) (trim-gen-id (spell o))
+                 :else nsm)
+           "$reify__" (id pos))
+      (str nsm "$reify__" (name (gensym ""))))))
+
 ;; make-reified-at is a fn (clojure.core). The site's SHAPE — its method names and
 ;; protocol keys, as a literal [[name …] [proto …]] of strings — is a constant, so
 ;; the compiled site binds it once and every instance hands the runtime the same
@@ -1121,26 +1224,26 @@
   ;; its last run of methods (impl-groups), and one method declared twice is
   ;; refused (merge-method-specs).
   ;;
-  ;; The third element of the shape names the class: ns$reify__N, one per reify
-  ;; form, as the JVM generates one class per form (its name also carries the
-  ;; enclosing fn and an eval counter, which jolt cannot reproduce). N comes from
-  ;; where the form sits (file, line, column), so a form compiled into the AOT
-  ;; cache and one expanded fresh in a later process can never share a name; a
-  ;; form with no position takes a gensym, below the position range
-  (let [cls (str (apply str (map (fn [c] (if (= c \-) \_ c)) (str *ns*))) "$"
-                 (let [{:keys [line column]} (meta &form)]
-                   (if line
-                     (str "reify__" (+ 1000000000 (mod (hash [*file* line column]) 1000000000)))
-                     (gensym "reify__"))))
+  ;; The third element of the shape names the class as Compiler names a reify's:
+  ;; the enclosing fn's class with its trailing __N trimmed (or the namespace),
+  ;; then $reify__N (reify-class-name). Each N comes from where its form sits
+  ;; (file, line, column), so a form compiled into the AOT cache and one expanded
+  ;; fresh in a later process can never share a name; a form with no position
+  ;; takes a gensym. The JVM's N is one global counter instead.
+  (let [cls (reify-class-name &form)
         ;; methods before any protocol name sit under a nil head
         groups (impl-groups (if (or (empty? forms) (symbol? (first forms))) forms (cons nil forms)))
         protos (remove nil? (map first groups))
         specs (mapcat rest groups)
         methods (merge-method-specs cls specs)
         order (distinct (map (fn [x] (name (first x))) specs))]
+    ;; the site's layout is built as its code LOADS, the JVM's compile of the
+    ;; reify class: a protocol redefined after that is not the one the site
+    ;; implements (records-dispatch.ss reify-site-shape)
     `(make-reified-at
-       [[~@order] [~@(map protocol-key protos)] ~cls]
-       ~@(map (fn [k] `(fn ~@(map (fn [x] `(~(nth x 1) ~@(drop 2 x))) (get methods k))))
+       (jolt.host/load-time-value (jolt.host/reify-site-shape [[~@order] [~@(map protocol-key protos)] ~cls]))
+       ~@(map (fn [k] `(fn ~@(map (fn [x] `(~(vary-meta (nth x 1) assoc :jolt/type-method true :jolt/objx cls) ~@(method-recur-body (nth x 1) (body-sym-names (drop 2 x)) (drop 2 x))))
+                                  (get methods k))))
               order))))
 
 (defmacro defrecord [name-sym fields & body]
@@ -1175,12 +1278,15 @@
                           ;; including a name a destructured param binds, whose let
                           ;; sits inside the field binds.
                           pnames (set (map name (concat argv (mapcat pattern-syms dlets))))
+                          used (body-sym-names (drop 2 spec))
                           binds (vec (mapcat (fn [f] [f `(get ~inst ~(keyword (name f)))])
-                                             (remove (fn [f] (contains? pnames (name f))) fields)))
+                                             (remove (fn [f] (or (contains? pnames (name f))
+                                                                 (and used (not (contains? used (name f))))))
+                                                     fields)))
                           mbody (drop 2 spec)
                           mbody (if (seq dlets) (list (list* 'clojure.core/let dlets mbody)) mbody)
                           mbody (underscore-rebind (nth spec 1) raw mbody)]
-                      (list hinted (list* 'clojure.core/let binds mbody))))
+                      (list* hinted (method-recur-body argv used (list (list* 'clojure.core/let binds mbody))))))
         groups (impl-groups (drop-type-opts body))
         ;; merge clauses by name across protocols into one multi-arity fn (see
         ;; deftype's by-name).
@@ -1214,7 +1320,8 @@
                      (cons `(register-inline-protocol! ~(name name-sym) ~proto)
                            (map (fn [nm]
                                   `(register-inline-method ~(name name-sym) ~proto ~nm
-                                                           (fn ~@(get by-name nm))))
+                                                           (fn ~@(map (fn [c] (type-method-clause (cons (vary-meta (first c) assoc :jolt/type-name (name name-sym)) (rest c))))
+                                                                      (get by-name nm)))))
                                 names))))
                  groups))))
 

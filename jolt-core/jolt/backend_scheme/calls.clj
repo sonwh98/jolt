@@ -7,15 +7,17 @@
   access, fixnum bit ops, static host calls. Each takes its operands already
   emitted, through an order-args fn of the caller's."
   (:require [clojure.string :as str]
+            [jolt.host :refer [seed-callable? record-shapes]]
+            [jolt.ir :as ir]
             [jolt.op-registry :as op-registry]
             [jolt.backend-scheme.names :refer [chez-str-lit munge-name]]
-            [jolt.backend-scheme.session
+            [jolt.backend-scheme.session :as session
              :refer [*array-vecs* *self-wrap* *site-call* *trace-self* *trace-site*
-                     clone-site? ctor-shapes fresh-label marker-safe-fqn?
-                     note-tail-call! target trace-frames? unsafe-prefix var-cache?]]
+                     clone-site? ctor-shapes direct-link? fresh-label marker-safe-fqn?
+                     note-tail-call! seed-mint? target trace-frames? unsafe-prefix var-cache?]]
             [jolt.backend-scheme.hoist
-             :refer [*cache-cells* *const-pool* cached-tag-desc const-coll-node?
-                     hoist-const-per-site]]))
+             :refer [*cache-cells* *const-pool* cached-tag-desc
+                     hoist-const hoist-const-per-site hoist-seed-root]]))
 
 ;; The op-registry tables the call heads read, bound to local names as
 ;; jolt.backend-scheme binds them (qualified refs, not :refer — see the note
@@ -40,7 +42,9 @@
     ;; the array access helpers: each coerces a number or throws, and reads or
     ;; writes the backing -- nothing a jolt fn can run under
     (into #{"jolt-throw" "jolt-flaget" "jolt-flaset" "jolt-flaset-float"
-            "jolt-vaget" "jolt-vaset" "jolt-baset"}
+            "jolt-vaget" "jolt-vaset" "jolt-baset"
+            ;; native-op's Chez spellings of zero?/pos?/neg? (rt.ss jolt-zero?/i)
+            "jolt-zero?/i" "jolt-pos?/i" "jolt-neg?/i"}
           (for [[op spec] op-registry/op-registry
                 :when (and (not= op "=")
                            (or (:num-args? spec) (:dbl spec) (:lng spec) (contains? preds op)))
@@ -75,7 +79,7 @@
       ;; 98000 ordering temporaries, one hoisted constant in every form wrapped in
       ;; an ordering let* it cannot need. The reference emits no ordering
       ;; temporaries for constants at all; they are constant-pool loads.
-      (const-coll-node? n)))
+      (ir/eager-const-coll-node? n)))
 
 ;; A var VALUE read is effect-free but order-SENSITIVE: a mutating sibling
 ;; (def/alter-var-root/set!) changes what it yields, so it must not move across
@@ -114,7 +118,13 @@
              :host (:name fnode)
              nil)
         fixed (when nm (get (fixed-arity-ops nm) nargs))
+        ;; (= a b) open-codes its common answers on Chez (rt.ss jolt=2/i)
+        fixed (if (and (= fixed "jolt=2") (not= :gambit (session/target))) "jolt=2/i" fixed)
         op (or fixed (when nm (native-ops nm)))
+        ;; zero?/pos?/neg? test a fixnum inline on Chez (rt.ss jolt-zero?/i)
+        op (if (and (#{"jolt-zero?" "jolt-pos?" "jolt-neg?" "jolt-nth"} op) (not= :gambit (session/target)))
+             (str op "/i")
+             op)
         arity-ok (when nm (op-arity nm))]
     (cond
       (nil? op) nil
@@ -183,6 +193,9 @@
    [:long "unchecked-inc-int"] (fn [a] (str "(jolt-uncinci " a ")"))
    [:long "unchecked-dec-int"] (fn [a] (str "(jolt-uncdeci " a ")"))
    [:long "unchecked-negate-int"] (fn [a] (str "(jolt-uncnegi " a ")"))
+   [:long "__unchecked-inc-int"] (fn [a] (str "(jolt-uncinciw " a ")"))
+   [:long "__unchecked-dec-int"] (fn [a] (str "(jolt-uncdeciw " a ")"))
+   [:long "__unchecked-negate-int"] (fn [a] (str "(jolt-uncnegiw " a ")"))
    [:double "unchecked-inc"] (fn [a] (str "(" (unsafe-prefix) "fl+ " a " 1.0)"))
    [:double "unchecked-dec"] (fn [a] (str "(" (unsafe-prefix) "fl- " a " 1.0)"))
    [:double "unchecked-negate"] (fn [a] (str "(" (unsafe-prefix) "fl- " a ")"))})
@@ -238,6 +251,27 @@
   (if-let [unary (get numeric-unary-forms [kind nm])]
     (unary (first args))
     (emit-numeric-op kind nm args order-args)))
+
+;; The keyword-site head for key KW (#1713). Chez open-codes the record-cache hit
+;; (rt.ss jolt-kw-get-site/i), which saves a defrecord field read ~12 ns but costs
+;; every other receiver -- a map, nil, a vector -- ~2 ns for the test, so it is
+;; emitted only for a key some defrecord declares as a field. The host's shapes
+;; map is cached until a type is defined, so the field set is rebuilt only when
+;; the map is a new one. A record defined after this site was compiled leaves the
+;; site on the procedure, whose own record cache still serves it.
+(def ^:private record-field-kws (atom nil))
+(defn- record-field-kw? [kw]
+  (let [m (record-shapes nil) memo @record-field-kws]
+    (contains? (if (and memo (identical? m (nth memo 0)))
+                 (nth memo 1)
+                 (let [s (into #{} (comp (filter :record) (mapcat :fields)) (vals m))]
+                   (reset! record-field-kws [m s])
+                   s))
+               kw)))
+(defn kw-site-head [kw]
+  (if (and (not= :gambit (session/target)) (record-field-kw? kw))
+    "(jolt-kw-get-site/i "
+    "(jolt-kw-get-site "))
 
 ;; slot of a declared field key in a record's field-order shape, or nil.
 (defn struct-field-index [shape kw]
@@ -464,80 +498,108 @@
                   (let [n (count as)
                         as (vec (map coerce-arg arg-tags arg-nodes as))]
                     (if (<= n 8)
-                      (str "(make-jrec" n " " cached-desc " jolt-nil 0"
+                      (str "(make-jrec" n " " cached-desc " jolt-nil 0 jolt-nil"
                            (when (pos? n) (str " " (str/join " " as))) ")")
                       (str "(let ((v (vector " (str/join " " as) "))) (make-jrec " cached-desc " v jolt-nil))")))))))
 
 ;; A protocol call devirtualized to one record type.
 (defn emit-devirt-call [node tail? order-args]
-  (do
-   (note-tail-call! tail?)
-   (order-args (fn [as]
-                 (let [r (fresh-label "_r$")
-                      ;; a site whose impl has a contagion clone resolves the clone
-                      ;; (fl* + exact->inexact on the :num operand) instead of the
-                      ;; shared impl; otherwise the ordinary devirt-resolve. The
-                      ;; non-specialized path is byte-identical (clone-sites empty
-                      ;; outside a whole-program build).
-                      resolver-name (if (clone-site? (:devirt-type node) (:devirt-proto node) (:devirt-method node))
-                                       "devirt-resolve-fl" "devirt-resolve")
-                      dv (str "(" resolver-name " " (chez-str-lit (:devirt-type node)) " "
-                              (chez-str-lit (:devirt-proto node)) " " (chez-str-lit (:devirt-method node))
-                              " " r ")")
-                      cells *cache-cells*
-                      ;; cache the resolved impl in a per-site cell when inside a
-                      ;; def; else resolve per call. The cell carries (epoch . fn):
-                      ;; each call compares its epoch against jolt-proto-epoch and
-                      ;; re-resolves on mismatch, so an extend-type after warmup
-                      ;; (a register-protocol-method epoch bump) invalidates this
-                      ;; site like every other dispatch path, mirroring the PIC.
-                      resolver (if cells
-                                  (let [c (fresh-label "_dvc$")]
-                                    (swap! cells conj c)
-                                    (str "(if (and (pair? " c ") (fx= (car " c ") jolt-proto-epoch))"
-                                         " (cdr " c ")"
-                                         " (let ((_f " dv ")) (set! " c " (cons jolt-proto-epoch _f)) _f))"))
-                                  dv)]
-                  (str "(let* ((" r " " (first as) ")) ("
-                       resolver " " (str/join " " (cons r (rest as))) "))"))))))
+  (note-tail-call! tail?)
+  (order-args (fn [as]
+                (let [r (fresh-label "_r$")
+                     ;; a site whose impl has a contagion clone resolves the clone
+                     ;; (fl* + exact->inexact on the :num operand) instead of the
+                     ;; shared impl; otherwise the ordinary devirt-resolve. The
+                     ;; non-specialized path is byte-identical (clone-sites empty
+                     ;; outside a whole-program build).
+                     resolver-name (if (clone-site? (:devirt-type node) (:devirt-proto node) (:devirt-method node))
+                                      "devirt-resolve-fl" "devirt-resolve")
+                     dv (str "(" resolver-name " " (chez-str-lit (:devirt-type node)) " "
+                             (chez-str-lit (:devirt-proto node)) " " (chez-str-lit (:devirt-method node))
+                             " " r ")")
+                     cells *cache-cells*
+                     ;; cache the resolved impl in a per-site cell when inside a
+                     ;; def; else resolve per call. The cell carries (epoch . fn):
+                     ;; each call compares its epoch against jolt-proto-epoch and
+                     ;; re-resolves on mismatch, so an extend-type after warmup
+                     ;; (a register-protocol-method epoch bump) invalidates this
+                     ;; site like every other dispatch path, mirroring the PIC.
+                     resolver (if cells
+                                 (let [c (fresh-label "_dvc$")]
+                                   (swap! cells conj c)
+                                   (str "(if (and (pair? " c ") (fx= (car " c ") jolt-proto-epoch))"
+                                        " (cdr " c ")"
+                                        " (let ((_f " dv ")) (set! " c " (cons jolt-proto-epoch _f)) _f))"))
+                                 dv)]
+                 (str "(let* ((" r " " (first as) ")) ("
+                      resolver " " (str/join " " (cons r (rest as))) "))")))))
 
 ;; A protocol call through a per-site polymorphic inline cache.
 (defn emit-pic-call [node tail? order-args]
-  (do
-   (note-tail-call! tail?)
-   (order-args (fn [as]
-                (let [r (fresh-label "_r$")
-                      d (fresh-label "_d$")
-                      v (fresh-label "_v$")
-                      cells *cache-cells*
-                      proto (chez-str-lit (:proto node))
-                      method (chez-str-lit (:method node))
-                      apply-args (str/join " " (cons r (rest as)))]
-                  (if cells
-                    (let [c (fresh-label "_picv$")
-                          scan (pic-scan-clauses v d)]
-                      (swap! cells conj c)
-                      ;; hot path inlined: bind the receiver, the site's cache
-                      ;; vector and the receiver's desc; then, if the epoch still
-                      ;; matches, eq?-scan the cached descs and apply the hit impl
-                      ;; directly — no helper call after warmup. A miss (no cached
-                      ;; desc / stale epoch) has jolt-pic-add build the next cache
-                      ;; and the cell is set! to it: a cache vector is shared by
-                      ;; every thread calling here, so none is written in place.
-                      ;; A full cache gets the impl back instead (megamorphic).
-                      ;; A receiver with no desc resolves without caching.
-                      (let [miss (str "(let ((_nv (jolt-pic-add " v " " d " " proto " " method " " r ")))"
-                                      " (if (procedure? _nv) _nv"
-                                      " (begin (set! " c " _nv) (" (unsafe-prefix) "vector-ref _nv 1))))")]
-                        (str "(let* ((" r " " (first as) ")"
-                             " (" v " (or " c " jolt-pic-empty))"
-                             " (" d " (jrec-pic-desc " r ")))"
-                             " ((if (and " d " (" (unsafe-prefix) "fx= (" (unsafe-prefix) "vector-ref " v " " pic-epoch-idx ") jolt-proto-epoch))"
-                             " (or " scan " " miss ")"
-                             " (if " d " " miss " (protocol-resolve " proto " " method " " r ")))"
-                             " " apply-args "))")))
-                    (str "(let* ((" r " " (first as) "))"
-                         " ((protocol-resolve " proto " " method " " r ") " apply-args "))")))))))
+  (note-tail-call! tail?)
+  (order-args (fn [as]
+               (let [r (fresh-label "_r$")
+                     d (fresh-label "_d$")
+                     v (fresh-label "_v$")
+                     cells *cache-cells*
+                     proto (chez-str-lit (:proto node))
+                     method (chez-str-lit (:method node))
+                     apply-args (str/join " " (cons r (rest as)))]
+                 (if cells
+                   (let [c (fresh-label "_picv$")
+                         scan (pic-scan-clauses v d)]
+                     (swap! cells conj c)
+                     ;; hot path inlined: bind the receiver, the site's cache
+                     ;; vector and the receiver's desc; then, if the epoch still
+                     ;; matches, eq?-scan the cached descs and apply the hit impl
+                     ;; directly — no helper call after warmup. A miss (no cached
+                     ;; desc / stale epoch) has jolt-pic-add build the next cache
+                     ;; and the cell is set! to it: a cache vector is shared by
+                     ;; every thread calling here, so none is written in place.
+                     ;; A full cache gets the impl back instead (megamorphic).
+                     ;; A receiver with no desc resolves without caching.
+                     (let [miss (str "(let ((_nv (jolt-pic-add " v " " d " " proto " " method " " r ")))"
+                                     " (if (procedure? _nv) _nv"
+                                     " (begin (set! " c " _nv) (" (unsafe-prefix) "vector-ref _nv 1))))")]
+                       (if (= :gambit (session/target))
+                         (str "(let* ((" r " " (first as) ")"
+                              " (" v " (or " c " jolt-pic-empty))"
+                              " (" d " (jrec-pic-desc " r ")))"
+                              " ((if (and " d " (" (unsafe-prefix) "fx= (" (unsafe-prefix) "vector-ref " v " " pic-epoch-idx ") jolt-proto-epoch))"
+                              " (or " scan " " miss ")"
+                              " (if " d " " miss " (protocol-resolve " proto " " method " " r ")))"
+                              " " apply-args "))")
+                         ;; Chez: a record receiver reads its type's own impl
+                         ;; from the descriptor's dispatch vector, at the
+                         ;; method's interned id (protocols.ss
+                         ;; jrdesc-vtable-ref, #1713); anything else -- an impl
+                         ;; inherited through an interface or Object, a host
+                         ;; value -- takes the per-site cache as before.
+                         ;; A host value whose type alone decides its impl (a
+                         ;; string, a number, a char, nil, a boolean, a keyword:
+                         ;; none carries metadata) keys the same cache by a
+                         ;; per-type symbol (rt.ss jolt-pic-host-key/i), where it
+                         ;; resolved on every call -- tools.reader coerces each
+                         ;; string it reads to a reader through a protocol.
+                         (let [id (hoist-const (str "(intern-pm-key " proto " " method ")"))
+                               f (fresh-label "_pf$")
+                               k (fresh-label "_k$")
+                               kscan (pic-scan-clauses v k)
+                               kmiss (str "(let ((_nv (jolt-pic-add " v " " k " " proto " " method " " r ")))"
+                                          " (if (procedure? _nv) _nv"
+                                          " (begin (set! " c " _nv) (" (unsafe-prefix) "vector-ref _nv 1))))")]
+                           (str "(let* ((" r " " (first as) ")"
+                                " (" d " (jrec-pic-desc/i " r "))"
+                                " (" f " (and " d " (jrdesc-vtable-ref " d " " id "))))"
+                                " (if " f " (" f " " apply-args ")"
+                                " (let* ((" v " (or " c " jolt-pic-empty))"
+                                " (" k " (or " d " (jolt-pic-host-key/i " r "))))"
+                                " ((if (and " k " (" (unsafe-prefix) "fx= (" (unsafe-prefix) "vector-ref " v " " pic-epoch-idx ") jolt-proto-epoch))"
+                                " (or " kscan " " kmiss ")"
+                                " (if " k " " kmiss " (protocol-resolve " proto " " method " " r ")))"
+                                " " apply-args "))))")))))
+                   (str "(let* ((" r " " (first as) "))"
+                        " ((protocol-resolve " proto " " method " " r ") " apply-args "))"))))))
 
 ;; (aget ^doubles a i), read inline when the index is a proven long.
 (defn emit-fl-aget [node tail? arg-nodes tl ich order-args]
@@ -580,14 +642,27 @@
          " (" fxop " " (str/join " " tmps) ")"
          " " (emit-call tail? nop tmps tl ich) "))")))
 
+;; java.lang.Character's predicates that open-code for an ASCII char on Chez
+;; (rt.ss jolt-char-pred/i), by member name.
+(def ^:private char-pred-intrinsics
+  {"isWhitespace" "whitespace" "isDigit" "digit" "isUpperCase" "upper"
+   "isLowerCase" "lower" "isLetter" "letter" "isLetterOrDigit" "letter-or-digit"})
+
 ;; A host static method call, through a per-site cache inside a pool.
 (defn emit-host-static-call [tail? fnode order-args]
   (if (do (note-tail-call! tail?) (and *const-pool* (var-cache?)))
-    (let [site (hoist-const-per-site "(host-static-site-make)")]
+    (let [site (hoist-const-per-site "(host-static-site-make)")
+          proc (fn [n] (str "(" (if (= :gambit (session/target)) "host-static-proc-site" "host-static-proc-site/i")
+                            " " site " " (chez-str-lit (:class fnode)) " "
+                            (chez-str-lit (:member fnode)) " " n ")"))
+          intrinsic (and (not= :gambit (session/target))
+                         (#{"Character" "java.lang.Character"} (:class fnode))
+                         (char-pred-intrinsics (:member fnode)))]
       (order-args (fn [as]
-                    (str "((host-static-proc-site " site " " (chez-str-lit (:class fnode)) " "
-                         (chez-str-lit (:member fnode)) " " (count as) ")"
-                         (if (empty? as) "" (str " " (str/join " " as))) ")"))))
+                    (if (and intrinsic (= 1 (count as)))
+                      (str "(jolt-char-pred/i " intrinsic " " (first as) " " (proc 1) ")")
+                      (str "(" (proc (count as))
+                           (if (empty? as) "" (str " " (str/join " " as))) ")")))))
     (order-args (fn [as]
                   (str "(host-static-call " (chez-str-lit (:class fnode)) " " (chez-str-lit (:member fnode))
                        (if (empty? as) "" (str " " (str/join " " as))) ")")))))
@@ -603,13 +678,41 @@
                                                ;; proven branch reads with that layout's
                                                ;; accessors, and cp0 folds their type tests
                                                ;; into this one
-                                               pred (if (<= 1 nf 8) (str "jrec" nf "?") "jrec?")]
-                                           ;; fresh binders: a fixed name would shadow
-                                           ;; a user local the value expression reads
-                                           (let [d (fresh-label "_rgd$") x (fresh-label "_rgx$")]
-                                             (str " (let ((" d " " (cached-tag-desc (:val (nth arg-nodes (inc (* 2 i))))) ")"
-                                                  " (" x " " (nth as (* 2 i)) "))"
-                                                  " (and " d " (" pred " " x ") (eq? (jrec-desc " x ") " d ")))"))))
+                                               pred (if (<= 1 nf 8) (str "jrec" nf "?") "jrec?")
+                                               ;; fresh binders: a fixed name would shadow
+                                               ;; a user local the value expression reads
+                                               d (fresh-label "_rgd$") x (fresh-label "_rgx$")]
+                                           (str " (let ((" d " " (cached-tag-desc (:val (nth arg-nodes (inc (* 2 i))))) ")"
+                                                " (" x " " (nth as (* 2 i)) "))"
+                                                " (and " d " (" pred " " x ") (eq? (jrec-desc " x ") " d ")))")))
                                        (range (quot (count as) 2))))
                      ")"))))
+
+;; Closed-world direct call to a SEED var — clojure.core and the other
+;; namespaces the runtime image boots with. Such a var is preloaded ahead of
+;; every app def and never emitted by this build, so the def binds its root
+;; procedure once at load and the site applies it directly: no var-cell-deref
+;; (7 ns), no jolt-invokeN (5 ns) — true? went 16 -> 4 ns.
+;; jolt.host/seed-callable? applies the same closed-world rule an app def gets
+;; (not ^:dynamic/^:redef, not redefined by the app) plus "root is a procedure
+;; whose arity mask admits this arity", so a keyword/map/multimethod-valued var
+;; and a wrong-arity call keep jolt-invoke. seed-callable? answers the callee's
+;; jv$ binding name for a var the seed minted direct-linked (def-var-linked!),
+;; and the site applies that top-level variable: the same one load, and a later
+;; def / alter-var-root / with-redefs of the var writes through to it (rt.ss
+;; var-root-set!), so the site follows a redefinition. A seed var the runtime
+;; defined itself (a Scheme def-var!) has no binding to name; its root is
+;; hoisted once at load, and a redefinition is invisible to that site, as under
+;; the JVM's direct linking. `jolt run` never direct-links. Off while MINTING
+;; the seed: the vars this arm would bind are the ones being emitted.
+(defn emit-seed-callable-invoke [fnode args tail? tl ich order-args]
+  (when (and (direct-link?) (not (seed-mint?)))
+    (when-let [sc (seed-callable? nil (:ns fnode) (:name fnode) (count args))]
+      (let [head (if (string? sc) sc (hoist-seed-root (:ns fnode) (:name fnode)))]
+        (order-args (fn [as] (emit-call tail? head as tl ich)))))))
+
+(defn record-ctor-shape [fnode n]
+  (when-let [shape (get (ctor-shapes) (str (:ns fnode) "/" (:name fnode)))]
+    (when (and (= (count (get shape :fields)) n) (<= n 6))
+      shape)))
 

@@ -27,6 +27,10 @@
 (check "mode off after" (prof/instrument-mode) nil)
 (check "instrumenting? off after" (prof/instrumenting?) false)
 
+(let [error ((fx "caught-return-cast") 42)
+      locals (:locals (frame (dbg/frames error) 'debug-fixture/caught-return-cast))]
+  (check "a returned cast exception retains its map local" (get locals 'm) {:k 42}))
+
 ;; a tail (/ y 0) and a tail call into it: both frames stay, with their locals
 (let [fs (frames-of #((fx "outer") 20))
       in (frame fs 'debug-fixture/inner)]
@@ -67,8 +71,9 @@
        '{k 7 p 1 q 2})
 (let [fs (frames-of #((fx "with-fn") 1))]
   (check "an anonymous fn's frame" (:locals (first fs)) '{y 2})
+  ;; its class is debug_fixture$with_fn$f__N, the fn bound to the local f
   (check "...named as Clojure demunges it"
-         (str/starts-with? (str (:fn (first fs))) "debug-fixture/with-fn/fn--") true)
+         (str/starts-with? (str (:fn (first fs))) "debug-fixture/with-fn/f--") true)
   (check "...under the fn it sits in"
          (get (:locals (frame fs 'debug-fixture/with-fn)) 'x) 1))
 

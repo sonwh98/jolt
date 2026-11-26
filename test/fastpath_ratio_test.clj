@@ -203,13 +203,14 @@
 ;;   arraylist-count    count / contains? on an ArrayList, HashSet or HashMap
 ;;   hashset-count      against the collection's own .size / .containsKey: the
 ;;   hashmap-count      ratio is the arm walk ahead of the handler. The 0.8.24
-;;   hashmap-contains   cycle added the fail-fast, concurrent and legacy
+;;   tag-pred-memo      cycle added the fail-fast, concurrent and legacy
 ;;                      families ahead of these, each a string compare per
 ;;                      call, and count got 1.2-1.3x slower while every answer
 ;;                      stayed right; the tag predicates are now remembered by
 ;;                      tag (define-jhost-tag-pred). Measured on macOS arm64,
 ;;                      2026-10: before 5.1 / 4.4 / 6.9 / 1.80, after 2.9 / 2.5 /
-;;                      3.0 / 1.36 (0.8.23 read 4.3 / 3.3 / 6.1 / 1.31). get
+;;                      3.0 / 1.36 (0.8.23 read 4.3 / 3.3 / 6.1 / 1.31; the last
+;;                      is contains?, whose row is now tag-pred-memo). get
 ;;                      against .get moved 1.24 -> 1.49 -> 1.22, too close to
 ;;                      its noise under make -j for a row of its own.
 ;;
@@ -224,12 +225,112 @@
 ;;                      small vector's print (measured 1.24-1.40, 2026-10; then
 ;;                      1.53-1.60 once every #object carried its identity hash and
 ;;                      the vector print got ~12% faster, the File side itself
-;;                      within 1.1x of before).
+;;                      within 1.1x of before). Re-based 2026-11 at 2.4: the
+;;                      streaming printer took the vector side from ~10 ms to
+;;                      ~5.3 ms per 20k while the File side also got faster
+;;                      (~13 ms to ~8.5 ms, release binaries, A/B in one
+;;                      session), which left the ratio at 1.5-1.7 on macOS and
+;;                      1.94-2.05 on the Linux runner.
+;;
+;;   var-call           the per-operation costs a reader pays per character and
+;;   multimethod-call   per node (#1713, rewrite-clj and tools.reader at ~10x
+;;   str-sb             the JVM). A call through a var read the cell through two
+;;   char-at            more calls (the binding-stack gate, then the root) and
+;;                      checked the arity with procedure-arity-mask, an
+;;                      out-of-line library call, ahead of the call Chez checks
+;;                      anyway: 16 ns where the procedure alone is 3. Against an
+;;                      inline vector nth: 3.02 -> 1.82. A multimethod reached its
+;;                      fixed-arity dispatch only after the variadic jolt-invoke
+;;                      built a rest list and walked the prefix arms, then hashed
+;;                      the dispatch value into the methods table; a keyword now
+;;                      hits a per-multifn inline cache (172 -> 40 ns). Against
+;;                      the plain fn call it wraps: 6.04 -> 3.81, and ~10 with only
+;;                      the multimethod half reverted, since main's plain call was
+;;                      the slow var call above. str of a StringBuilder walked
+;;                      every registered str arm before its own (against its
+;;                      .toString: 21.0 -> 10.1), and .charAt coerced its
+;;                      index through an out-of-line call before the in-range read
+;;                      (against nth: 1.36 -> 0.98). Measured x86_64, 2026-11-17.
+;;
+;;   wide-call          a call of more than four arguments had no fixed-arity
+;;                      entry: jolt-invoke took a rest list, measured it, checked
+;;                      the arity mask and applied it. Through a var it is
+;;                      open-coded at any arity now (42 -> 6 ns for six args;
+;;                      against a four-argument call ~7 -> ~1.05).
+;;
+;;   try-deep           a try's catch was R6RS guard: a full continuation, which
+;;                      costs in proportion to the stack beneath it, and a body
+;;                      thunk closing over every free variable of the body. The
+;;                      body runs in place now behind a one-shot escape (rt.ss
+;;                      jolt-guard-body): 2.59 -> 1.31 for twenty nested tries
+;;                      under 200 frames against the bare recursion.
+;;
+;;   dyn-read-deep      a read of a dynamic var that has ever been bound walked
+;;                      every binding frame on the thread to its binding, and a
+;;                      reader binds one per nesting level (tools.reader's
+;;                      *read-delim*) while asking *read-eval*, bound at the
+;;                      bottom, for every form. The innermost frame memoizes its
+;;                      last four lookups (dyn-binding.ss): 9.7 -> 1.0 beneath
+;;                      thirty frames.
+;;
+;;   get-nil            (get nil k) -- and (:k nil), a keyword on a nil map --
+;;                      walked every registered get arm before answering the
+;;                      default: ~90 ns against the JVM's ~6 (rewrite-clj's
+;;                      (:delimiter context) on a top-level form's nil context).
+;;
+;;   protocol-call      a protocol call went through the protocol fn's var, the
+;;                      protocol fn and its per-site cache before the method, and
+;;                      every deftype or defrecord method bound all its fields
+;;                      first. The call site now reads the receiver type's
+;;                      dispatch vector (rt.ss jrdesc-vtable-ref) and calls the
+;;                      method, which binds only the fields it names: 17.5 ->
+;;                      10.5 ns, against a plain call ~2.6 -> ~1.6.
+;;
+;;   host-protocol      a protocol call on a string, number, char, nil, boolean
+;;                      or keyword resolved its impl on every call; the protocol
+;;                      fn's cache keys those by type (rt.ss jolt-pic-host-key/i).
+;;
+;;   merge-nil          (merge nil m) was the variadic reduce (~450 ns); merge has
+;;                      fixed arities and (conj {} m) answers m.
+;;
+;;   str-builder        (str sb) went through clojure.core/str's arms (~50 ns);
+;;                      a StringBuilder answers inline (rt.ss jolt-str1/i).
+;;
+;;   deftype-method     (.m ^T x) on a deftype walked every dispatch arm by name
+;;                      with an argument vector (~240 ns); the call site keeps the
+;;                      type's declared method (host-static.ss jrec-site-miss):
+;;                      ~17 ns, against the protocol call's ~10.
+;;
+;;   deftype-field      (.-f ^T x) was a call into the runtime and the checked
+;;                      per-arity accessor (~15 ns); the site's hit is open-coded
+;;                      (rt.ss jrec-field-site-ref/i): ~6 ns, a plain call's cost.
+;;
+;;   record-with-meta   a record's metadata lived in the weak identity side
+;;                      table, so with-meta was a copy plus a weak-table insert
+;;                      under a lock, ~440 ns against ~32 for a vector's; it is a
+;;                      slot of the record now (values.ss jrec), ~66 ns.
+;;
+;;   record-meta        (meta r) of a record walked the collection kinds and two
+;;                      calls into the type's derived vector before its slot
+;;                      (~14 ns); records are tested first and the vector read
+;;                      is open-coded (records-coll.ss jrec-iobj/i), ~5 ns.
+;;
+;;   mm-cycle           a multimethod's inline cache kept the last four dispatch
+;;                      values, so one cycling through five or more (rewrite-clj's
+;;                      parse-next*) missed every call and hashed into the methods
+;;                      table; it keeps eight (multimethods.ss mm-resolve).
 ;;
 (ns fastpath-ratio-test
   (:require [clojure.string :as str]))
 
 (def ^:private samples 3)
+
+;; FASTPATH_ONLY, a comma-separated list of labels, judges those rows and skips
+;; the rest. The Makefile sets it to re-judge the rows a run failed in a fresh
+;; process (see the fastpathratio target).
+(def ^:private only
+  (some-> (System/getenv "FASTPATH_ONLY") not-empty (str/split #",") set))
+(defn- judged? [label] (or (nil? only) (contains? only label)))
 
 ;; A nanosecond clock, not currentTimeMillis: these ratios are judged to two
 ;; decimals and the fast arms run in single-digit milliseconds, which a millisecond
@@ -274,29 +375,30 @@
    CEILING. Over the ceiling it samples both arms again, up to twice, and judges
    the ratio of each arm's minimum over every sample taken."
   [label fast-arm slow-arm ceiling]
-  (let [;; a floor on the denominator: an arm that measures as ~0 would make
-        ;; any numerator look infinite
-        ratio (fn [[f s]] (/ s (max f 0.05)))
-        ;; Interference only ever adds time to a sample, so each arm's minimum
-        ;; over more samples is a closer reading of that arm's cost, and the
-        ;; ratio of the two minima is what a re-measure refines. The lowest
-        ;; RATIO of separate readings would not be: a burst on the fast arm
-        ;; lowers one, and under load that hid a reverted string-nth fast path
-        ;; (1.33 against a 1.0 ceiling) in one run out of three. No reading is
-        ;; too high to re-measure: one burst put host-object-pr at 6.0 against
-        ;; its 1.9 ceiling, on a binary that reads 1.7.
-        r (loop [[f s] (best-of-pair samples fast-arm slow-arm) left 2]
-            (let [r (ratio [f s])]
-              (if (and (pos? left) (> r ceiling))
-                (let [[f' s'] (best-of-pair samples fast-arm slow-arm)]
-                  (println (format "  %s: %.2f — over the ceiling, sampling again" label r))
-                  (recur [(min f f') (min s s')] (dec left)))
-                r)))]
-    (println (format "  %-18s ratio %6.2f  (ceiling %.1f)%s"
-                     label r ceiling (if (> r ceiling) "  <-- REGRESSED" "")))
-    (when (> r ceiling)
-      (swap! failures conj (format "%s: ratio %.2f exceeds ceiling %.1f" label r ceiling)))
-    r))
+  (when (judged? label)
+    (let [;; a floor on the denominator: an arm that measures as ~0 would make
+          ;; any numerator look infinite
+          ratio (fn [[f s]] (/ s (max f 0.05)))
+          ;; Interference only ever adds time to a sample, so each arm's minimum
+          ;; over more samples is a closer reading of that arm's cost, and the
+          ;; ratio of the two minima is what a re-measure refines. The lowest
+          ;; RATIO of separate readings would not be: a burst on the fast arm
+          ;; lowers one, and under load that hid a reverted string-nth fast path
+          ;; (1.33 against a 1.0 ceiling) in one run out of three. No reading is
+          ;; too high to re-measure: one burst put host-object-pr at 6.0 against
+          ;; its 1.9 ceiling, on a binary that reads 1.7.
+          r (loop [[f s] (best-of-pair samples fast-arm slow-arm) left 2]
+              (let [r (ratio [f s])]
+                (if (and (pos? left) (> r ceiling))
+                  (let [[f' s'] (best-of-pair samples fast-arm slow-arm)]
+                    (println (format "  %s: %.2f — over the ceiling, sampling again" label r))
+                    (recur [(min f f') (min s s')] (dec left)))
+                  r)))]
+      (println (format "  %-18s ratio %6.2f  (ceiling %.1f)%s"
+                       label r ceiling (if (> r ceiling) "  <-- REGRESSED" "")))
+      (when (> r ceiling)
+        (swap! failures conj (format "%s: ratio %.2f exceeds ceiling %.1f" label r ceiling)))
+      r)))
 
 ;; The heap bytes 16 results of MK hold, from a fresh collection. Exact on this
 ;; host (used memory is Chez's bytes-allocated), and 16 arrays of the size
@@ -319,12 +421,58 @@
   "judge!, for a ratio of heap bytes held rather than of time: deterministic, so
    no re-measure."
   [label ref-mk mk ceiling]
-  (let [r (/ (double (bytes-held mk)) (max 1 (bytes-held ref-mk)))]
-    (println (format "  %-18s ratio %6.2f  (ceiling %.1f)%s"
-                     label r ceiling (if (> r ceiling) "  <-- REGRESSED" "")))
-    (when (> r ceiling)
-      (swap! failures conj (format "%s: ratio %.2f exceeds ceiling %.1f" label r ceiling)))
-    r))
+  (when (judged? label)
+    (let [r (/ (double (bytes-held mk)) (max 1 (bytes-held ref-mk)))]
+      (println (format "  %-18s ratio %6.2f  (ceiling %.1f)%s"
+                       label r ceiling (if (> r ceiling) "  <-- REGRESSED" "")))
+      (when (> r ceiling)
+        (swap! failures conj (format "%s: ratio %.2f exceeds ceiling %.1f" label r ceiling)))
+      r)))
+
+;; Some fast paths are not worth a timing row: the regression they guard costs
+;; less than the spread one row shows across CI runners (protocol-call reads
+;; 1.4-2.4 on main and 1.95 with its fast path gone), or none that a ratio can
+;; see. Those are checked for the PATH instead, by asking the runtime
+;; (jolt.host/scheme-eval-string) what the call does: which arms it walks, which
+;; out-of-line helper it reaches, what it allocates. These answers do not move
+;; with the machine, so they need no ceiling slack and no re-measure.
+(def ^:private scheme (fn [s] (jolt.host/scheme-eval-string s)))
+
+(defn- check!
+  "Record a failure under LABEL unless OK?. DETAIL says what was seen."
+  [label ok? detail]
+  (when (judged? label)
+    (println (format "  %-18s %s%s" label detail (if ok? "" "  <-- REGRESSED")))
+    (when-not ok?
+      (swap! failures conj (format "%s: %s" label detail)))))
+
+;; Counts the calls that reach a runtime procedure while F runs, by set!-ing a
+;; counting wrapper over the top-level binding and restoring it after.
+(defn- calls-to [proc-name f]
+  (let [hook (scheme (str "(lambda (f) (let ((n 0) (orig " proc-name "))"
+                          " (set! " proc-name " (lambda args (set! n (+ n 1)) (apply orig args)))"
+                          " (dynamic-wind void f (lambda () (set! " proc-name " orig))) n))"))]
+    (hook f)))
+
+;; Counts the registered get arms asked while F runs: a counting arm that claims
+;; nothing goes in front of the walk for F's duration.
+(defn- get-arms-asked [f]
+  ((scheme (str "(lambda (f) (let ((n 0) (orig jolt-get-arms))"
+                " (set! jolt-get-arms (cons (cons (lambda (c) (set! n (+ n 1)) #f) (lambda (c k d) d)) orig))"
+                " (dynamic-wind void f (lambda () (set! jolt-get-arms orig))) n))"))
+   f))
+
+;; Bytes allocated by F, as Chez counts them (allocated plus reclaimed, so a
+;; collection in the middle does not subtract).
+(def ^:private alloc-bytes (scheme "(lambda () (+ (bytes-allocated) (bytes-deallocated)))"))
+(defn- bytes-of [f]
+  (let [b0 (alloc-bytes)] (f) (- (alloc-bytes) b0)))
+
+;; The scheme text of the code a form compiles to in this namespace.
+(defn- emitted [form]
+  (jolt.backend-scheme/emit-top-form
+   (jolt.analyzer/analyze (jolt.host/ctx-for-ns "fastpath-ratio-test") form
+                          (@#'jolt.analyzer/empty-env))))
 
 ;; --- fixtures ---------------------------------------------------------------
 
@@ -481,6 +629,43 @@
 (def ^:private fn-holder (atom nil))
 (reset! fn-holder (fn [m] (+ (get m :a) (get m :b) (get m :c))))
 (def ^:private fn-via-top @fn-holder)
+;; the reader-path arms (#1713): a var-routed call, a keyword multimethod, a
+;; token buffer turned into its string, and a scanner's .charAt
+(def ^:private gate-vec [1 2 3 4 5 6 7 8])
+(defn- gate-f2 [a b] (if a b a))
+(defn- gate-f4 [a b c d] a)
+(defn- gate-f6 [a b c d e f] a)
+(defn- gate-rec [n] (if (zero? n) 0 (inc (gate-rec (dec n)))))
+(defprotocol GateP (gate-pm [x]))
+(deftype GateT [a] GateP (gate-pm [_] nil))
+(def ^:private gate-t (GateT. 1))
+(defn- gate-fn1 [x] nil)
+;; a protocol extended to a host type, and the reader-path collection fixtures
+(defprotocol GateH (gate-hm [x]))
+(extend-protocol GateH String (gate-hm [_] nil) GateT (gate-hm [_] nil))
+(def ^:private gate-str "abc")
+(def ^:private gate-m4 {:line 1 :column 2 :end-line 1 :end-column 5})
+(def ^:private gate-sb (doto (StringBuilder.) (.append "token")))
+(defn- gate-rec-try [n] (try (if (zero? n) 0 (inc (gate-rec-try (dec n)))) (catch Exception e -1)))
+(defn- gate-under [n f] (if (zero? n) (f) (+ 0 (gate-under (dec n) f))))
+(def ^:dynamic *gate-deep* 0)
+(def ^:dynamic *gate-top* 0)
+(defn- gate-nest [n f] (if (zero? n) (f) (binding [*gate-top* n] (gate-nest (dec n) f))))
+(defn- gate-plain [x] x)
+(defmulti ^:private gate-mm identity)
+(defmethod gate-mm :a [x] x)
+(def ^:private gate-sb (doto (StringBuilder.) (.append "token")))
+(def ^:private gate-str "abcdefgh")
+(def ^:private gate-n 1000000)
+(defrecord GateMetaRec [a b])
+(def ^:private gate-meta-rec (->GateMetaRec 1 2))
+(def ^:private gate-meta-vec [1 2])
+(def ^:private gate-meta {:row 1 :col 2})
+(defmulti ^:private gate-mm identity)
+(defmethod gate-mm :a [_] 1) (defmethod gate-mm :b [_] 2) (defmethod gate-mm :c [_] 3)
+(defmethod gate-mm :d [_] 4) (defmethod gate-mm :e [_] 5) (defmethod gate-mm :f [_] 6)
+(def ^:private gate-mm-one [:a :a :a :a :a :a])
+(def ^:private gate-mm-six [:a :b :c :d :e :f])
 
 (defn -main [& _]
   (spit src-path source-text)
@@ -524,7 +709,7 @@
 
   ;; Moving bytes through a child's pipe must cost about what moving them through
   ;; a file costs, with the same child spawned on both sides.
-  (when-not (= pipe-bytes (pipe-read-arm))
+  (when-not (or (not (judged? "pipe-read")) (= pipe-bytes (pipe-read-arm)))
     (swap! failures conj "pipe-read: drained the wrong number of bytes"))
   (binding [*clock* wall-ns]
     (judge! "pipe-read" pipe-read-ref pipe-read-arm 3.0)
@@ -549,10 +734,12 @@
   ;; Searching for a multi-character needle must cost about what searching for a
   ;; single CHARACTER costs — the reference arm takes str-char-index, which never
   ;; had a call per position, so it does not move when str-index-of regresses.
+  ;; x86 CI read up to 1.46 (2026-11), so 1.8; the per-position call read ~3x
+  ;; the healthy ratio (0.80 -> 2.43).
   (judge! "substring-scan"
           #(str/index-of chars-text absent-char)
           #(str/index-of chars-text absent-str)
-          1.5)
+          1.8)
 
   ;; Trimming a string that needs no trimming must not copy it: 64x the length
   ;; must not cost 64x the time. A copying trim is linear here.
@@ -587,30 +774,61 @@
   ;; the call got about twice as fast again in the merges from #1690 to #1702
   ;; (32 ms per million on x86_64 Linux, where it was 68; instance? stayed at
   ;; 23). So both arms read near what a site costs: instance-site 0.75 locally
-  ;; and 0.85 on CI, where it failed the 0.8 ceiling it kept from the slower
-  ;; call, and instance-site-type 0.90 on CI and 1.01 on a slow box. Both
-  ;; ceilings are 1.2. A site with no cache measured 1.15-1.95 of the old
-  ;; call, about 2.4-4 of this one, so still well past 1.2.
+  ;; and 0.85 on CI, and instance-site-type 0.90 on CI and 1.01 on a slow box.
+  ;; #1713 then made the protocol call itself cheaper again (it is a call
+  ;; through a var: 16 -> 9.5 ns), and then open-coded that var call at the
+  ;; site and the protocol fn's descriptor read with it (jolt-var-fn,
+  ;; jrec-pic-desc/i), with the site unchanged: on the slow box the two arms
+  ;; read 0.73 -> 1.11 and 1.00 -> 1.35 over both steps. The protocol call then
+  ;; read the var cell and the receiver's descriptor without their type tests,
+  ;; the instance? site unchanged: 1.35 and 1.56.
+  ;;
+  ;; What these two read depends on the CPU and on whether the machine is idle,
+  ;; not on the sample. Over 22 CI runs of the x86 shard (2026-11-21..22)
+  ;; instance-site-type read 1.53-1.75 in most and 1.88-2.10 in a few, and in
+  ;; those the column moved with it: multimethod-call 6.7-7.0 (4.1-5.1
+  ;; elsewhere), try-deep 1.64 (1.38-1.46), deftype-method 1.96 (1.47-1.69),
+  ;; var-call 0.72 (0.90-1.17). Such a run read the same on all three of its
+  ;; samplings and again in a fresh process (2.09, then 2.07). Eight runners
+  ;; measured on purpose (2026-11-22): the AMD EPYCs (7763, 9V45) read 1.43-1.87
+  ;; idle or loaded; the Intel Xeons (6973P, 6975P, Platinum 8573C) read
+  ;; 1.54-1.89 beside four busy processes and 2.01-2.14 on an idle machine,
+  ;; which is how this gate runs (QUIET-GATES). No sampling scheme takes that
+  ;; out, so the ceilings cover it: instance-site read at most 1.72 there and
+  ;; 1.56 on macOS arm64. The site with its cache bypassed (every call taking
+  ;; the memo path, the state before the cache) reads 8.5 and 7.0 on macOS arm64
+  ;; against 1.45 and 1.68 with it, so 2.2 and 3.0 fail it by 2.3-3.9x.
+  ;; (Ceilings were 1.6 and 1.9.)
   (judge! "instance-site"
           #(dotimes [_ dispatch-n] (dp1 dispatch-t))
           #(dotimes [_ dispatch-n] (instance? fastpath_ratio_test.DP7 dispatch-t))
-          1.2)
+          2.2)
   (judge! "instance-site-type"
           #(dotimes [_ dispatch-n] (dp1 dispatch-t))
           #(dotimes [_ dispatch-n] (instance? DispatchT dispatch-t))
-          1.2)
+          3.0)
 
-  ;; Building a reify must cost about what building a deftype costs.
+  ;; Building a reify must cost about what building a deftype costs. The
+  ;; deftype's (T. a) then kept its resolved ctor at the call site (host-static.ss
+  ;; host-new-site/i), ~2.3x cheaper, with the reify unchanged: 1.9 -> 4.4,
+  ;; ceiling 3.0 -> 5.5. Over 46 x86 CI runs and 4 noise runners (2026-11-23)
+  ;; it read up to 5.99, so 7.5; the per-instance map this gates read 8.9 against
+  ;; the old, slower deftype, ~20 against today's.
   (judge! "reify-construct"
           #(dotimes [_ dispatch-n] (mk-type 1))
           #(dotimes [_ dispatch-n] (mk-reify 1))
-          3.0)
+          7.5)
 
-  ;; satisfies? on a reify must cost about a protocol call.
+  ;; satisfies? on a reify must cost about a protocol call. The protocol call
+  ;; got cheaper under #1713 (a var call open-coded, the PIC's descriptor read
+  ;; inline) with satisfies? unchanged: 2.23 on the slow box before, 2.9-3.06
+  ;; after (and 1.24 on some runs), so 3.0 -> 4.5, against the 13.5 the
+  ;; re-munging walk this gates read. Bionic runners read up to 4.04 and x86
+  ;; 3.89 (2026-11), so 5.0.
   (judge! "satisfies-reify"
           #(dotimes [_ dispatch-n] (dp1 dispatch-t))
           #(dotimes [_ dispatch-n] (satisfies? DP2 made-reify))
-          3.0)
+          5.0)
 
   ;; A key with its own equals/hashCode must not cost wildly more to look up
   ;; than a record key.
@@ -626,11 +844,13 @@
           2.5)
 
   ;; The core collection ops on a plain record cost about what they cost on the
-  ;; map holding the same entries.
+  ;; map holding the same entries. record-count read up to 5.34 on x86 CI
+  ;; (2026-11, the Xeon 6975P-C most), over its old 5.0 on ten first passes, so
+  ;; 6.5; with the plain-record path gone it reads 11-20 there.
   (judge! "record-count"
           #(dotimes [_ dispatch-n] (count plain-map))
           #(dotimes [_ dispatch-n] (count plain-rec))
-          5.0)
+          6.5)
   (judge! "record-contains"
           #(dotimes [_ dispatch-n] (contains? plain-map :z))
           #(dotimes [_ dispatch-n] (contains? plain-rec :z))
@@ -650,7 +870,9 @@
   (judge! "record-map->"
           #(dotimes [_ 20000] (assoc (->PlainRec 1 2 3) :w 4))
           #(dotimes [_ 20000] (map->PlainRec plain-map+))
-          3.0)
+          ;; x86 CI read up to 2.63 (2026-11); the pre-check this gates read
+          ;; ~2.2x the healthy ratio (4.1 against 1.85)
+          3.2)
 
   ;; The same fn body costs the same whether a def or a bare form built it.
   (judge! "top-level-fn"
@@ -672,6 +894,15 @@
   ;; added since made both slower: 1.34 / 2.7 by 0.8.24 against 1.1 / 1.8 at
   ;; 0.8.23. Both now answer a string before the wraps and the arms (0.56 /
   ;; 0.66, macOS arm64, 2026-11).
+  ;;
+  ;;
+  ;; string-get read 0.72-0.95 over 46 x86 CI runs against a 1.1 ceiling, so
+  ;; 1.3; with the string answered after the arms it reads ~9.4 (macOS arm64).
+  ;; What it guards is that walk: get answers a string in natives-array.ss's
+  ;; jolt-get wrapper and again in jolt-get-dispatch, both ahead of the arms,
+  ;; and register-get-arm! refuses an arm that claims a string. string-get-arms
+  ;; checks that directly: a get on a string asks no registered arm, where a
+  ;; StringBuilder (which does walk them) shows the counting arm is in the walk.
   (let [s (apply str (repeat 40 "hello world ")) v (vec s)]
     (judge! "string-nth"
             #(dotimes [_ 200000] (nth v 300))
@@ -680,7 +911,12 @@
     (judge! "string-get"
             #(dotimes [_ 200000] (get v 300))
             #(dotimes [_ 200000] (get s 300))
-            1.1))
+            1.3)
+    (let [on-str (get-arms-asked #(dotimes [_ 10] (get s 300)))
+          on-sb (get-arms-asked #(dotimes [_ 10] (get gate-sb 0)))]
+      (check! "string-get-arms" (and (zero? on-str) (pos? on-sb))
+              (format "get arms asked: %d for 10 string gets (want 0), %d for 10 StringBuilder gets (want >0)"
+                      on-str on-sb))))
 
   ;; count / contains? on the common java.util collections, each against the
   ;; collection's own method doing the same work (.size, .containsKey),
@@ -689,22 +925,33 @@
   (let [al (java.util.ArrayList. (range 64))
         hs (java.util.HashSet. (range 64))
         hm (java.util.HashMap. (zipmap (range 64) (range 64)))]
+    ;; Ceilings at 1.2x the highest x86 CI reading (2026-11: 3.52, 2.87, 3.83).
+    ;; With the tag predicates unmemoized (define-jhost-tag-pred, the 0.8.24
+    ;; slowdown) a Xeon 6975P-C read arraylist-count 4.7-5.5 and hashmap-count
+    ;; 5.4-5.7, over these; hashset-count read 2.7-3.0 and contains? on a
+    ;; HashMap 1.7, both inside main's own spread, so hashmap-contains is no
+    ;; longer a row and the memo is checked directly (tag-pred-memo below).
     (judge! "arraylist-count"
             #(dotimes [_ 200000] (.size al))
             #(dotimes [_ 200000] (count al))
-            3.8)
+            4.3)
     (judge! "hashset-count"
             #(dotimes [_ 200000] (.size hs))
             #(dotimes [_ 200000] (count hs))
-            3.4)
+            3.5)
     (judge! "hashmap-count"
             #(dotimes [_ 200000] (.size hm))
             #(dotimes [_ 200000] (count hm))
-            4.0)
-    (judge! "hashmap-contains"
-            #(dotimes [_ 200000] (.containsKey hm 33))
-            #(dotimes [_ 200000] (contains? hm 33))
-            1.6)
+            4.6)
+    ;; The memo answers by the tag OBJECT, so a host object whose tag string is
+    ;; changed after a first question keeps its first answer; an unmemoized
+    ;; predicate re-reads the string and changes its answer.
+    (let [n ((scheme (str "(lambda () (length (filter values (map (lambda (p tag)"
+                          " (let* ((t (string-copy tag)) (h (make-jhost t #f)) (a (and (p h) #t)))"
+                          " (string-set! t 0 #\\Q) (and a (p h) #t)))"
+                          " (list hs-hashset? hm-hashmap? al-family?) (list \"hashset\" \"hashmap\" \"arraylist\")))))")))]
+      (check! "tag-pred-memo" (= 3 n)
+              (format "%d of the HashSet, HashMap, ArrayList tag predicates remembered by tag (want 3)" n)))
     ;; A Path member is a host method like an ArrayList's, served by the call
     ;; site's cache: getFileSystem reads a field, as size does.
     (let [p (java.nio.file.Paths/get "/tmp/work" (into-array String []))]
@@ -713,13 +960,185 @@
               #(dotimes [_ 200000] (.getFileSystem p))
               2.5)))
 
+  ;; The reader path's per-operation costs (#1713). A call through a var must
+  ;; cost a small multiple of an inline vector read, a keyword multimethod a
+  ;; small multiple of the plain fn call it wraps, str of a StringBuilder about
+  ;; what its .toString costs, and .charAt about an inline vector read.
+  (judge! "var-call"
+          #(let [v gate-vec] (dotimes [i gate-n] (nth v 3)))
+          #(let [v gate-vec] (dotimes [i gate-n] (gate-f2 i v)))
+          2.4)
+  ;; (multimethod-call's reference is the var call, open-coded since: 3.81 ->
+  ;; 5.26 with the multimethod unchanged, and ~14 with its fix reverted. The
+  ;; reference got cheaper again since: with the inline cache bypassed, every
+  ;; call hashing into the methods table, it reads 37 against 5.1, macOS arm64
+  ;; 2026-11-22. On CI it reads 3.4-5.5 in most runs and 6.4-7.6 on the Intel
+  ;; Xeons when idle (see instance-site-type), which put it over the old 7.0
+  ;; with nothing changed; 10 still fails the bypass by 3.5x.)
+  (judge! "multimethod-call"
+          #(dotimes [_ gate-n] (gate-plain :a))
+          #(dotimes [_ gate-n] (gate-mm :a))
+          10.0)
+  (judge! "str-sb"
+          #(let [b gate-sb] (dotimes [_ gate-n] (.toString ^StringBuilder b)))
+          #(let [b gate-sb] (dotimes [_ gate-n] (str b)))
+          14.0)
+  (judge! "char-at"
+          #(let [v gate-vec] (dotimes [i gate-n] (nth v 3)))
+          #(let [^String x gate-str] (dotimes [i gate-n] (.charAt x 3)))
+          ;; a coarse ceiling now: x86 CI read up to 1.16 (2026-11) and the
+          ;; out-of-line index coercion this was tuned for reads 1.33 there, too
+          ;; close to tell apart. char-at-inline below checks that path.
+          1.4)
+  ;; ...and by the path: an in-range fixnum index never reaches the coercing
+  ;; helper (converters.ss jolt-char-at-coerced), where a double index does.
+  (let [in-range (calls-to "jolt-char-at-coerced" #(let [^String x gate-str] (dotimes [i 10] (.charAt x 3))))
+        coerced (calls-to "jolt-char-at-coerced" #(let [^String x gate-str] (.charAt x 3.0)))]
+    (check! "char-at-inline" (and (zero? in-range) (pos? coerced))
+            (format "jolt-char-at-coerced calls: %d for 10 in-range reads (want 0), %d for a double index (want >0)"
+                    in-range coerced)))
+  ;; A record's metadata is a slot of its own, like a vector's: with-meta on a
+  ;; record costs about what it costs on a vector. It was a weak identity-table
+  ;; insert under a lock, ~14x the vector's (rewrite-clj attaches position meta
+  ;; to every node it reads).
+  ;; A six-argument call costs about what a four-argument one does. Past four
+  ;; there was no fixed-arity entry, and jolt-invoke built a rest list,
+  ;; measured it and applied it: 42 ns against 6 (tools.reader's read* takes
+  ;; six arguments per form it reads).
+  (judge! "wide-call"
+          #(dotimes [i gate-n] (gate-f4 i 2 3 4))
+          #(dotimes [i gate-n] (gate-f6 i 2 3 4 5 6))
+          2.0)
+  ;; A try costs a small constant, wherever it runs. guard took a full
+  ;; continuation and with-exception-handler a body thunk per entry, so a try
+  ;; under a deep stack paid for the stack, and one in a big fn for its free
+  ;; variables. Twenty nested tries under 200 frames, against the same
+  ;; recursion without them.
+  (judge! "try-deep"
+          #(dotimes [_ 20000] (gate-under 200 (fn [] (gate-rec 20))))
+          #(dotimes [_ 20000] (gate-under 200 (fn [] (gate-rec-try 20))))
+          ;; x86 CI read up to 2.18 (2026-11), so 2.6; guard reads ~4.7 there
+          2.6)
+  ;; ...and by what a try allocates under that stack: ~220 bytes each, where the
+  ;; R6RS guard's continuation took ~4500 (macOS arm64, 2026-11). Read from a
+  ;; fresh collection, smallest of three: without the collect the same binary
+  ;; read ~970 for a stretch after the earlier rows (stack segments they left).
+  (let [per-try (reduce min (repeatedly 3 #(do (System/gc)
+                                               (/ (bytes-of (fn [] (dotimes [_ 1000] (gate-under 200 (fn [] (gate-rec-try 20))))))
+                                                  20000.0))))]
+    (check! "try-deep-alloc" (< per-try 2000)
+            (format "%.0f bytes allocated per try under 200 frames (ceiling 2000)" per-try)))
+  ;; A dynamic var bound beneath thirty frames of another reads about as fast as
+  ;; one bound in the top frame. Every read walked the frames to its binding.
+  (judge! "dyn-read-deep"
+          #(binding [*gate-deep* 1] (binding [*gate-top* 0] (dotimes [_ 200000] *gate-top*)))
+          #(binding [*gate-deep* 1] (gate-nest 30 (fn [] (dotimes [_ 200000] *gate-deep*))))
+          2.5)
+  ;; get on nil costs about what get on an empty map does. It walked every
+  ;; registered get arm before answering the default. x86 CI read up to 1.79
+  ;; (2026-11), so 2.2; the walk reads ~9. get-nil-arms checks the walk itself.
+  (judge! "get-nil"
+          #(let [m {}] (dotimes [_ gate-n] (get m :k)))
+          #(let [m nil] (dotimes [_ gate-n] (get m :k)))
+          2.2)
+  (let [on-nil (get-arms-asked #(let [m nil] (dotimes [_ 10] (get m :k))))
+        on-sb (get-arms-asked #(dotimes [_ 10] (get gate-sb 0)))]
+    (check! "get-nil-arms" (and (zero? on-nil) (pos? on-sb))
+            (format "get arms asked: %d for 10 gets on nil (want 0), %d for 10 StringBuilder gets (want >0)"
+                    on-nil on-sb)))
+  ;; A protocol call on a deftype's own impl costs a little more than a plain fn
+  ;; call. It went var -> protocol fn -> per-site cache -> method, and the
+  ;; method bound every field before its body ran. 1.65 then; the plain call
+  ;; then lost its var cell's type test (6.2 -> 4.9 ns) and the protocol call
+  ;; less of its cost, so 1.9, ceiling 2.4.
+  ;;
+  ;; Checked by the path now, not timed: over 46 x86 CI runs it read 1.42-2.39
+  ;; against that 2.4, and with the descriptor read gone it reads 1.95 (macOS
+  ;; arm64), inside main's own spread. So: the call site the compiler emits for
+  ;; a protocol call reads the receiver type's dispatch vector, and that read
+  ;; answers this deftype's method.
+  (let [site (emitted '(fn [t] (gate-pm t)))
+        at-site? (boolean (re-find #"jrdesc-vtable-ref" site))
+        hit? ((scheme "(lambda (r) (procedure? (jrdesc-vtable-ref (jrec-pic-desc r) (intern-pm-key \"fastpath-ratio-test/GateP\" \"gate-pm\"))))")
+              gate-t)]
+    (check! "protocol-call" (and at-site? hit?)
+            (format "site reads the dispatch vector: %s, the read answers GateT's gate-pm: %s" at-site? hit?)))
+  ;; A deftype's method called through interop, (.gate-pm ^GateT t), costs about
+  ;; what the protocol call does: the site keeps the type's declared method
+  ;; (host-static.ss jrec-site-miss). It walked every dispatch arm by name, with
+  ;; an argument vector, on every call: ~240 ns against the protocol call's 10.
+  ;; Reads ~1.7.
+  (judge! "deftype-method"
+          #(let [t gate-t] (dotimes [_ gate-n] (gate-pm t)))
+          #(let [^GateT t gate-t] (dotimes [_ gate-n] (.gate-pm t)))
+          3.0)
+  ;; (.-a t) costs about what a plain fn call does: the site's hit is open-coded
+  ;; (rt.ss jrec-field-site-ref/i), a descriptor test and a load. It was a call
+  ;; into the runtime and the checked per-arity accessor, ~15 ns. Reads ~1.2.
+  (judge! "deftype-field"
+          #(let [t gate-t] (dotimes [_ gate-n] (gate-fn1 t)))
+          #(let [^GateT t gate-t] (dotimes [_ gate-n] (.-a t)))
+          2.0)
+  ;; A protocol call on a string costs about what one on a record does: the
+  ;; protocol fn keys its cache by the host type (rt.ss jolt-pic-host-key/i),
+  ;; where a string resolved on every call. Reads ~1.3.
+  (judge! "host-protocol"
+          #(let [t gate-t] (dotimes [_ gate-n] (gate-hm t)))
+          #(let [s gate-str] (dotimes [_ gate-n] (gate-hm s)))
+          3.0)
+  ;; (merge nil m) costs about what (conj m nil) does: merge's fixed arities and
+  ;; (conj {} m) answering m. It was the variadic reduce, ~450 ns. Reads ~1.5.
+  (judge! "merge-nil"
+          #(let [m gate-m4] (dotimes [_ gate-n] (conj m nil)))
+          #(let [m gate-m4] (dotimes [_ gate-n] (merge nil m)))
+          3.0)
+  ;; (str sb) costs about what (.toString sb) does (rt.ss jolt-str1/i); through
+  ;; clojure.core/str it was ~50 ns against ~15. Reads ~0.7.
+  (judge! "str-builder"
+          #(let [sb gate-sb] (dotimes [_ gate-n] (.toString sb)))
+          #(let [sb gate-sb] (dotimes [_ gate-n] (str sb)))
+          2.0)
+  (judge! "record-with-meta"
+          #(let [v gate-meta-vec m gate-meta] (dotimes [_ 200000] (with-meta v m)))
+          #(let [r gate-meta-rec m gate-meta] (dotimes [_ 200000] (with-meta r m)))
+          4.0)
+  ;; (meta r) of a record against (meta v) of a vector, both a slot read. Reads
+  ;; ~1.0; the walk to the record arm costs ~14 ns against ~5, ~2.8.
+  (judge! "record-meta"
+          #(let [v gate-meta-vec] (dotimes [_ gate-n] (meta v)))
+          #(let [r gate-meta-rec] (dotimes [_ gate-n] (meta r)))
+          2.0)
+  ;; six dispatch values in rotation against one: both answer from the inline
+  ;; cache, so the rotation costs only the scan. Reads ~1.2; a rotation past the
+  ;; cache's size reads ~14.
+  (judge! "mm-cycle"
+          #(let [ks gate-mm-one] (dotimes [i gate-n] (gate-mm (nth ks (rem i 6)))))
+          #(let [ks gate-mm-six] (dotimes [i gate-n] (gate-mm (nth ks (rem i 6)))))
+          3.0)
+
   ;; pr-str of a host record (java.io.File) is the #object fallback: the print
   ;; arms, the class name and the str registry, against a vector that prints
   ;; straight off the fast path.
+  ;;
+  ;; The narrowed walk is what this row was for, and it is checked by the path
+  ;; below (host-object-pr-arms): with the narrowing gone the ratio read 1.47 ->
+  ;; 2.28 (macOS arm64), inside the 1.4-2.51 x86 CI runs read on main. The row
+  ;; stays as a coarse ceiling on the rest of the #object print (the class name,
+  ;; the identity hash), at 1.2x the highest CI reading.
   (judge! "host-object-pr"
           #(dotimes [_ 20000] (pr-str [1 "a"]))
           #(dotimes [_ 20000] (pr-str (java.io.File. "/tmp")))
-          1.9)
+          3.0)
+  ;; What that row exists for, by the path: the print walks for a java.io.File
+  ;; are narrowed to the arms that can claim one (print-arms-for, host-static.ss).
+  ;; Narrowed they visit 0 of 31 pr-str arms, 0 of 36 readable ones and 1 of 67
+  ;; str ones (2026-11); unnarrowed, all of them.
+  (let [[a b c d e f] (read-string
+                       ((scheme "(lambda (x) (format \"[~a ~a ~a ~a ~a ~a]\" (length (print-arms-for 0 jolt-pr-str-arms x)) (length jolt-pr-str-arms) (length (print-arms-for 1 jolt-pr-readable-arms x)) (length jolt-pr-readable-arms) (length (print-arms-for 2 str-render-registry x)) (length str-render-registry)))")
+                        (java.io.File. "/tmp")))]
+    (check! "host-object-pr-arms" (and (<= (* 4 a) b) (<= (* 4 c) d) (<= (* 4 e) f))
+            (format "a File's print walks visit %d/%d pr-str, %d/%d readable, %d/%d str arms (want at most a quarter)"
+                    a b c d e f)))
 
   (.delete (java.io.File. src-path))
   (.delete (java.io.File. data-path))

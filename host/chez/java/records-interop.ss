@@ -73,6 +73,13 @@
 ;; interface it implements? The cheap half of the record arm below (no class-graph
 ;; walk); type-implements-class? is memoized per (tag, name).
 (define (jrec-declares-class? tag tname)
+  (or (tag-names-class? tag tname)
+      ;; a protocol/interface the type implements (defprotocol generates an
+      ;; interface; (instance? SomeProtocol record) is true when the record
+      ;; implements it — core.match dispatches on instance? IPatternCompile).
+      (type-implements-class? tag tname)))
+;; Does TNAME name the type tagged TAG itself?
+(define (tag-names-class? tag tname)
   (or (string=? tag tname)
       ;; a simple name matches a qualified tag only at a `.` boundary:
       ;; "a.b.IntervalFD" is an IntervalFD, but "a.b.MultiIntervalFD" is NOT
@@ -80,11 +87,23 @@
       (let ((tl (string-length tag)) (nl (string-length tname)))
         (and (fx>? tl nl)
              (char=? (string-ref tag (fx- (fx- tl nl) 1)) #\.)
-             (string=? (substring tag (fx- tl nl) tl) tname)))
-      ;; a protocol/interface the type implements (defprotocol generates an
-      ;; interface; (instance? SomeProtocol record) is true when the record
-      ;; implements it — core.match dispatches on instance? IPatternCompile).
-      (type-implements-class? tag tname)))
+             (string=? (substring tag (fx- tl nl) tl) tname)))))
+;; instance?'s no for a value whose class was REDEFINED after it was built: the
+;; old class is not the new one (records.ss jrdesc-rtag), whatever the class
+;; graph -- whose row for the name is the new definition's -- or an arm keyed
+;; by the class name would say. Its own name spelled any way, the JVM's munged
+;; one included.
+(define (retired-own-class? tname val)
+  (cond ((jrec-retired? val)
+         (let ((tag (jrec-tag val)))
+           (or (tag-names-class? tag tname)
+               (string=? (jch-munge-segments tag) tname))))
+        ;; ...and a reify's protocol redefined after its site was laid out
+        ;; (records-dispatch.ss reify-retired-protos)
+        ((jreify? val)
+         (let ((rs (if (unbox reify-retired-box) (reify-retired-protos val) '())))
+           (and (pair? rs) (exists (lambda (p) (proto-class-match? p tname)) rs) #t)))
+        (else #f)))
 
 ;; A yes that the value's OWN type gives — the record or reify declares the class —
 ;; is the JVM's answer whatever any arm would add, so instance-check takes it before
@@ -102,7 +121,7 @@
          (let* ((t (vector-ref (jrdesc-ifc-of val) 8))
                 (hit (hashtable-ref t tname 'none)))
            (if (eq? hit 'none)
-               (let ((ans (and (jrec-declares-class? (jrec-tag val) tname) #t)))
+               (let ((ans (and (jrec-declares-class? (jrec-rtag val) tname) #t)))
                  (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t tname ans))
                  ans)
                hit)))
@@ -119,12 +138,12 @@
     (cond
       ((jrec? val)
        (let ((tag (jrec-tag val)))
-         (or (jrec-declares-class? tag tname)
+         (or (jrec-declares-class? (jrec-rtag val) tname)
              ;; the class graph: a declared interface's own ancestry answers too
              ;; (IPersistentMap is an Associative is an IPersistentCollection).
-             (jch-isa? tag tname))))
+             (and (not (retired-own-class? tname val)) (jch-isa? tag tname)))))
       ((jreify? val) (or (reify-declares-class? (jreify-protos val) tname) (reify-class-isa? val tname)))
-      ((ex-info-map? val) (exception-isa? (last-dot (ex-info-class val)) (last-dot tname)))
+      ((ex-info-map? val) (exception-isa? (ex-info-class val) tname))
       (else (case-string tname val)))))
 
 ;; Does a reify declaring PROTOS answer instance? for class name TNAME? Every
@@ -180,7 +199,11 @@
 ;; registration can only understamp.
 (define (instance-kind-key val)
   (cond ((jrec? val) (jrec-desc val))
-        ((jreify? val) (and (not (jreify-delegate val)) (jreify-protos val)))
+        ;; a reify whose site lost a protocol answers apart from the sites that
+        ;; share its protocol list, so it is not memoized under that list
+        ((jreify? val) (and (not (jreify-delegate val))
+                            (or (not (unbox reify-retired-box)) (null? (reify-retired-protos val)))
+                            (jreify-protos val)))
         ((class-fast-name val))
         (else (ref-kind-key val))))
 ;; Without a key every (instance? IRef an-atom) walked the arms and the taxonomy,
@@ -280,6 +303,9 @@
       (and (symbol-t? t) (symbol-t? st-t)
            (eq? (symbol-t-name t) (symbol-t-name st-t))
            (eq? (symbol-t-ns t) (symbol-t-ns st-t)))))
+(define (retired-class-arg? t) (and (jclass? t) (jclass-retired? t)))
+(define (retired-class-instance? t val)
+  (and (jrec-retired? val) (eq? t (jolt-retired-class-token (jrec-desc val)))))
 (define (jolt-instance-site site t val)
   (let ((st (vector-ref site 0))
         (k (instance-kind-key val)))
@@ -292,7 +318,11 @@
          (ts (if same-t (vector-ref st 1) (instance-type-arg t)))
          (tname (if same-t (vector-ref st 2) (and (symbol-t? ts) (symbol-t-name ts))))
          (epoch (instance-kind-epoch))
-         (ans (cond ((or (not k) (not tname) (root-object-type? ts)) 'uncached)
+         ;; a retired class's answer is a function of the token and the
+         ;; receiver's descriptor alone, so it caches like any other
+         (ans (cond ((and k (retired-class-arg? t)) (retired-class-instance? t val))
+                    ((or (not k) (not tname) (root-object-type? ts)) 'uncached)
+                    ((retired-own-class? tname val) #f)
                     ((own-type-declares? tname val) #t)
                     (else
                      (let* ((e (instance-kind-entry k tname ts val))
@@ -312,7 +342,7 @@
 ;; unit rows compare the two).
 (define (instance-check-walk ts val)
   (let loop ((rs instance-check-registry))
-    (if (null? rs)
+    (if (or (null? rs) (and (symbol-t? ts) (retired-own-class? (symbol-t-name ts) val)))
         (instance-check-base ts val)
         (let ((r ((car rs) ts val)))
           (if (eq? r 'pass) (loop (cdr rs)) r)))))
@@ -324,7 +354,11 @@
   ;; (schema's record*/class-schema hold the type as a value, not a literal symbol).
   (let ((ts (instance-type-arg type-sym0)))
     (cond
+      ;; a redefined type's OLD class (class-model.ss jolt-retired-class-token)
+      ;; holds exactly the instances built before the redefinition
+      ((retired-class-arg? type-sym0) (retired-class-instance? type-sym0 val))
       ((root-object-type? ts) (not (jolt-nil? val)))
+      ((and (symbol-t? ts) (retired-own-class? (symbol-t-name ts) val)) #f)
       ((and (symbol-t? ts) (own-type-declares? (symbol-t-name ts) val)) #t)
       ((and (symbol-t? ts) (instance-kind-key val))
        => (lambda (key) (instance-check-kind key (symbol-t-name ts) ts val)))
@@ -370,6 +404,32 @@
 
 (def-var! "clojure.core" "instance-check" instance-check)
 
+;; instance? is Class.isInstance on the JVM: its type argument is cast to Class
+;; first, so anything else -- a protocol's map, a keyword, a string, a quoted
+;; symbol -- is the JDK's ClassCastException, and nil the NullPointerException of
+;; calling isInstance on it, whatever the value. The instance? macro hands every
+;; type argument it does not know to be a class through here (a class name it
+;; resolved itself goes straight to instance-check). jolt's own class values: a
+;; Class token, and a deftype/defrecord's type token (its ctor).
+(define (jolt-class-arg t)
+  (cond ((jclass? t) t)
+        ((and (procedure? t) (deftype-ctor-tag t)) t)
+        ((jolt-nil? t)
+         (throw-jvm 'NullPointerException
+                    "Cannot invoke \"java.lang.Class.isInstance(Object)\" because \"c\" is null"))
+        (else
+         (let ((from (let ((n (guard (e (#t #f)) (jolt-class-name t)))) (if (string? n) n "java.lang.Object"))))
+           (throw-jvm 'ClassCastException
+                      (string-append
+                       "class " from " cannot be cast to class java.lang.Class ("
+                       (if (and (fx>? (string-length from) 5) (string=? (substring from 0 5) "java."))
+                           (string-append from " and java.lang.Class are in module java.base of loader 'bootstrap'")
+                           (string-append from " is in unnamed module of loader 'app'; java.lang.Class is in module java.base of loader 'bootstrap'"))
+                       ")"))))))
+(def-var! "jolt.host" "class-arg" jolt-class-arg)
+;; instance? taken as a value ((partial instance? C)): the same cast, then the test
+(def-var! "jolt.host" "instance-of" (lambda (t x) (instance-check (jolt-class-arg t) x)))
+
 ;; ---- java.lang.Throwable: the surface EVERY throwable inherits ---------------
 ;; On the JVM these are declared on Throwable itself, so every exception class has
 ;; them by inheritance and no shim ever needs to restate them. jolt had no such
@@ -397,18 +457,100 @@
 (define (jolt-throwable-tostring v)
   (if (condition? v) (condition->message-string v) (jolt-str-render-one v)))
 
+;; Suppressed throwables live beside the throwable, not in it: a table from the
+;; throwable to its list, newest first. The record has no slot for them, and a
+;; new field changes the record's uid, which means a re-mint and a state-image
+;; layout bump. The same table also covers a raw Chez condition, which has no
+;; fields to extend. Several threads can add to one throwable, so every access
+;; takes the mutex. The table is an ephemeron one, so a throwable's list goes
+;; with it: a weak table holds its values strongly, so a list that reaches back
+;; to its own key (a suppresses o, o suppresses a) would never go.
+(define throwable-suppressed-tbl (make-ephemeron-eq-hashtable))
+(define throwable-suppressed-mu (make-mutex))
+(define (throwable-suppressed-list v)
+  (reverse (jolt-with-mutex throwable-suppressed-mu
+             (hashtable-ref throwable-suppressed-tbl (throwable-identity v) '()))))
+;; Throwable.addSuppressed: the self check comes first, as in the JDK, and its
+;; IllegalArgumentException carries the throwable as its cause.
+(define (throwable-cast-fail from)
+  (throw-jvm 'ClassCastException
+             (string-append
+              "class " from " cannot be cast to class java.lang.Throwable ("
+              (if (and (fx>? (string-length from) 5) (string=? (substring from 0 5) "java."))
+                  (string-append from " and java.lang.Throwable are in module java.base of loader 'bootstrap'")
+                  (string-append from " is in unnamed module of loader 'app'; java.lang.Throwable is in module java.base of loader 'bootstrap'"))
+              ")")))
+
+;; A proxy over a throwable class is a reify whose delegate is the base
+;; throwable; which of the two a call hands over depends on the route it took,
+;; so identity checks compare the throwable underneath.
+(define (throwable-identity x)
+  (if (and (jreify? x) (jreify-delegate x)) (jreify-delegate x) x))
+;; Throwables built with enableSuppression false (the protected 4-argument
+;; constructor, which a proxy reaches): addSuppressed still checks its argument
+;; and then records nothing. A side table, like the suppressed lists.
+(define throwable-no-suppression-tbl (make-ephemeron-eq-hashtable))
+(define (throwable-disable-suppression! v)
+  (jolt-with-mutex throwable-suppressed-mu
+    (hashtable-set! throwable-no-suppression-tbl (throwable-identity v) #t)))
+(define (throwable-add-suppressed! v other)
+  (cond
+    ((not (or (jolt-nil? other) (instance-check throwable-type-sym other)))
+     (throwable-cast-fail (let ((n (guard (e (#t #f)) (jolt-class-name other))))
+                            (if (string? n) n "java.lang.Object"))))
+    ((eq? (throwable-identity other) (throwable-identity v))
+     (jolt-throw (jolt-host-throwable "java.lang.IllegalArgumentException"
+                                      "Self-suppression not permitted" other)))
+    ((jolt-nil? other)
+     (throw-jvm 'NullPointerException "Cannot suppress a null exception."))
+    ((jolt-with-mutex throwable-suppressed-mu
+       (hashtable-ref throwable-no-suppression-tbl (throwable-identity v) #f))
+     (void))
+    (else
+     (jolt-with-mutex throwable-suppressed-mu
+       (let ((k (throwable-identity v)))
+         (hashtable-set! throwable-suppressed-tbl k
+                         (cons other (hashtable-ref throwable-suppressed-tbl k '())))))))
+  jolt-nil)
+
 ;; Throwable.printStackTrace: the header line, then the same Clojure backtrace the
-;; uncaught reporter prints. Called from a catch clause the throw's captured
+;; uncaught reporter prints, then each suppressed throwable laid out as the JDK
+;; does: "Suppressed: <toString>" one tab in, its frames and its own suppressed
+;; one tab further. jolt prints no "Caused by" chain and elides no common frames,
+;; so neither appears here. A throwable already printed anywhere in the walk, a
+;; cycle or a second branch, ends in the JDK's CIRCULAR REFERENCE line.
+;; Called from a catch clause the throw's captured
 ;; continuation is still live (the emitted catch runs jolt-catch-complete! only
 ;; AFTER the body), so the trace is the one that led to this throwable.
 ;; jolt-backtrace-string lives in source-registry.ss, which loads after this file —
 ;; a top-level forward reference, resolved at call time.
 (define (jolt-throwable-print-stack-trace v port)
+  ;; SEEN is one set for the whole walk, as the JDK's dejaVu is: a throwable
+  ;; printed on one branch is a circular reference on every later one.
+  (jolt-throwable-print-enclosed v port "" "" (box (list (throwable-identity v))))
+  jolt-nil)
+(define (jolt-throwable-print-enclosed v port prefix caption seen)
+  (display prefix port) (display caption port)
   (display (jolt-throwable-tostring v) port)
   (newline port)
   (let ((bt (guard (e (#t #f)) (jolt-throwable-backtrace-string v))))
-    (when bt (display bt port)))
-  jolt-nil)
+    (when bt
+      (let loop ((i 0) (start 0))
+        (cond ((= i (string-length bt))
+               (when (< start i) (display prefix port) (display (substring bt start i) port)))
+              ((char=? (string-ref bt i) #\newline)
+               (display prefix port) (display (substring bt start (+ i 1)) port)
+               (loop (+ i 1) (+ i 1)))
+              (else (loop (+ i 1) start))))))
+  (let ((p (string-append prefix "\t")))
+    (for-each
+      (lambda (x)
+        (if (memq (throwable-identity x) (unbox seen))
+            (begin (display p port) (display "Suppressed: [CIRCULAR REFERENCE: " port)
+                   (display (jolt-throwable-tostring x) port) (display "]" port) (newline port))
+            (begin (set-box! seen (cons (throwable-identity x) (unbox seen)))
+                   (jolt-throwable-print-enclosed x port p "Suppressed: " seen))))
+      (throwable-suppressed-list v))))
 
 ;; The target of a 1-arg .printStackTrace — a PrintStream / PrintWriter shim. Route
 ;; through the target's own .write, so any writer (io.ss's, a library's) works.
@@ -477,9 +619,10 @@
     ;; A StackTraceElement[], as the JVM's is (jolt-ref-array).
     ((string=? name "getStackTrace")
      (list (jolt-ref-array (jolt-throwable-stack-trace obj) "java.lang.StackTraceElement")))
-    ;; jolt never suppresses: an empty array is the JVM's own answer for a
-    ;; throwable with nothing suppressed, so this is exact rather than a stand-in.
-    ((string=? name "getSuppressed") (list (jolt-ref-array '() "java.lang.Throwable")))
+    ((string=? name "getSuppressed")
+     (list (jolt-ref-array (throwable-suppressed-list obj) "java.lang.Throwable")))
+    ((and (string=? name "addSuppressed") (pair? args))
+     (list (throwable-add-suppressed! obj (car args))))
     ;; JVM contract is "returns this"; jolt has no stack to refill.
     ((string=? name "fillInStackTrace") (list obj))
     ((string=? name "printStackTrace")

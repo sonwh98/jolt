@@ -74,24 +74,20 @@
 ;; general formatter, ~230 ns for a fixnum, and its control-string cache sits
 ;; under one process-wide mutex, so eight threads rendering integers ran 17x
 ;; slower per thread than one. str, the printer and Long/toString render a
-;; fixnum through this; a bignum still goes to number->string. A negative value
-;; is walked as itself (quotient and remainder toward zero, the remainder
-;; negated per digit) rather than negated up front, so the most negative fixnum
-;; needs no special case.
+;; fixnum through this; a bignum still goes to number->string. The most
+;; negative fixnum has no fixnum magnitude, so it is the one value rendered
+;; through number->string.
 (define (jolt-fixnum->string n)
   (if (fx=? n 0)
       "0"
       (let* ((neg? (fx<? n 0))
-             (len (let count ((m n) (k (if neg? 1 0)))
-                    (if (fx=? m 0) k (count (fxquotient m 10) (fx+ k 1)))))
-             (s (make-string len)))
-        (when neg? (string-set! s 0 #\-))
-        (let fill ((m n) (i (fx- len 1)))
-          (if (fx=? m 0)
-              s
-              (let ((d (fxremainder m 10)))
-                (string-set! s i (integer->char (fx+ 48 (if neg? (fx- 0 d) d))))
-                (fill (fxquotient m 10) (fx- i 1))))))))
+             (m (if neg? (- n) n)))           ; generic: the most negative fixnum's
+        (if (not (fixnum? m))                 ; magnitude is not a fixnum
+            (number->string n)
+            (let* ((len (if neg? (fx+ 1 (fx-decimal-length m)) (fx-decimal-length m)))
+                   (s (make-string len #\-)))
+              (fx-fill-digits! s m len)
+              s)))))
 
 (define jolt-nil (make-jolt-nil-t))
 ;; SPLICED, not called. Chez compiles each top-level form on its own -- verified:
@@ -229,12 +225,19 @@
 ;; `ext` the extension map, `hasheq` the defrecord __hasheq slot generalized to
 ;; the family -- 0 = unset; a defrecord caches its structural hash here, a plain
 ;; deftype its identity hash, and a type with a declared hasheq/hashCode never
-;; fills it (records-coll.ss jrec-hasheq-slow). The fielded children jrec1..8
-;; and the spill type jrec* (records.ss define-jrec-family) inherit these three
-;; fields, so desc-keyed dispatch stays uniform across the family.
+;; fills it (records-coll.ss jrec-hasheq-slow); `meta` the instance's metadata,
+;; jolt-nil for none -- a record's IObj _meta, the slot the collections have
+;; (natives-meta.ss owns it, and writes it only on an instance nobody else holds
+;; yet). It used to live in the weak identity side table, where attaching it cost
+;; ~500 ns a record (a weak-table insert under a lock) and every record that had
+;; any was a weak entry for the collector: rewrite-clj attaches position meta to
+;; every node it reads (#1713). The fielded children jrec1..8 and the spill type
+;; jrec* (records.ss define-jrec-family) inherit these four fields, so desc-keyed
+;; dispatch stays uniform across the family. chez-jrec-v5 (no meta) and older
+;; restore through state-image.ss's legacy jrec arm.
 (define-record-type (jrec make-jrec0 jrec?)
-  (fields (immutable desc) (immutable ext) (mutable hasheq))
-  (nongenerative chez-jrec-v5))
+  (fields (immutable desc) (immutable ext) (mutable hasheq) (mutable meta))
+  (nongenerative chez-jrec-v6))
 
 ;; --- the exit-only-cleanup marker --------------------------------------------
 ;; A fiber park is a continuation escape that is NOT an exit — the computation
@@ -455,6 +458,16 @@
       (make-symbol-t (intern-symbol-string ns) name meta #f #f)))
 (define (jolt-symbol ns name) (make-symbol-t/pooled ns name jolt-nil))
 (define (jolt-symbol/meta ns name meta) (make-symbol-t/pooled ns name meta))
+;; A symbol clojure.core/symbol builds at run time from strings (#1713). Its
+;; strings are NOT pooled. The JVM's Symbol.intern does not .intern() them
+;; either: only a class file's literals are interned, so (identical? (name
+;; (symbol s)) (name (symbol s))) is false there, while two quoted '?a share
+;; a name, which jolt-symbol keeps. Pooling cost tools.reader ~95 ns per
+;; symbol it read: a front-cache miss and insert, then the pool probe, for a
+;; string made a moment before and never seen again. Equality falls back to
+;; string=? (jolt=2-sym), and the hash finds the name's memo cell when the
+;; symbol is first hashed (hasheq.ss symbol-hasheq). NS is #f or a string.
+(define (jolt-symbol/unpooled ns name) (make-symbol-t ns name jolt-nil #f #f))
 
 ;; ns/name identical means the hasheq is identical, so a symbol rebuilt only to
 ;; change its metadata inherits the cache instead of recomputing it. with-meta on
@@ -532,6 +545,7 @@
          ;; The number pairs cover the exactness-aware number clause that moved
          ;; up with them (bignum and ratio pairs used to reach the arms).
          (cons (keyword #f "a") "a") (cons "a" (jolt-symbol #f "a"))
+         (cons (keyword #f "a") (jolt-vector 1)) (cons (keyword #f "a") car)
          (cons (keyword #f "a") jolt-nil) (cons jolt-nil 0) (cons jolt-nil "s")
          (cons 1 2.5) (cons #t (keyword #f "a")) (cons #\a "a") (cons 0 #f)
          (cons (expt 2 70) (expt 2 71)) (cons 1/2 1/3) (cons #\a #\b) (cons #t #f)
@@ -541,6 +555,10 @@
          (cons (jolt-vector 1) (jolt-vector 2))
          (cons (jolt-hash-map (keyword #f "a") 1) (jolt-hash-map (keyword #f "a") 2))
          (cons (jolt-hash-set 1) (jolt-hash-set 2))
+         ;; ...and each of the three against a base scalar, either order
+         (cons (jolt-vector 1) "s") (cons (keyword #f "a") (jolt-vector 1))
+         (cons (jolt-hash-map (keyword #f "a") 1) 0) (cons #\a (jolt-hash-map (keyword #f "a") 1))
+         (cons (jolt-hash-set 1) (jolt-symbol #f "a")) (cons #t (jolt-hash-set 1))
          ;; procedures: fn equality is identity, answered ahead of the walk (a
          ;; collision-bucket compare of fn-keyed map keys paid the whole arm
          ;; walk per entry) — so no arm may claim one.
@@ -602,10 +620,22 @@
 ;; bypasses it too, so eq? alone would answer #f for two symbols that are equal.
 ;; So the fast case is a pointer compare and the correct case is still a compare
 ;; of the contents.
+;; X is a value whose = against a base scalar (base-scalar? below) Util.equiv
+;; settles by kind, with nothing to ask: a base scalar itself, or one of jolt's
+;; own vector, map and set types, whose equiv is false against anything that is
+;; not a collection. A deftype, a reify, a host object, a fn is NOT here: those
+;; are what the arm registry asks (#1769). Syntax so jolt=2/i (rt.ss) tests it
+;; inline; X must be a variable. Every pair it settles is in eq-fast-probes.
+(define-syntax eq-kind-settled?
+  (syntax-rules ()
+    ((_ x) (or (fixnum? x) (jolt-nil? x) (keyword-t? x) (string? x) (char? x)
+               (boolean? x) (symbol-t? x) (number? x) (pvec? x) (pmap? x) (pset? x)))))
 (define (jolt=2 a b)
   (cond ((and (fixnum? a) (fixnum? b)) (= a b))
         ((and (flonum? a) (flonum? b)) (= a b))
-        ((and (eq? a b) (not (number? a))) #t)
+        ;; a Float NaN is unequal to itself, as a double NaN is (the clause above):
+        ;; a jfloat is a box, so identity alone would call it equal
+        ((and (eq? a b) (not (number? a))) (not (and (jfloat? a) (nan? (jfloat-fl a)))))
         ;; Two keywords, and two strings, answer HERE rather than after the arm
         ;; walk. Both pairs are already in eq-fast-probes, so the registry REFUSES
         ;; an arm that would claim them (eq-arm-reject-fast-type!) — that guard is
@@ -655,6 +685,13 @@
         ;; ahead of the walk it sat at the end of (records-coll.ss jrec-equiv=?,
         ;; loads later — runtime forward ref). The pair is in eq-fast-probes.
         ((and (jrec? a) (jrec? b)) (jrec-equiv=? a b))
+        ;; one of jolt's own vector, map or set types against a base scalar, in
+        ;; either order: Util.equiv asks the collection's equiv, which is false
+        ;; against a non-collection, so nothing else is asked. (= v "s") used
+        ;; to walk every arm to reach jolt=2-base's sequential clause. The pairs
+        ;; are in eq-fast-probes.
+        ((and (or (pvec? a) (pmap? a) (pset? a)) (base-scalar? b)) #f)
+        ((and (or (pvec? b) (pmap? b) (pset? b)) (base-scalar? a)) #f)
         ;; nil is equal only to nil (the eq? clause above answered that pair),
         ;; and two base scalars of different kinds are never equal. Both used to
         ;; reach jolt=2-base only AFTER every registered arm had been asked —
@@ -666,7 +703,31 @@
         ;; Boolean equality is by kind. Numbers keep the exactness-aware
         ;; compare of jolt=2-base. Every pair answered here is in
         ;; eq-fast-probes, so the registry refuses an arm that would claim one.
-        ((or (jolt-nil? a) (jolt-nil? b)) #f)
+        ;; nil on the LEFT is Util.equiv's k1 == null: false without asking k2.
+        ;; nil on the right is k1.equiv(nil) when k1 is a collection and
+        ;; k1.equals(nil) otherwise, so a deftype or a reify that declares its
+        ;; own equality answers for itself (#1769); every other type's equals
+        ;; is false against null.
+        ((jolt-nil? a) #f)
+        ((jolt-nil? b) (cond ((jrec? a) (jrec-equiv=? a b))
+                             ((reify-declares-eq? a) (reify-equiv=? a b))
+                             (else #f)))
+        ;; A keyword equals only itself (Keyword.equals is identity, and the eq?
+        ;; clause above answered that), unless the other operand is a type
+        ;; whose own equiv Util.equiv asks when it is a collection: a deftype
+        ;; or a reify (#1769). Anything else -- a host object (a Class token, a
+        ;; stream), one of jolt's own collections, a fn -- is never equal to a
+        ;; keyword. A multimethod table keyed by both classes and keywords
+        ;; compares the two kinds on every bucket collision, and each compare
+        ;; walked every registered arm (about 1 us). The pairs are probed
+        ;; (eq-fast-probes here, the jhost one by the dispatch-caches unit row
+        ;; after boot), so no arm may claim one. reify-declares-eq? is defined
+        ;; in records-dispatch.ss, which loads later: a runtime forward ref.
+        ((and (keyword-t? a) (not (jrec? b)) (not (reify-declares-eq? b))) #f)
+        ;; jolt-host-object? is a procedure host-static.ss defines over its
+        ;; jhost record: a forward reference to a record op is refused here
+        ;; (record-inline-test), a call resolved at run time is not.
+        ((and (keyword-t? b) (jolt-host-object? a)) #f)
         ((and (base-scalar? a) (base-scalar? b))
          (cond ((and (number? a) (number? b)) (and (eq? (exact? a) (exact? b)) (= a b)))
                ((and (char? a) (char? b)) (char=? a b))
@@ -767,3 +828,14 @@
                 (cond ((null? as) (jolt-hash-base x))
                       (((caar as) x) ((cdar as) x))
                       (else (loop (cdr as))))))))
+
+;; A multimethod (multimethods.ss holds everything that works on one). The type
+;; is defined here, ahead of seq.ss, so the fixed-arity invokes there test a
+;; multifn with the open-coded predicate (#1713): a multifn reached through a
+;; var is not a procedure, and a call to it used to fall through to the
+;; variadic jolt-invoke. A record op named before its type is defined compiles
+;; as a variable call instead (the recordinline gate).
+(define-record-type jolt-multifn
+  (fields name dispatch-fn methods default hierarchy prefers
+          cache (mutable cache-epoch) (mutable cache-hier) (mutable icache))
+  (nongenerative jolt-multifn-v3))

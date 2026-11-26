@@ -183,12 +183,15 @@ n=0; while [ ! -f "$tmp/nb/lib/native/builds.log" ] && [ $n -lt 200 ]; do sleep 
 kill -KILL $pa $(pgrep -P $pa) 2>/dev/null; wait $pa 2>/dev/null
 [ -d "$tmp/nb/lib/.jolt-native-build.lock" ] && r=left || r=gone
 check "a build interrupted mid-run leaves its lock behind" "left" "$r"
-t0=$(date +%s)
-out="$(bounded 30 inbb "$tmp/nb/app" -M:go)"; s=$?
-t1=$(date +%s)
+# "Promptly" is a property of the run, not of the clock: it judged the lock
+# dead on first sight, so it never fell into the wait loop (which says so). A
+# wall-clock bound failed on a loaded machine, where the run includes a C build.
+# The watchdog only guards against a hang.
+out="$(bounded 120 inbb "$tmp/nb/app" -M:go)"; s=$?
 case "$out" in *"stale native build lock for jbt (its holder, pid "*" is gone)"*"answer 42") r=yes ;; *) r="no: $out" ;; esac
 check "the next run breaks the dead build's lock and builds" "yes" "$r"
-check "...promptly" "yes" "$([ $((t1-t0)) -lt 20 ] && echo yes || echo "no: $((t1-t0))s")"
+case "$out" in *"waiting for another jolt"*) r="no: it waited: $out" ;; *) r=yes ;; esac
+check "...promptly" "yes" "$r"
 [ -d "$tmp/nb/lib/.jolt-native-build.lock" ] && r=left || r=gone
 check "...releasing the lock it took" "gone" "$r"
 
@@ -202,11 +205,17 @@ case "$out" in *"stale native build lock for jbt (it has not been refreshed for 
 check "a lock that stopped being refreshed is broken" "yes" "$r"
 
 # a live holder's lock is waited on, and the wait names the lock to delete
+# The lock is released once the run says it is waiting, not after a fixed
+# sleep: a run slower than the sleep to reach the lock found it gone and never
+# waited.
 fresh
 mkdir "$tmp/nb/lib/.jolt-native-build.lock"
-( sleep 2; rm -rf "$tmp/nb/lib/.jolt-native-build.lock" ) &
-out="$(bounded 30 inbb "$tmp/nb/app" -M:go)"
-wait
+bounded 120 inbb "$tmp/nb/app" -M:go > "$tmp/nb-w.out" 2>&1 &
+pw=$!
+n=0; while ! grep -q "waiting for another jolt" "$tmp/nb-w.out" 2>/dev/null && [ $n -lt 600 ]; do sleep 0.1; n=$((n+1)); done
+rm -rf "$tmp/nb/lib/.jolt-native-build.lock"
+wait $pw
+out="$(cat "$tmp/nb-w.out")"
 case "$out" in *"waiting for another jolt building jbt; if no build is running, delete "*"/nb/lib/.jolt-native-build.lock"*"answer 42") r=yes ;; *) r="no: $out" ;; esac
 check "a held lock is waited on, naming the path to delete" "yes" "$r"
 
@@ -309,6 +318,27 @@ out="$(export JOLT_NATIVE_BUILD=0; JOLT_PWD="$tmp/nb/app" JOLT_QUIET=1 "$JOLT" b
 check "jolt build with a dependency's library missing and auto-build off fails" "1" "$([ "$s" = 0 ] && echo 0 || echo 1)"
 case "$out" in *"required native library jbt not found"*"auto-build is off"*"(declared by dependency jbt/jbt)"*) r=yes ;; *) r="no: $out" ;; esac
 check "...naming the library, the task and the dependency" "yes" "$r"
+
+# A library added at run time with jolt.deps/add-deps brings its :jolt/native
+# the same way, opened on the first require of one of its namespaces. Before,
+# add-deps added the roots and left the natives out, so a script that pulled
+# jolt-lang/crypto this way bound EVP_* to whatever the process already had
+# (on macOS a BoringSSL copy that aborts) or to nothing.
+fresh
+mkdir -p "$tmp/nb/script"
+cat > "$tmp/nb/script/s.clj" <<EOF
+(jolt.deps/add-deps '{:deps {jbt/jbt {:local/root "$tmp/nb/lib"}}})
+(println "pending" (count (jolt.host/pending-native-roots)))
+(require 'jbt.core)
+(println "answer" (jbt.core/answer))
+EOF
+out="$(inbb "$tmp/nb/script" run "$tmp/nb/script/s.clj")"
+case "$out" in "pending 1"*"building native library jbt"*"answer 42") r=yes ;; *) r="no: $out" ;; esac
+check "add-deps defers the added library's native to its first require" "yes" "$r"
+check "...building it once" "1" "$(builds)"
+# adding the same library twice registers its native once
+out="$(inbb "$tmp/nb/script" -e "(jolt.deps/add-deps '{:deps {jbt/jbt {:local/root \"$tmp/nb/lib\"}}}) (jolt.deps/add-deps '{:deps {jbt/jbt {:local/root \"$tmp/nb/lib\"}}}) (println (count (jolt.host/pending-native-roots)))")"
+check "...and adding it twice registers its native once" "1" "$out"
 else
   echo "  (skipped :build cases: no C compiler)" >&2
 fi
@@ -488,6 +518,12 @@ leave viajolt2" "$(inbb "$BB" viajolt2)"
 check "jolt is the same fn under its own name" "enter viajolt3
 :from-jolt-fn
 leave viajolt3" "$(inbb "$BB" viajolt3)"
+# Without JOLT_EXE a built jolt re-invokes itself, not the `jolt` on PATH (#1787).
+mkdir -p "$tmp/fakebin"
+printf '#!/bin/sh\necho wrong-jolt\n' > "$tmp/fakebin/jolt"; chmod +x "$tmp/fakebin/jolt"
+check "jolt re-invokes the running jolt, not the one on PATH" "enter viajolt3
+:from-jolt-fn
+leave viajolt3" "$(unset JOLT_EXE; PATH="$tmp/fakebin:$PATH"; inbb "$BB" viajolt3)"
 
 # --- :override-builtin -------------------------------------------------------
 

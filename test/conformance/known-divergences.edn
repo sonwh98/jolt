@@ -58,6 +58,42 @@
   ;; arrive unverified. Rendering is pr-str for a value, "throws <SimpleName>" for
   ;; a raise (the ROOT cause's simple name). :jvm/:jolt outside :check are prose
   ;; for a reader; the :check pair is what the gate holds to.
+  ;; A protocol method's fn. The JVM's class is an artifact of emit-protocol's
+  ;; expansion -- the gensym'd G__N fn inside the eval wrapper -- whose counters
+  ;; change from run to run; jolt names it after the method, as its other fns are
+  ;; named after their def. Matching the shape would mean emitting protocol
+  ;; methods differently from every other def, which the protocol call site's
+  ;; direct path relies on. Digits are masked so the check holds across runs.
+  {:category :host-model
+   :behavior "(class m) for a protocol method m"
+   :jvm "user$evalN$fn__N$G__N__N, the gensym'd fn defprotocol's expansion builds"
+   :jolt "user$m, named after the method"
+   :check {:expr "(do (defprotocol KdProtoFnClass (kd-pfc [x])) (clojure.string/replace (.getName (class kd-pfc)) #\"\\d+\" \"N\"))"
+           :jvm "\"user$evalN$fn__N$G__N__N\""
+           :jolt "\"user$kd_pfc\""}
+   :note "Every other fn's class follows the JVM's Compiler naming; only the counters differ there (the :prose entry on generated class names)."}
+  ;; The JVM checks core macro calls against clojure.core.specs.alpha before
+  ;; expanding them; jolt carries no macro specs. A malformed call still fails at
+  ;; compile time on both -- (let [x] 1), (for [] 1), (doseq [x] 1) -- but with
+  ;; jolt's own message where the JVM reports the spec failure.
+  {:category :host-model
+   :behavior "a core macro call that fails its clojure.core.specs.alpha spec, e.g. (let [x] 1)"
+   :jvm "a compile error whose cause is \"Call to clojure.core/let did not conform to spec.\""
+   :jolt "a compile error with jolt's own message for the same malformation"
+   :check {:expr "(try (eval (read-string \"(let [x] 1)\")) (catch Throwable e (.getMessage (or (.getCause e) e))))"
+           :jvm "\"Call to clojure.core/let did not conform to spec.\""
+           :jolt "\"Bad binding form, expected matched symbol expression pairs\""}
+   :note "jolt does not load spec into clojure.core; the call is rejected either way"}
+  ;; #:{...} names no namespace. The reference prints the namespace object it
+  ;; read with Java's String.valueOf, so a missing one reads "null"; jolt reports
+  ;; the value it has (host/chez/reader.ss rdr-read-ns-map).
+  {:category :host-model
+   :behavior "(read-string \"#:{:b 1}\") error message"
+   :jvm "\"Namespaced map must specify a valid namespace: null\""
+   :jolt "\"Namespaced map must specify a valid namespace: nil\""
+   :check {:expr "(try (read-string \"#:{:b 1}\") (catch Throwable e (.getMessage e)))"
+           :jvm "\"Namespaced map must specify a valid namespace: null\""
+           :jolt "\"Namespaced map must specify a valid namespace: nil\""}}
   ;; The JVM's read-string reads through a plain PushbackReader, not a
   ;; LineNumberingPushbackReader, so nothing it returns carries source metadata at
   ;; all — that only happens for forms the compiler reads out of a file. jolt's
@@ -151,14 +187,7 @@
            :jolt "\"java.util.concurrent.FutureTask\""}}
   ;; CompletableFuture. The stage graph, its exception wrapping and its waits are
   ;; certified by the corpus rows under "interop / completable future"; these are
-  ;; the two details of it jolt does not reproduce.
-  {:category :host-model
-   :behavior "whenComplete whose action throws over a stage that already failed"
-   :jvm "the stage keeps its own failure and the action's throwable is added to it with addSuppressed"
-   :jolt "the stage keeps its own failure; jolt throwables carry no suppressed list (getSuppressed is always empty), so the action's throwable is dropped"
-   :check {:expr "(let [c (.whenComplete (java.util.concurrent.CompletableFuture/failedFuture (RuntimeException. \"boom\")) (fn [v e] (throw (IllegalStateException. \"wc\"))))] (try (.join c) (catch Throwable e (count (.getSuppressed (.getCause e))))))"
-           :jvm "1"
-           :jolt "0"}}
+  ;; the detail of it jolt does not reproduce.
   {:category :host-model
    :behavior "the thread an async stage runs on"
    :jvm "a ForkJoinPool.commonPool worker (\"ForkJoinPool.commonPool-worker-N\"), and orTimeout/completeOnTimeout fire on the \"CompletableFutureDelayScheduler\" thread"
@@ -189,14 +218,6 @@
            :jvm "\"clojure.lang.Symbol\""
            :jolt "\"java.lang.Class\""}
    :note "Both name java.lang.String; only the kind of value differs. jolt's def is the one seam that resolves a ^tag, and it resolves this one too."}
-  {:category :reader-model
-   :behavior "(meta (read-string \"(foo)\"))"
-   :jvm "nil — read-string does not record positions"
-   :jolt "{:line 1, :column 1} — the position within the string that was read"
-   :check {:expr "(pr-str (meta (read-string \"(foo)\")))"
-           :jvm "\"nil\""
-           :jolt "\"{:line 1, :column 1}\""}
-   :note "Positions only; :file is absent on both, and stays absent inside a file load."}
   ;; ^int on a parameter. Reference Clojure has long and double primitive
   ;; parameters and nothing else, and refuses any other primitive hint on one
   ;; outright — the fn does not compile there, whatever it is called with. jolt
@@ -254,10 +275,13 @@
   ;; LETTER CAPITAL S, given the compatibility decomposition <super> 0053 in
   ;; 17.0, so NFKC/NFKD fold it to "S" here and leave it alone on the JVM
   ;; (NFC/NFD leave it alone on both). Masking that one code point would pin jolt
-  ;; to one JDK's UCD version, which the next JDK moves anyway, and the rest of
-  ;; jolt's Unicode surface — Character/getType, \p{L}, case conversion — already
-  ;; reads those same Chez tables. So the divergence on record is the version,
-  ;; and the code point is what it currently amounts to (gh-1066).
+  ;; to one JDK's UCD version, which the next JDK moves anyway, and case
+  ;; conversion reads those same Chez tables. So the divergence on record is the
+  ;; version, and the code point is what it currently amounts to (gh-1066).
+  ;; Character's classification and java.util.regex's Unicode classes are the
+  ;; exception: they read Chez's categories through a table of where the pinned
+  ;; JDK disagrees (tools/gen-char-categories.clj), since a digit or letter the
+  ;; JDK has never heard of changes what parsers accept.
   {:category :host-model
    :behavior "(java.text.Normalizer/normalize \"\\uA7F1\" java.text.Normalizer$Form/NFKC)"
    :jvm "\"\\ua7f1\" — UCD 16.0 gives it no decomposition"
@@ -332,6 +356,19 @@
            :jvm "false"
            :jolt "true"}
    :note "Numeric-category-blind value equality; a deep = property, not a cheap fix. Verified against Clojure 1.12.5."}
+  ;; A ratio becomes a double by the nearest double here (Chez's inexact). The
+  ;; JVM's Ratio.doubleValue goes through BigDecimal at DECIMAL64, 16 significant
+  ;; digits half-even, and DoubleOps converts a ratio operand the same way. Kept
+  ;; on purpose: 16 digits can't name every double, so the JVM's second rounding
+  ;; can land one ulp off, and jolt's single rounding is the exact answer.
+  {:category :numeric-model
+   :behavior "(double 2/3), (+ 2/3 0.0)"
+   :jvm "0.6666666666666667"
+   :jolt "0.6666666666666666"
+   :check {:expr "(pr-str [(double 2/3) (.doubleValue 2/3) (+ 2/3 0.0)])"
+           :jvm "\"[0.6666666666666667 0.6666666666666667 0.6666666666666667]\""
+           :jolt "\"[0.6666666666666666 0.6666666666666666 0.6666666666666666]\""}
+   :note "Deliberate (jolt-p4u05, closed): jolt keeps Chez's correctly rounded conversion rather than reproduce the JVM's double rounding."}
   ;; The two ##NaN rows the clojure-test-suite flags as arguably-undefined. Both
   ;; were unreachable while jolt read :bb branches — the suite gates one behind
   ;; #?@(:bb [] :default [...]) and writes the other's expectation per platform —
@@ -362,6 +399,14 @@
   ;; (reduced 5) [1 2]) is a ClassCastException there (and (reduce + (reduced 5)
   ;; []) answers the box itself). A superset: an ordinary init behaves the same.
   {:category :permissive
+   :behavior "(Files/readAttributes path \"size\" opts), the String form"
+   :jvm "a java.util.Collections$UnmodifiableMap, which assoc refuses"
+   :jolt "a persistent map, which assoc extends"
+   :check {:expr "(assoc (java.nio.file.Files/readAttributes (java.nio.file.Paths/get \".\" (into-array String [])) \"isDirectory\" (into-array java.nio.file.LinkOption [])) \"x\" 1)"
+           :jvm "throws ClassCastException"
+           :jolt "{\"isDirectory\" true, \"x\" 1}"}
+   :note "Found reviewing #1805. get, keys, seq and = read the same on both; only a write tells them apart."}
+  {:category :permissive
    :behavior "(reduce + (reduced 5) [1 2])"
    :jvm "throws ClassCastException (Reduced cannot be cast to Number)"
    :jolt "5"
@@ -369,6 +414,17 @@
            :jvm "throws ClassCastException"
            :jolt "5"}
    :note "Found while adding the (reduce + ...) vector fast path; that path keeps the entry check. Verified against Clojure 1.12.6."}
+  ;; aget/aset compile to the indexed read and write every collection answers,
+  ;; so they take a vector or a string where the JVM finds no aget for a
+  ;; non-array. A superset: an array behaves the same.
+  {:category :permissive
+   :behavior "(aget \"abc\" 1), (aget [1 2] 0)"
+   :jvm "throws IllegalArgumentException \"No matching method aget found taking 2 args\""
+   :jolt "\\b, 1"
+   :check {:expr "[(aget \"abc\" 1) (aget [1 2] 0)]"
+           :jvm "throws IllegalArgumentException"
+           :jolt "[\\b 1]"}
+   :note "jolt-aenwy. Kept: libraries ported to jolt read vectors through aget, and making it strict would break them for no gain on portable code."}
   {:category :permissive
    :behavior "(ex-data (ex-info \"m\" 5))"
    :jvm "throws ClassCastException"
@@ -377,21 +433,20 @@
            :jvm "throws ClassCastException"
            :jolt "5"}
    :note "Unchecked data argument; a map behaves identically. Verified against Clojure 1.12.5."}
-  ;; A reference array's elements are not checked against its component class:
-  ;; the JVM raises "array element type mismatch" from into-array and
-  ;; ArrayStoreException from aset, while jolt stores the value. Typed arrays
-  ;; carry their component class (into-array String … is a String[]), but jolt's
-  ;; class model does not know every JDK class's ancestry — a StandardCopyOption
-  ;; is a CopyOption on the JVM and not here — so a check would refuse arrays the
-  ;; JVM builds. A superset: an array of the right elements behaves identically.
-  {:category :permissive
-   :behavior "(into-array String [1]) — an element that is not of the component class"
-   :jvm "throws IllegalArgumentException"
-   :jolt "a String[] holding 1"
-   :check {:expr "(vec (into-array String [1]))"
-           :jvm "throws IllegalArgumentException"
+  ;; A typed reference array checks what it stores against its component class
+  ;; (natives-array.ss na-ref-storable?), but jolt keeps one representation for
+  ;; every exact integer in long range, so it cannot tell a Long from the
+  ;; Integer, Short or Byte the JVM would refuse in a Long[] (or the reverse),
+  ;; and stores it. The check only ever refuses a definite mismatch. The same
+  ;; one-fixnum collapse as the (class (int 1)) entry.
+  {:category :integer-box-model
+   :behavior "(aset (make-array Integer 1) 0 1) — a Long into an Integer[] (and Integer/Short/Byte into each other's arrays)"
+   :jvm "throws ArrayStoreException"
+   :jolt "stores it"
+   :check {:expr "(vec (doto (make-array Integer 1) (aset 0 1)))"
+           :jvm "throws ArrayStoreException"
            :jolt "[1]"}
-   :note "aset into a typed array is unchecked the same way. Verified against Clojure 1.12.5."}
+   :note "jolt-uh8ck. Every other mismatch (a String into a Number[], a Double into a Long[]) is refused as on the JVM. Verified against Clojure 1.12.5."}
   ;; A primitive array coerces what it is handed. The JVM's reflective aset and
   ;; into-array refuse a value whose box does not match the element type; jolt
   ;; stores the value narrowed as Numbers.T_array would.
@@ -572,14 +627,14 @@
    :check :prose
    :why "jolt has no internal use for USR2, so its default is the platform's"
    :note "An unhandled USR1 ends both (138), and WINCH is ignored by both."}
-  ;; *in* reads its source a line at a time (__stdin-read-line), so a
-  ;; BufferedReader over it, which fills with one read of up to 8192 chars,
+  ;; A read of *in* stops at the end of the line it is in (__stdin-read-chunk),
+  ;; so a BufferedReader over it, which fills with one read of up to 8192 chars,
   ;; takes one line where the JVM's takes everything the pipe already holds.
   ;; On a terminal the two agree, since the JVM's read also returns one line.
   {:category :restrictive
    :behavior "(let [r (io/reader *in*)] [(.readLine r) (read-line)]) over a pipe holding several lines"
    :jvm "[line1 nil] when the lines had already arrived: the BufferedReader's fill took them all"
-   :jolt "[line1 line2]: the fill takes the current line only; .ready after read-line is false"
+   :jolt "[line1 line2]: the fill takes the current line only"
    :check :prose
    :why "the JVM's answer depends on how much the pipe holds at the read, which the gate does not control"
    :note "A Reader.read may return fewer chars than asked, so (.read *in* buf) returning one line is within contract."}
@@ -690,6 +745,21 @@
            :jvm "nil"
            :jolt ":x"}
    :note "No method signatures; reify has always behaved this way."}
+  ;; Generated class names carry a counter: the JVM's is RT.nextID, one sequence
+  ;; for every class, fn, eval wrapper and constant id the process has compiled,
+  ;; so a name depends on everything compiled before it. jolt mints each N from
+  ;; where its form sits (file, line, column), so the same source names the same
+  ;; class in every process -- a form compiled into the AOT cache and one
+  ;; expanded fresh can never share a name. The shape around the counters is the
+  ;; reference's (unit.edn jvm-misc "a reify's class is named as Compiler names it"
+  ;; and "a fn's class is named as Compiler names it").
+  {:category :host-model
+   :behavior "(.getName (class x)) of a reify or a fn literal in a defn, a nested fn or a top-level form; the same N in an ArityException's demunged fn name"
+   :jvm "user$f$reify__142, user$f$fn__144, user$eval140$fn__141 -- N from the process-wide counter"
+   :jolt "user$f$reify__1652772568, user$f$fn__1740571258, user$eval1948859455$fn__1948859455 -- N from the form's position"
+   :check :prose
+   :why "the JVM's N is a process-global sequence that depends on everything compiled before the form, so no expression has a fixed value to record"
+   :note "Only the counters differ: the enclosing class path, munging and trimming are Compiler's. clojure.core's own fns and the closures its natives make carry Clojure 1.12.6's exact names (its core is AOT-compiled, so those are fixed); a core closure compiled from jolt's own clojure.core source carries a position N like any other."}
   {:category :numeric-model
    :behavior "(loop [i 5] (+ i 9223372036854775807))"
    :jvm "throws ArithmeticException (primitive long add overflows at 2^63)"
@@ -725,6 +795,29 @@
    :check :prose
    :why "needs two source files on a root; the corpus evaluates single forms"
    :note "Deliberate (loader.ss step 3 of the JLS 12.4.2 procedure). The cross-thread case, which the JVM deadlocks on, raises here instead."}
+  ;; Compiled code names a var through its cell, and the cell is the name's for
+  ;; good: ns-unmap drops the mapping but a later def of the name reuses it. On
+  ;; the JVM the def interns a NEW Var, and code compiled before the unmap keeps
+  ;; calling the old one.
+  {:category :namespace-model
+   :behavior "(defn f [] 6) (defn c [] (f)) (ns-unmap *ns* 'f) (defn f [] :new) (c)"
+   :jvm "6 — c holds the unmapped Var"
+   :jolt ":new — c reaches the name's one cell, which the new defn wrote"
+   :check {:expr "(do (defn kd-unmap-f [] 6) (defn kd-unmap-c [] (kd-unmap-f)) (ns-unmap *ns* 'kd-unmap-f) (defn kd-unmap-f [] :new) (kd-unmap-c))"
+           :jvm "6"
+           :jolt ":new"}
+   :note "jolt-d6dti. The usual reason to unmap and redefine (a defmulti, a var turned into a macro) wants every caller to see the new definition, which jolt gives."}
+  ;; A var read compiled while the var was not dynamic reads its root on the JVM
+  ;; (getRawRoot), so .setDynamic and a binding afterwards do not reach it. jolt's
+  ;; read honours a binding wherever one is in force.
+  {:category :namespace-model
+   :behavior "(def v 1) (defn c [] v) (.setDynamic #'v) (binding [v 2] (c))"
+   :jvm "1 — c was compiled to read the root"
+   :jolt "2"
+   :check {:expr "(do (def kd-setdyn-v 1) (defn kd-setdyn-c [] kd-setdyn-v) (.setDynamic #'kd-setdyn-v) (binding [kd-setdyn-v 2] (kd-setdyn-c)))"
+           :jvm "1"
+           :jolt "2"}
+   :note "jolt-d6dti. A binding of a var made dynamic after the fact reaches every reader, not only those compiled after the .setDynamic."}
   {:category :namespace-model
    :behavior "(binding [*allow-unresolved-vars* true] (eval '(defn f [] later))) then (def later 42), (f)"
    :jvm "VerifyError at the defn (UnresolvedVarExpr emits nothing)"
@@ -879,15 +972,6 @@
            :jvm "throws ClassCastException"
            :jolt "\"(:a :b)\""}
    :note "jolt reads any 2-element vector as an entry, so a vector of pairs walks like a seq of map entries. Anything else — a string, a number, a longer vector — is the same ClassCastException the JVM throws, naming the same class; keys never returns a nil or an index into a non-entry."}
-  ;; auto-gensym suffix differs by a trailing "__".
-  {:category :reader-model
-   :behavior "an auto-gensym x# expands to a symbol named"
-   :jvm "x__N__auto__"
-   :jolt "x__N__auto"
-   :check {:expr "(boolean (re-find #\"__auto__$\" (name `x#)))"
-           :jvm "true"
-           :jolt "false"}
-   :note "Cosmetic; each x# in a syntax-quote is still consistently renamed. Only string comparison of gensym names would see it."}
   ;; #?(...) reader conditionals are read by default (JVM requires {:read-cond :allow}).
   {:category :reader-model
    :behavior "read-string of a #?(...) reader conditional"
@@ -911,19 +995,6 @@
            :jvm "throws ClassCastException"
            :jolt "\"hi\""}
    :note "Widening only. Anything that works on the JVM works here."}
-  ;; the JVM records a read form's position only when the reader is a
-  ;; LineNumberingPushbackReader; jolt has one reader path, which is always
-  ;; positioned. Widening, and the position is right either way — the
-  ;; line-numbering case agrees with the JVM exactly (corpus, "interop / read over
-  ;; a host reader").
-  {:category :reader-model
-   :behavior "(meta (read a-plain-java.io.PushbackReader)) on a list form"
-   :jvm "nil"
-   :jolt "{:line N :column M}"
-   :check {:expr "(pr-str (into (sorted-map) (select-keys (meta (read (java.io.PushbackReader. (java.io.StringReader. \"(foo)\")))) [:line :column])))"
-           :jvm "\"{}\""
-           :jolt "\"{:column 1, :line 1}\""}
-   :note "No unpositioned reader variant exists here to fall back to."}
   ;; a read stops at the end of the FORM; the JVM's LispReader consumes the
   ;; character that terminated a bare token as part of scanning it. Only visible
   ;; through .getLineNumber between two reads, and only for a token that ends at a
@@ -943,19 +1014,6 @@
   ;; agrees with the JVM. The marker is qualified precisely so it reserves nothing:
   ;; a bare `syntax-quote` is an ordinary name a program may define (corpus,
   ;; "reader / syntax-quote is not a reserved name").
-    ;; the reader stamps a position on list forms for error reporting, and quote takes
-  ;; it back off so a quoted list literal stays a constant rather than an allocating
-  ;; (with-meta …). The JVM keeps it, and cannot tell it from a position the program
-  ;; wrote — jolt drops both. Vectors, maps, sets and symbols are never stamped, so
-  ;; they keep whatever the program wrote (corpus, "conformance / metadata / vars").
-  {:category :reader-model
-   :behavior "(meta '(foo)) read from a file, and (meta '^{:line 99} (foo))"
-   :jvm "{:line N :column M} / {:line 99 :column M}"
-   :jolt "nil / nil"
-   :check {:expr "(:line (meta '^{:line 99} (foo)))"
-           :jvm "99"
-           :jolt "nil"}
-   :note "Only :line/:column/:file, only on a quoted LIST. Keeps quoted list literals constant instead of reallocating a with-meta wrapper per evaluation."}
   ;; Integer/toHexString of a byte read out of a byte[]. Unlike format's %x (which
   ;; infers the width and is handled in :entries), these statics name their width.
   {:category :integer-box-model
@@ -976,6 +1034,43 @@
            :jvm "[\"java.lang.Integer\" false]"
            :jolt "[\"java.lang.Long\" true]"}
    :note "Chez has one fixnum. instance? is deliberately permissive for Integer/Long — a value answers to both spellings of its collapsed class — while Short and Byte stay false. Since #627 the big classes are value-sensitive: BigInt/BigInteger answer only for bignums (which also class as clojure.lang.BigInt), Long/Integer only for fixnums, matching the JVM. A bignum still answers BigInteger (one big representation serves both classes; the JVM says false) — the remaining superset. Float is its own value (a jfloat), so Float and Double answer as on the JVM."}
+;; The same collapse in arithmetic: a BigInt inside the long range is a fixnum, so
+;; the unchecked ops (which only wrap on two longs) see two longs and answer one.
+;; Past the long range a BigInt is its own value and contaminates as on the JVM.
+  {:category :integer-box-model
+   :behavior "(unchecked-add 1N 2)"
+   :jvm "3N, a BigInt: a BigInt operand takes the BigInt category"
+   :jolt "3, a Long: 1N is the fixnum 1"
+   :check {:expr "(let [r (unchecked-add 1N 2)] [(.getSimpleName (class r)) r])"
+           :jvm "[\"BigInt\" 3N]"
+           :jolt "[\"Long\" 3]"}
+   :note "Same one-exact-integer model as (class 1N); (unchecked-add 9223372036854775808N 1) is 9223372036854775809N on both."}
+  ;; The same collapse under *print-dup*: print-dup writes a Number as its
+  ;; constructor unless it is a Long (or a BigInt, which prints with its N), and
+  ;; an int, a short, a byte, a small BigInteger and a small BigInt are all the
+  ;; fixnum a long is here, so each prints as the long it reads back as. The
+  ;; reader's :line/:column on a quoted list are the same fixnums, so a quoted
+  ;; literal's metadata prints as {:line 1, :column 2} where the JVM's reader
+  ;; stored Integers and print-dup writes #=(java.lang.Integer. "1").
+  {:category :integer-box-model
+   :behavior "(binding [*print-dup* true] (pr-str (int 1))) and the other narrow integers"
+   :jvm "#=(java.lang.Integer. \"1\"), and #=(java.lang.Short. …), #=(java.lang.Byte. …), #=(java.math.BigInteger. …), 5N"
+   :jolt "1, and the plain integer for each"
+   :check {:expr "(binding [*print-dup* true] (pr-str [(int 1) (short 2) (byte 3) (biginteger 4) 5N]))"
+           :jvm "\"[#=(java.lang.Integer. \\\"1\\\") #=(java.lang.Short. \\\"2\\\") #=(java.lang.Byte. \\\"3\\\") #=(java.math.BigInteger. \\\"4\\\") 5N]\""
+           :jolt "\"[1 2 3 4 5]\""}
+   :note "Read back, each is = to the value printed on both. A Float is its own value here and prints #=(java.lang.Float. \"2.5\") as on the JVM."}
+;; The same collapse at protocol dispatch: an int, a short and a small BigInt are
+  ;; the fixnum a long is, so a protocol extended to Long and to Number picks Long
+  ;; for all of them where the JVM's boxes fall through to Number.
+  {:category :integer-box-model
+   :behavior "a protocol extended to Number and Long, called on (int 1), (short 1), 1N and 1"
+   :jvm "[:number :number :number :long]"
+   :jolt "[:long :long :long :long]"
+   :check {:expr "(do (defprotocol KdIntBox (kd-int-box [x])) (extend-protocol KdIntBox Number (kd-int-box [_] :number) Long (kd-int-box [_] :long)) (mapv kd-int-box [(int 1) (short 1) 1N 1]))"
+           :jvm "[:number :number :number :long]"
+           :jolt "[:long :long :long :long]"}
+   :note "jolt-tweq4. Follows from (class (int 1)) being Long (the entry above): dispatch keys on the value's class, and the value is one fixnum. A double, a ratio and a bignum still reach Number."}
   ;; URL.equals and hashCode resolve the host (URLStreamHandler.hostsEqual and
   ;; getHostAddress), a DNS lookup inside = and hash. jolt compares and hashes a
   ;; URL by its spec, so two names for one host are unequal here and the hash
@@ -1000,6 +1095,20 @@
            :jvm "throws ArithmeticException"
            :jolt "-294967296"}
    :note "Same for a deftype or proxy hashCode. A body that returns a value in int range agrees on both."}
+  ;; aget/aset narrow the index with (int i). The JVM compiler picks
+  ;; RT.intCast(double) for a primitive double index, which refuses one past
+  ;; the int range with its own IllegalArgumentException, and RT.intCast(Object)
+  ;; for a boxed one, which goes through longCast to Math.toIntExact's
+  ;; ArithmeticException. jolt has no primitive/boxed distinction to choose on,
+  ;; so every double index takes the boxed rule, as (int x) splits for nothing.
+  {:category :integer-box-model
+   :behavior "(aget (double-array 3) 5e9)"
+   :jvm "throws IllegalArgumentException (Value out of range for int: 5.0E9, RT.intCast of a primitive double)"
+   :jolt "throws ArithmeticException (integer overflow), as (aget a (identity 5e9)) does on the JVM"
+   :check {:expr "(aget (double-array 3) 5e9)"
+           :jvm "throws IllegalArgumentException"
+           :jolt "throws ArithmeticException"}
+   :note "A long index, and a boxed double, agree on both: integer overflow past the int range."}
   ;; Thread.getStackTrace names the frames jolt can reconstruct: the live
   ;; continuation, plus callers TCO erased that the compile-time callsite tables
   ;; name (a static tail edge, or the one most recent tail site bridging a gap).
@@ -1014,6 +1123,20 @@
            :jvm "true"
            :jolt "false"}
    :note "Inherent to tail calls, not a missing shim. spec's instrument still throws the same conform ExceptionInfo with the same explain-data — only the ::caller annotation is absent. Surfaces in spec.alpha's clojure.test-clojure.instr suite."}
+  ;; The same model seen from a caught throwable: a fn reached as a VALUE whose
+  ;; body raises from a host call in tail position (a clojure.test :test thunk
+  ;; dividing by zero) left no frame of its own and no static callsite naming
+  ;; it, so the throwable's stack trace starts at its caller. clojure.test's
+  ;; :error report takes its file:line from that top frame, so it names the
+  ;; caller's line, where the JVM names the host frame above the fn.
+  {:category :host-model
+   :behavior "(.getStackTrace e) of a throw raised by a host call in tail position of a fn invoked through a fn value"
+   :jvm "the fn's own frame is there, under the host frames"
+   :jolt "the fn's frame is missing; the trace starts at its caller"
+   :check {:expr "(do (def dvq-t (fn [] (let [x 1] (/ x 0)))) (defn dvq-run [f] (f) 1) (try (dvq-run dvq-t) (catch ArithmeticException e (boolean (some (fn [t] (.contains (.getClassName t) \"dvq_t\")) (.getStackTrace e))))))"
+           :jvm "true"
+           :jolt "false"}
+   :note "Inherent to tail calls, as the entry above. A named defn reached by its var keeps its frame through the callsite tables; a throw the fn raises itself (throw, ex-info) keeps it too."}
   ;; Timestamp.equals refuses anything that is not a Timestamp, while
   ;; Date.equals takes any Date at the same instant, so on the JVM
   ;; (= date ts) is true and (= ts date) false, and a set or map holding both
@@ -1571,35 +1694,6 @@
            :jvm "[1 1]"
            :jolt "[2 1]"}
    :note "Declaring the var ^:dynamic, as portable code has to for the binding to mean anything, agrees on both: [2 1]."}
-  ;; A macro called with the wrong number of arguments. The reference's
-  ;; macroexpand1 catches the ArityException its expander raised and rethrows it
-  ;; BARE (to take the &form and &env params back out of the count), so it
-  ;; escapes the macro-phase wrapping there and Compiler.load files it under
-  ;; :execution like any runtime throw. jolt's expander raises the same
-  ;; ArityException (an IllegalArgumentException, with the count already right)
-  ;; and the analyzer files what a macro's run raised under the reference's
-  ;; macro-phase rule, where that class is :macro-syntax-check.
-  {:category :impl-detail
-   :behavior "(:clojure.error/phase (ex-data (try (load-string \"(m)\") (catch Throwable e e)))) for (defmacro m [x] x)"
-   :jvm ":execution — the ArityException is rethrown bare out of macroexpand1 and wrapped by load"
-   :jolt ":macro-syntax-check — an IllegalArgumentException out of the expander's run"
-   :check {:expr "(do (defmacro kd-arity-m [x] x) (:clojure.error/phase (ex-data (try (load-string \"(kd-arity-m)\") (catch Throwable e e)))))"
-           :jvm ":execution"
-           :jolt ":macro-syntax-check"}
-   :note "The class (ArityException) and message (\"Wrong number of args (0) passed to: user/kd-arity-m\") agree; only the phase differs. Every other throwable class out of a macro's run is filed as the reference files it (unit.edn error-phase)."}
-  ;; A var defined under load-string. The reference's Compiler.load over a
-  ;; reader with no path binds *file* to nil and *source-path* to
-  ;; "NO_SOURCE_FILE", and stamps the latter on the var; jolt binds the same two
-  ;; (a form read from a string is not the calling file) and stamps a def with
-  ;; the READER's position, which has no file to give, so the key is absent.
-  {:category :impl-detail
-   :behavior "(:file (meta (load-string \"(defn kd-ls-f [])\")))"
-   :jvm "\"NO_SOURCE_FILE\" — the sentinel *source-path* holds during the load"
-   :jolt "nil — no :file in the var's meta"
-   :check {:expr "(:file (meta (load-string \"(defn kd-ls-f [])\")))"
-           :jvm "\"NO_SOURCE_FILE\""
-           :jolt "nil"}
-   :note "*file* is nil and *source-path* \"NO_SOURCE_FILE\" inside the load-string on both. A var defined in a loaded FILE carries the file's path on both."}
   ;; BigDecimal's .equals and .hashCode. The JDK pair is scale-sensitive —
   ;; (.equals 1.5M 1.50M) is false and the two hash apart — while Clojure's own
   ;; = and hash on the same values compare by numeric value (BigDecimalOps.equiv
@@ -1795,9 +1889,45 @@
            :jvm "2"
            :jolt "1"}
    :note "Distinct objects of every other kind stay distinct keys."}
+  ;; A BigInt inside the long range is the same fixnum as a long here (the
+  ;; integer collapse above), so a let-bound 5N divides like a primitive long.
+  {:category :integer-box-model
+   :behavior "(let [a 5N b 0] (rem a b))"
+   :jvm "ArithmeticException \"Divide by zero\" (a BigInt takes the Object overload)"
+   :jolt "ArithmeticException \"/ by zero\""
+   :check {:expr "(try (let [a 5N b 0] (rem a b)) (catch ArithmeticException e (.getMessage e)))"
+           :jvm "\"Divide by zero\""
+           :jolt "\"/ by zero\""}
+   :note "Only the message; 5N past the long range is a bignum and takes the Object path as on the JVM."}
+  ;; Math's exact methods have int and long overloads. Clojure's reflector picks
+  ;; the int one for boxed Integers (and for Longs that fit), where the int
+  ;; overflows; an int here is the same fixnum as a long, so the long overload
+  ;; answers.
+  {:category :integer-box-model
+   :behavior "(Math/addExact (identity (int 2147483647)) (identity (int 1)))"
+   :jvm "ArithmeticException \"integer overflow\""
+   :jolt "2147483648"
+   :check {:expr "(try (Math/addExact (identity (int 2147483647)) (identity (int 1))) (catch ArithmeticException e (.getMessage e)))"
+           :jvm "\"integer overflow\""
+           :jolt "2147483648"}
+   :note "A call the JVM compiles against long arguments (literals, ^long locals) takes the long overload there too and agrees. Reflection over boxed Longs also picks the int overload on the JVM, truncating: (Math/addExact (identity Long/MAX_VALUE) (identity 1)) is 0 there, long overflow here."}
 ]
  :entries
- [;; Wherever a syntax-quote's CONSTRUCTION CODE becomes a value rather than
+ [;; sorted-map/sorted-set are a B+tree, not PersistentTreeMap's red-black tree,
+  ;; so a counting comparator sees a different number of calls than on the JVM:
+  ;; a single insert binary-searches each node, and a batch (constructor, into,
+  ;; multi-arg conj/assoc) checks its order once and sorts only when it must, so
+  ;; an ascending 1024-key into makes 1023 calls where the JVM makes 12301.
+  ;; Order, equality (comparator zero keeps the first key, the last value wins)
+  ;; and the (cmp later earlier) argument order are unchanged; only the count
+  ;; differs. The rows still pin jolt's count.
+  {:suite "sorted / one walk per insert",
+   :label "1024 ascending keys into a sorted-map-by: one comparison per key confirms the order",
+   :category :impl-detail}
+  {:suite "sorted / one walk per insert",
+   :label "replacing values in a sorted-map-by: an into sorts its batch",
+   :category :impl-detail}
+;; Wherever a syntax-quote's CONSTRUCTION CODE becomes a value rather than
   ;; being compiled — a nested backtick, a quoted one, a macro's argument —
   ;; jolt's lowering is visible. jolt emits __sqcat/__sq1 (which the analyzer
   ;; builds at compile time, the point of the design); the JVM's reader emits
@@ -1896,6 +2026,11 @@
    ;; (nth coll 0 nil), through the [[f :as xs]] destructure. The two agree on every
    ;; coll nth accepts, so this only widens what distinct accepts — to any seqable,
    ;; which is what its docstring already says. See the :permissive note below.
+   ;; print-dup writes a sorted set as #=(clojure.lang.PersistentTreeSet/create [1 2]),
+   ;; which the JVM cannot read back: its create takes an ISeq and the vector is
+   ;; a ClassCastException. jolt's create takes any seqable, so the value reads
+   ;; back as every other print-dup form does.
+   {:suite "io / *print-dup*", :label "a sorted set reads back", :category :permissive}
    {:suite "distinct / any seqable", :label "the head of a distinct set is an element, not nil", :category :permissive}
    {:suite "distinct / any seqable", :label "distinct over a set keeps every element", :category :permissive}
    {:suite "distinct / any seqable", :label "distinct over a map yields its entries", :category :permissive}
@@ -1975,20 +2110,9 @@
    {:suite "core / extenders", :label "extends? on inline defrecord impl", :category :host-model}
    {:suite "clojure.core / leaf batch (complement fnil munge etc.)", :label "supers empty set", :category :host-model}
 
-   ;; Array and JVM-shape stubs: jolt's arrays carry an element KIND but no
-   ;; per-element type check, so the aset-<prim> family writes into any array
-   ;; (the JVM refuses aset-int on an Object[]) and the coercion views are
-   ;; identity; there are no proxies and no Iterator/Enumeration either, so the
-   ;; proxy fns answer for the nil proxy the JVM dereferences. Whole suites of
-   ;; documented stubs.
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-boolean", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-byte", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-char", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-double", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-float", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-int", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-long", :category :host-model}
-   {:suite "untested / array stubs (vectors + host buffers)", :label "aset-short", :category :host-model}
+   ;; JVM-shape stubs: the typed coercion views are identity, and there are no
+   ;; proxies and no Iterator/Enumeration, so the proxy fns answer for the nil
+   ;; proxy the JVM dereferences. Whole suites of documented stubs.
    {:suite "untested / typed coercion views", :label "booleans", :category :host-model}
    {:suite "untested / typed coercion views", :label "bytes view", :category :host-model}
    {:suite "untested / typed coercion views", :label "chars first", :category :host-model}

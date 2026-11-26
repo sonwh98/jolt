@@ -4,7 +4,8 @@
   layouts, and the marshaling across the C boundary in both directions."
   (:require [clojure.string :as str]
             [jolt.backend-scheme.names :refer [chez-str-lit]]
-            [jolt.backend-scheme.session :refer [fresh-label target]]))
+            [jolt.backend-scheme.session :refer [fresh-label target]]
+            [jolt.backend-scheme.hoist :refer [hoist-load-time *load-time-pool*]]))
 
 ;; jolt.ffi/__cfn -> a Chez foreign-procedure (jolt-ffi). The C symbol + types are
 ;; compile-time literals from the analyzer, so this emits a real typed binding;
@@ -755,10 +756,163 @@
       register)))
 
 ;; The three jolt.ffi IR ops. EMIT lowers a callable's wrapped fn.
+;; --- native regions (stdlib/jolt/native) ------------------------------------
+;; jolt.native/__region -> a call to the region's C entry. The entry is resolved
+;; once, when the enclosing top-level form loads (hoist-load-time), which also
+;; registers the C source for jolt build: linked into this process in a jolt
+;; build binary, else compiled by the host's JIT (MIR) in the REPL, under jolt
+;; run, and in the build process itself. With neither (gambit, or no JIT) the
+;; call raises UnsupportedOperationException. Each argument goes through the
+;; host's check for its kind first. A ^doubles argument crosses as its flvector
+;; (scheme-object) and C reads it in place, locked (pinned) or with the thread
+;; kept active (^:hold-gc) so no collection moves it. C reports a failure in its
+;; per-thread status (code, two longs, a double, and an owned result's length),
+;; and the raise fn turns it into the JVM's exception.
+(def ^:private native-arg-chez
+  {"doubles" "scheme-object" "longs" "scheme-object" "bytes" "scheme-object" "long" "integer-64"
+   "double" "double" "bool" "boolean"})
+(def ^:private native-result-chez
+  {"doubles" "uptr" "longs" "uptr" "unit" "int" "long" "integer-64" "double" "double"
+   "bool" "boolean"})
+(def ^:private native-arg-check
+  {"doubles" "jolt-native-arg-doubles" "longs" "jolt-native-arg-longs" "bytes" "jolt-native-arg-bytes"
+   "long" "jolt-native-arg-long" "double" "jolt-native-arg-double" "bool" "jolt-native-arg-bool"})
+
+(defn- native-entry-expr
+  ([sym argtypes ret] (native-entry-expr sym argtypes ret false))
+  ([sym argtypes ret collect-safe?]
+   (let [a (fresh-label "jn_entry")]
+     (str "(let ((" a " (jolt-native-entry " (chez-str-lit sym) "))) "
+          "(and " a " (" (if collect-safe? "sa-foreign-procedure-blocking " "sa-foreign-procedure ")
+          a " (" (str/join " " argtypes) ") " ret ")))"))))
+
+;; A region is PINNED unless marked ^:hold-gc, like GHC's safe foreign calls: a
+;; pinned call locks each borrowed array and goes through __collect_safe, so other
+;; threads keep collecting while C runs and the locked arrays stay put; interrupts
+;; are off from the lock to the unlock so nothing can unwind between them (C
+;; never throws or calls back). A ^:hold-gc call is a plain foreign call: the
+;; thread stays active, which is what keeps the arrays from moving, and every
+;; other thread's collection waits for the region (Chez's stop-the-world needs
+;; each active thread). It costs ~2.5ns against ~45ns, for short regions.
+(defn- native-accessors
+  "The region's entry and its helpers, each resolved once at load by
+  hoist-load-time. :retry is an expression that resolves them all again and
+  answers the entry, or #f: a site that loaded before the library defining a
+  function its C calls (ffi/load-library, a :jolt/native) re-resolves on a
+  call that finds no entry, and the JIT compiles the region again once the
+  loaded-library set has changed. It only runs where the entry is #f, so a
+  site that resolved pays one test for it."
+  [node pinned?]
+  (let [sym (:sym node)
+        result (:result node)
+        pool? (some? *load-time-pool*)
+        retries (atom [])
+        entry-of (fn [suffix args ret]
+                   (let [e (native-entry-expr (str sym suffix) args ret)
+                         nm (hoist-load-time e)]
+                     (swap! retries conj [nm e])
+                     nm))
+        entry-e (native-entry-expr sym (mapv native-arg-chez (:kinds node))
+                                   (native-result-chez result) pinned?)
+        ;; first: it registers the source the JIT compiles the helpers' entries from
+        entry (hoist-load-time
+               (str "(begin (jolt-native-register! " (chez-str-lit sym) " " (chez-str-lit (:src node)) ") "
+                    entry-e ")"))
+        acc {:entry entry
+             :status (entry-of "_status" [] "integer-64")
+             :err-l (entry-of "_err_l" ["integer-64"] "integer-64")
+             :err-d (entry-of "_err_d" [] "double")
+             :copy-out (case result
+                         "doubles" (entry-of "_copy_out" ["scheme-object" "uptr" "integer-64"] "void")
+                         "longs" (entry-of "_copy_out" ["scheme-object" "uptr" "integer-64"] "integer-64")
+                         nil)
+             :elem (when (= result "longs") (entry-of "_elem" ["uptr" "integer-64"] "integer-64"))
+             :free (when (contains? #{"doubles" "longs"} result) (entry-of "_free" ["uptr"] "void"))}]
+    ;; with no load-time scope the entry expression runs at every call, which
+    ;; retries by itself
+    (assoc acc :retry
+           (if pool?
+             (let [e (fresh-label "jn_re")]
+               (str "(let ((" e " " entry-e ")) (when " e " (set! " entry " " e ") "
+                    (apply str (map (fn [[nm x]] (str "(set! " nm " " x ") ")) @retries))
+                    ") " e ")"))
+             "#f"))))
+
+(defn- native-result-value
+  "The jolt value of a successful call's result R, an owned array of length N."
+  [result r n {:keys [copy-out elem free]}]
+  (case result
+    "doubles" (str "(jolt-native-wrap-doubles " n " " r " " copy-out " " free ")")
+    "longs" (str "(jolt-native-wrap-longs " n " " r " " copy-out " " elem " " free ")")
+    "unit" "jolt-nil"
+    r))
+
+(defn- native-call-expr
+  "The call and the reads of its status, with interrupts off from before the
+  call until every status field is read: the status is per OS thread, so a
+  fiber switched in on this carrier could run another region and overwrite it.
+  Pinned, the borrowed BACKINGS are locked around the call too. An owned array
+  result is taken, copied into a jolt array and its buffer freed, before
+  interrupts are back on, so no asynchronous throw can land while only a C
+  pointer holds it; its wrap frees the buffer itself if it fails. Answers a
+  `(values v code info)`: v is the jolt result on success, info #(a b d) for
+  the raise."
+  [p c-args backings pinned? result acc]
+  (let [{:keys [status err-l err-d]} acc
+        array-result? (contains? #{"doubles" "longs"} result)
+        call (str "(" p (apply str (map #(str " " %) c-args)) ")")
+        each (fn [f] (apply str (map #(str "(" f " " % ") ") backings)))
+        r (fresh-label "jn_r") code (fresh-label "jn_code") info (fresh-label "jn_info")
+        v (fresh-label "jn_v") e (fresh-label "jn_e")]
+    (str "(begin (disable-interrupts) " (when pinned? (each "sa-lock-object"))
+         "(let* ((" r " " call ") (" code " (" status ")) "
+         "(" info " (if (fx= 0 " code ") "
+         (if array-result? (str "(" err-l " 2)") "#f") " "
+         "(vector (" err-l " 0) (" err-l " 1) (" err-d "))))) "
+         (when pinned? (each "sa-unlock-object"))
+         (if array-result?
+           (str "(let ((" v " (if (fx= 0 " code ") "
+                "(guard (" e " (#t (enable-interrupts) (raise " e "))) "
+                (native-result-value result r info acc) ") " r "))) "
+                "(enable-interrupts) (values " v " " code " " info "))))")
+           (str "(enable-interrupts) "
+                "(values " (native-result-value result r info acc) " " code " " info ")))")))))
+
+(defn- emit-native-region [emit node]
+  (let [kinds (:kinds node)
+        args (mapv emit (:args node))
+        sym (chez-str-lit (:sym node))]
+    (if (= :gambit (target))
+      ;; no ffi tier on gambit, so no C to run the region as
+      (str "(begin " (apply str (map #(str % " ") args))
+           "(throw-jvm 'UnsupportedOperationException "
+           (chez-str-lit (str "native region " (:sym node) ": native regions are unsupported on the gambit target"))
+           "))")
+      (let [pinned? (not= "hold-gc" (:mode node))
+            acc (native-accessors node pinned?)
+            p (fresh-label "jn_p")
+            r (fresh-label "jn_r")
+            code (fresh-label "jn_code")
+            info (fresh-label "jn_info")
+            ;; an array's check answers the backing it tested, which C reads
+            as (mapv (fn [_] (fresh-label "jn_a")) kinds)
+            backings (vec (keep (fn [[a k]] (when (contains? #{"doubles" "longs" "bytes"} k) a))
+                                (map vector as kinds)))]
+        (str "(let ((" p " " (:entry acc) ")"
+             (apply str (map (fn [a k v] (str " (" a " (" (native-arg-check k) " " v "))")) as kinds args))
+             ") (let ((" p " (or " p " " (:retry acc) "))) (if " p " "
+             "(let-values (((" r " " code " " info ") "
+             (native-call-expr p as backings (and pinned? (seq backings)) (:result node) acc)
+             ")) "
+             "(if (fx= 0 " code ") " r " "
+             "(jolt-invoke " (emit (:raise node)) " " code " (vector-ref " info " 0) (vector-ref " info " 1) (vector-ref " info " 2)))) "
+             "(jolt-native-unavailable " sym "))))")))))
+
 (defn emit-ffi-node [emit node]
   (case (:op node)
     :ffi-layout (emit-ffi-layout node)
     :ffi-fn (emit-ffi-fn node)
+    :native-region (emit-native-region emit node)
     :ffi-callable
     (if (and (= :gambit (target))
              (or (ffi-by-value? (:rettype node)) (some ffi-by-value? (:argtypes node))))

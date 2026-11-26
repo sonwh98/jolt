@@ -1,6 +1,6 @@
-;; Opt-in native source namespace loading for embedded applications. Unlike the
-;; Chez loader, this only interprets source. It has no cache, FASL, AOT, runtime
-;; dependency discovery, or native-library discovery.
+;; Native source namespace loading for embedded applications. An embedding may
+;; replay compiled code for a resolved source file through the optional loader
+;; procedure. The default always interprets the file.
 
 (define (gambit-namespace-path name)
   (let ((chars (string->list name)))
@@ -49,7 +49,12 @@
 ;; Each root is (directory suffix ...), in classpath order. BOOTED names denote
 ;; whole namespaces supplied by the embedding host and take precedence over
 ;; files. A mere intern or :as-alias never satisfies a source dependency.
-(define (gambit-install-source-loader! roots booted)
+(define (gambit-load-source-file name file)
+  (jolt-eval-string (call-with-input-file file gambit-read-all) file))
+
+(define (gambit-install-source-loader! roots booted
+          #!optional (load-file gambit-load-source-file)
+                     (compiled-file (lambda (name file) #f)))
   (define loaded (make-table test: string=?))
   (define (find-file name)
     (let ((base (gambit-namespace-path name)))
@@ -74,22 +79,24 @@
         ((failed)
          (throw-jvm 'IllegalStateException (string-append "Earlier namespace load failed: " name)))
         (else
-         (let ((file (find-file name)))
+         (let* ((file (find-file name))
+                (initialize (and file (compiled-file name file)))
+                (trace? (and (not initialize) (getenv "JOLT_TRACE_SOURCE" #f))))
            (unless file
              (throw-jvm 'FileNotFoundException (string-append "No source for namespace: " name)))
            (table-set! loaded name 'loading)
-           (when (getenv "JOLT_TRACE_SOURCE" #f)
+           (when trace?
              (fprintf (current-error-port) "[~as] load ~a\n" (inexact->exact (round (time->seconds (current-time)))) name)
              (force-output (current-error-port)))
            (guard (e (#t (table-set! loaded name 'failed) (raise e)))
              (jolt-with-ns-bound
                (lambda ()
                  (parameterize ((rdr-read-features (cons "gambit" (rdr-read-features))))
-                   (jolt-eval-string (call-with-input-file file gambit-read-all) file))
+                   (if initialize (initialize) (load-file name file)))
                  (unless (string=? name (chez-current-ns))
                    (throw-jvm 'IllegalStateException
                               (string-append file ": expected namespace " name)))))
-             (when (getenv "JOLT_TRACE_SOURCE" #f)
+             (when trace?
                (fprintf (current-error-port) "[~as] ready ~a\n" (inexact->exact (round (time->seconds (current-time)))) name)
                (force-output (current-error-port)))
              (table-set! loaded name 'ready)))))))

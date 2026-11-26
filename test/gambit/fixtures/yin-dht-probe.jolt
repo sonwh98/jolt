@@ -1,5 +1,5 @@
-;; Appended to a scratch copy of jolt.gambit.yin. Keep the real driver and
-;; launcher composition so each attempted operation gets its own Yin reply.
+;; Evaluated in jolt.gambit.yin by the diagnostic driver after startup.
+;; Each attempted operation gets its own reply from the real Yin session.
 (require '[dao.stream :as p1e-stream]
          '[dao.stream.ringbuffer :as p1e-ring]
          '[jolt.scheme :as p1e-scheme])

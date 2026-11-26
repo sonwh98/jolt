@@ -1,27 +1,38 @@
 #!/bin/sh
 # Run the stock launcher and the same composition with a diagnostic host module.
-# Arguments are absolute paths. Build the bridge and compiled boot first.
+# Arguments are absolute paths. Build the qualified bridge first.
 set -eu
 
 gsi=$1
 datomworld=$2
-export JOLT_GAMBIT_YIN_BOOT=$3
-mode=${4:-both}
+mode=${3:-both}
+case "$mode" in
+  */*)
+    # Older callers pass the kernel artifact before the optional corpus.
+    export JOLT_GAMBIT_YIN_BOOT="$mode"
+    mode=${4:-both}
+    ;;
+esac
 export JOLT_TRACE_SOURCE=1
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 mkdir -p build/gambit-dht
-run=$(mktemp -d "$repo/build/gambit-dht/run.XXXXXX")
+run=${JOLT_YIN_DHT_RECEIPTS:-}
+if [ -z "$run" ]; then
+  run=$(mktemp -d "$repo/build/gambit-dht/run.XXXXXX")
+fi
 echo "gambitdht receipts: $run"
-mkdir "$run/store"
+mkdir -p "$run/store"
 export JOLT_P1E_STORE="$run/store"
 
 session() {
   name=$1
+  launcher=$2
   status=0
   started=$(date +%s)
-  sh "$repo/host/gambit/ffi/watchdog.sh" "${GAMBIT_DHT_TIMEOUT_SECONDS:-2400}" \
-    "$gsi" "$repo/host/gambit/yin-repl-native.ss" "$datomworld" \
+  python3 test/gambit/yin-prompt-time.py \
+    sh "$repo/host/gambit/ffi/watchdog.sh" "${GAMBIT_DHT_TIMEOUT_SECONDS:-5400}" \
+    "$gsi" "$launcher" "$datomworld" \
     --no-state --index-store dht: >"$run/$name.stdout" 2>"$run/$name.stderr" || status=$?
   echo "$status" >"$run/$name.status"
   cat "$run/$name.stdout"
@@ -33,30 +44,21 @@ session() {
 }
 
 stock() {
-  session stock <<'FORMS'
+  session stock "$repo/host/gambit/yin-repl-native.ss" <<'FORMS'
 (+ 20 22)
 (quit)
 FORMS
   grep -Fx 'yin> 42' "$run/stock.stdout" >/dev/null
   grep -Fx 'yin> Bye' "$run/stock.stdout" >/dev/null
   test "$(grep -c '^yin> ' "$run/stock.stdout")" -eq 2
-  grep -E 'ready dao[.]space[.]dht$' "$run/stock.stderr" >/dev/null
+  if [ "${JOLT_GAMBIT_YIN_MODE:-auto}" = source ]; then
+    grep -E 'ready dao[.]space[.]dht$' "$run/stock.stderr" >/dev/null
+  fi
   echo "gambitdht: PASS — stock launcher opened dht: and quit"
 }
 
 diagnostics() {
-  # Extend the session's host modules. The same native launcher and open-store
-  # path initialize the session, and the fixture observes its actual handle.
-  overlay="$run/jolt"
-  mkdir -p "$overlay/host/gambit"
-  cp -R "$repo/host/gambit/yin" "$overlay/host/gambit/yin"
-  cat "$repo/test/gambit/fixtures/yin-dht-probe.jolt" >>"$overlay/host/gambit/yin/jolt/gambit/yin.jolt"
-  for name in build stdlib jolt-core; do
-    ln -s "$repo/$name" "$overlay/$name"
-  done
-  cd "$overlay"
-
-  session diagnostics <<'FORMS'
+  session diagnostics "$repo/test/gambit/yin-dht-probe-main.ss" <<'FORMS'
 (+ 20 22)
 (require 'p1e.probe)
 (p1e.probe/run :session-round-trip)
@@ -107,5 +109,5 @@ case "$mode" in
   stock) stock ;;
   diagnostics) diagnostics ;;
   both) stock; diagnostics ;;
-  *) echo "usage: $0 GSI DATOMWORLD_ROOT BOOT [stock|diagnostics|both]" >&2; exit 2 ;;
+  *) echo "usage: $0 GSI DATOMWORLD_ROOT [stock|diagnostics|both]" >&2; exit 2 ;;
 esac

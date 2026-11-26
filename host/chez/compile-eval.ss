@@ -35,6 +35,9 @@
 ;; emitted Scheme here so a cache miss records exactly what was eval'd (preserving
 ;; the interleaved analyze→eval semantics the cache later replays via `load`).
 (define jolt-aot-capture (make-thread-parameter #f))
+;; Optional replay bookkeeping for a native code capture. #f as the port
+;; signals the end of the form's evaluation, with capture disabled.
+(define jolt-aot-form-checkpoint (make-thread-parameter #f))
 ;; The file that capture port was opened FOR. load-jolt-file* tees only while
 ;; loading that file: a nested load must not append its forms to the requiring
 ;; namespace's artifact, because the artifact already re-runs the require that
@@ -151,12 +154,14 @@
 
 (define (jolt-enter-form! form)
   (jolt-site-reset!)   ; a top-level form is a root (rt.ss)
-  (let ((p (hc-form-position form)))
-    (when (pmap? p)
-      (jolt-current-source p)
-      (let ((line (jolt-get p hc-kw-line jolt-nil)) (col (jolt-get p hc-kw-column jolt-nil)))
-        (jolt-atom-val-set! compiler-line-cell (if (jolt-nil? line) 0 line))
-        (jolt-atom-val-set! compiler-column-cell (if (jolt-nil? col) 0 col))))))
+  (jolt-set-form-position! (hc-form-position form)))
+
+(define (jolt-set-form-position! p)
+  (when (pmap? p)
+    (jolt-current-source p)
+    (let ((line (jolt-get p hc-kw-line jolt-nil)) (col (jolt-get p hc-kw-column jolt-nil)))
+      (jolt-atom-val-set! compiler-line-cell (if (jolt-nil? line) 0 line))
+      (jolt-atom-val-set! compiler-column-cell (if (jolt-nil? col) 0 col)))))
 
 ;; Record that we are working on `path`, for a phase that walks a file WITHOUT
 ;; evaluating its forms — `jolt build`'s require scan, its whole-program inference
@@ -783,8 +788,12 @@
      ;; in it reports the right place.
      (jolt-enter-form! form)
      (let* ((scm (jolt-analyze-emit-form form ns))
-            (cap (jolt-aot-capture)))            ; tee for the AOT cache (loader.ss)
-       (when cap (put-string cap scm) (newline cap))
+            (cap (jolt-aot-capture))             ; tee for the AOT cache (loader.ss)
+            (checkpoint (and cap (jolt-aot-form-checkpoint))))
+       (when cap
+         (when checkpoint (checkpoint cap (hc-form-position form)))
+         (put-string cap scm)
+         (newline cap))
        ;; the run is a root as much as the compile was: expanding the form ran
        ;; macros, whose tail sites would otherwise be what a throw here reports.
        (jolt-site-reset!)
@@ -800,7 +809,10 @@
                         (jolt-eval-with-source scm form (or outer form) ns)
                         (eval (read (open-input-string scm)) (interaction-environment))))))
          (if cap
-             (parameterize ((jolt-aot-capture #f)) (run))
+             (parameterize ((jolt-aot-capture #f))
+               (let ((result (run)))
+                 (when checkpoint (checkpoint #f #f))
+                 result))
              (run)))))))
 
 ;; Source string -> value (read one form, compile + eval on Chez, in the
@@ -920,62 +932,53 @@
     (cond ((< i 0) path)
           ((char=? (string-ref path i) #\/) (substring path (+ i 1) (string-length path)))
           (else (loop (- i 1))))))
+(define (jolt-with-eval-source s path source-path thunk)
+  ;; Diagnostics use the exact text seen by the loader.
+  (when path (jolt-eval-source-text-set! path s))
+  (unless ls-file-cells
+    (let ((f (var-cell-lookup "clojure.core" "*file*"))
+          (sp (var-cell-lookup "clojure.core" "*source-path*")))
+      (when (and f sp)
+        (set! ls-file-cells (list (cons f jolt-nil) (cons sp "NO_SOURCE_FILE"))))))
+  ;; The load frame scopes *file*, *source-path*, and *unchecked-math* across
+  ;; both interpretation and native replay, including unwind or a fiber park.
+  (jolt-with-ns-load-vars
+    (lambda ()
+      (dyn-with-frame (cond ((not ls-file-cells) '())
+                            (path (list (cons (car (car ls-file-cells)) path)
+                                        (cons (car (cadr ls-file-cells)) source-path)))
+                            (else ls-file-cells))
+        (lambda ()
+          (parameterize ((rdr-source-file path) (jolt-load-wrap #f))
+            (thunk)))))))
+
 (define (jolt-eval-string s . source)
-  (let ((end (string-length s))
-        (path (and (pair? source) (string? (car source)) (car source)))
-        (named? (and (pair? source) (pair? (cdr source))))
-        ;; a load-string's Compiler.load wrap, for this load's own forms only
-        (w (jolt-load-wrap))
-        ;; a diagnostic's snippet in it reads this text, not the file on disk
-        (noted (when (and (pair? source) (string? (car source)))
-             (jolt-eval-source-text-set! (car source) s)))
-        (drl (guard (_ (#t #f)) data-readers-active)))
-    ;; Resolved once the vars exist (a bootstrap context may run this first),
-    ;; the way ldr-with-file-vars resolves the loader's; until then no frame.
-    (unless ls-file-cells
-      (let ((f (var-cell-lookup "clojure.core" "*file*"))
-            (sp (var-cell-lookup "clojure.core" "*source-path*")))
-        (when (and f sp)
-          (set! ls-file-cells (list (cons f jolt-nil) (cons sp "NO_SOURCE_FILE"))))))
-    ;; The same frame ldr-with-file-vars gives a file and the loader gives a
-    ;; compiled namespace, from the one definition of which vars that is — this
-    ;; site listed two of the three by hand, so a (set! *unchecked-math* true)
-    ;; inside a load-string escaped into the caller and changed what its later
-    ;; arithmetic compiled to. It scopes through jolt-with-ns-load-vars rather
-    ;; than a hand-rolled (dynamic-wind push! body pop!): a throw mid-load must
-    ;; still unwind the frame, and so must a PARK — dyn-binding.ss documents why
-    ;; the winder shape pushes a second frame when a fiber resumes inside it.
-    (jolt-with-ns-load-vars
+  (let* ((end (string-length s))
+         (path (and (pair? source) (string? (car source)) (car source)))
+         (source-path (and path (if (pair? (cdr source)) (cadr source) (ls-file-name path))))
+         (w (jolt-load-wrap))
+         (drl (guard (_ (#t #f)) data-readers-active)))
+    (jolt-with-eval-source s path source-path
       (lambda ()
-        (dyn-with-frame (cond ((not ls-file-cells) '())
-                              (path (list (cons (car (car ls-file-cells)) path)
-                                          (cons (car (cadr ls-file-cells))
-                                                (if named? (cadr source) (ls-file-name path)))))
-                              (else ls-file-cells))
-          (lambda ()
-            (parameterize ((rdr-source-file path) (jolt-load-wrap #f))
-              ;; rdr-read-top, not rdr-read-form: a stray close delimiter is
-              ;; "Unmatched delimiter", raised when the read reaches it, after the
-              ;; forms before it have run (Compiler.load). rdr-read-form hands it
-              ;; back unconsumed, and the loop took that for the end of input.
-              ;; pos is the reader's (line . col) at i, kept only for a wrap.
-              (let loop ((i 0) (result jolt-nil) (pos '(1 . 1)))
-                (if (>= i end)
-                    result
-                    (let* ((k (if w (ce-skip-ws s i end) i))
-                           (pos (if w (ce-advance s i k (car pos) (cdr pos)) pos)))
-                      (let-values (((form j) (rdr-read-top s k end)))
-                        (if (> j k)
-                            (loop j
-                                  (if (rdr-eof? form)
-                                      result
-                                      ;; data readers run at the read, outside the wrap
-                                      (let ((form (if drl (ldr-apply-readers form) form)))
-                                        (jolt-load-run-form w pos
-                                          (lambda ()
-                                            (jolt-compile-eval-form form (chez-current-ns))))))
-                                  (if w (ce-advance s k j (car pos) (cdr pos)) pos))
-                            result))))))))))))
+        ;; rdr-read-top raises a stray close delimiter at the point the read
+        ;; reaches it, after the preceding forms have run (Compiler.load).
+        (let loop ((i 0) (result jolt-nil) (pos '(1 . 1)))
+          (if (>= i end)
+              result
+              (let* ((k (if w (ce-skip-ws s i end) i))
+                     (pos (if w (ce-advance s i k (car pos) (cdr pos)) pos)))
+                (let-values (((form j) (rdr-read-top s k end)))
+                  (if (> j k)
+                      (loop j
+                            (if (rdr-eof? form)
+                                result
+                                ;; data readers run at the read, outside the wrap
+                                (let ((form (if drl (ldr-apply-readers form) form)))
+                                  (jolt-load-run-form w pos
+                                    (lambda ()
+                                      (jolt-compile-eval-form form (chez-current-ns))))))
+                            (if w (ce-advance s k j (car pos) (cdr pos)) pos))
+                      result)))))))))
 
 ;; eval / load-string are FUNCTIONS on the spine (the compiler image is resident
 ;; at runtime). eval takes an already-read FORM (e.g. from quote / list); it and

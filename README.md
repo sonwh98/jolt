@@ -135,6 +135,34 @@ on the docs site.
 - Projects can define babashka-style tasks in `bb.edn` or `deps.edn` can be run with
   `jolt task-name`.
 
+## Yin on Gambit
+
+From the Jolt root, build the qualified bridge for the Gambit installation,
+then run the native launcher against a Datomworld checkout.
+
+```sh
+make gambitffi-bridge GAMBIT_PREFIX=/path/to/gambit
+/path/to/gambit/bin/gsi host/gambit/yin-repl-native.ss /path/to/datomworld --no-state
+```
+
+The launcher builds and verifies the startup code under `build/gambit-yin`.
+The first build captures the ordinary namespace loads and compiles their Scheme
+with `gsc`. Later launches reuse the digest-matched objects. The loader runs
+each initializer in its usual dependency order. Yin opens its store, creates
+its session and handles terminal input at runtime. Namespaces first required
+during the session load from source.
+
+Set `JOLT_GAMBIT_YIN_MODE=source` to interpret the namespace closure with the
+same kernel. Add `JOLT_TRACE_SOURCE=1` for the timestamped load and ready
+lines. The default `auto` mode falls back to source when startup code cannot be
+built or used. `JOLT_GAMBIT_YIN_MODE=compiled` makes such a failure fatal.
+
+`make gambityinrepl` and `make gambitdht` exercise the compiled launcher.
+`make gambityinequivalence` runs the same corpora through both startup paths,
+diffs the reply bytes and rejects a compiled cache entry that disagrees with
+the source reference. Set `DATOMWORLD_ROOT` for a checkout other than
+`../datomworld`.
+
 ## Documentation
 
 Full documentation is at [jolt-lang.github.io](https://jolt-lang.github.io):

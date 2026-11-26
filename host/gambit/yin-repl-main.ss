@@ -3,3 +3,4 @@
 ;; gsi host/gambit/yin-repl-main.ss /path/to/datomworld [Yin arguments...].
 (##include "boot.ss")
 (##include "yin-repl-driver.ss")
+(gambit-yin-run gambit-load-source-file gambit-yin-start)

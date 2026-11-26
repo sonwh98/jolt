@@ -126,7 +126,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 
 # Only mark PHONY targets for names that have file system conflicts:
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
-        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitdht gambitseed gambitweb gambitprofile \
+        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitdht gambityinequivalence gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -1986,26 +1986,22 @@ DATOMWORLD_ROOT ?= ../datomworld
 gambitdaobytes:
 	sh host/gambit/ffi/watchdog.sh 240 "$(GAMBIT_GSI)" host/gambit/source-loader-test.ss "$(abspath $(DATOMWORLD_ROOT))"
 
-# The interpreted bootstrap is available through yin-repl-main.ss. Compiling
-# the same boot makes the full app closure fit the acceptance watchdog.
+# The gates require the native startup. The equivalence gate runs both modes.
 GAMBIT_YIN_BOOT ?=
-gambityinrepl gambitdht: gambitffi-bridge
+GAMBIT_YIN_CACHE ?= $(abspath build/gambit-yin)
+gambityinrepl gambitdht gambityinequivalence: export JOLT_GAMBIT_YIN_CACHE = $(GAMBIT_YIN_CACHE)
+gambityinrepl gambitdht gambityinequivalence: export JOLT_GAMBIT_YIN_BOOT = $(GAMBIT_YIN_BOOT)
+gambityinrepl gambitdht gambityinequivalence: gambitffi-bridge
 	@yin_root="$(abspath $(DATOMWORLD_ROOT))"; \
 	if [ ! -f "$$yin_root/src/cljc/yin/repl/main.cljc" ]; then \
 	  echo "$@: no Yin source entry under $$yin_root. Set DATOMWORLD_ROOT to a Datomworld checkout." >&2; \
 	  exit 2; \
 	fi; \
-	boot="$(GAMBIT_YIN_BOOT)"; \
-	if [ -z "$$boot" ]; then \
-	  boot=$$(sh host/gambit/ffi/watchdog.sh 2400 python3 host/gambit/build-yin-boot.py \
-	    "$(GAMBIT_GSC)" "$(abspath build/gambit-yin)") || exit $$?; \
-	fi; \
-	if [ "$@" = gambitdht ]; then \
-	  sh test/gambit/yin-dht-probe.sh "$(GAMBIT_GSI)" "$$yin_root" "$$boot"; \
-	else \
-	  JOLT_GAMBIT_YIN_BOOT="$$boot" sh test/gambit/yin-repl-session.sh \
-	    "$(GAMBIT_GSI)" "$$yin_root" host/gambit/yin-repl-native.ss; \
-	fi
+	case "$@" in \
+	  gambitdht) JOLT_GAMBIT_YIN_MODE=compiled sh test/gambit/yin-dht-probe.sh "$(GAMBIT_GSI)" "$$yin_root" ;; \
+	  gambityinrepl) JOLT_GAMBIT_YIN_MODE=compiled sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$$yin_root" ;; \
+	  gambityinequivalence) python3 test/gambit/yin-equivalence.py "$(GAMBIT_GSI)" "$$yin_root" ;; \
+	esac
 
 # Every Scheme global the full-profile boot references is defined — Gambit's
 # own linker report over the compiled boot, minus what the record translator

@@ -1,6 +1,4 @@
 #!/usr/bin/env gsi-script
-;; The gate builds the kernel with gsc. App namespaces still load from source.
-;; The Gambit boot omits Chez's external data-reader loader.
-(define data-readers-active #f)
-(load (getenv "JOLT_GAMBIT_YIN_BOOT"))
-(##include "yin-repl-driver.ss")
+;; Native Yin launcher with a verified compiled startup and a source fallback.
+(##include "yin-repl-boot.ss")
+(gambit-yin-launch gambit-yin-start)

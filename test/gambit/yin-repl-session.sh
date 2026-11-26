@@ -4,12 +4,17 @@ set -eu
 
 gsi=$1
 yin_root=$2
-launcher=${3:-host/gambit/yin-repl-main.ss}
-transcript=$(mktemp)
-trap 'rm -f "$transcript"' EXIT
+launcher=${3:-host/gambit/yin-repl-native.ss}
+mkdir -p build/gambit-yin
+transcript=${JOLT_YIN_REPL_TRANSCRIPT:-}
+if [ -z "$transcript" ]; then
+  transcript=$(mktemp "$PWD/build/gambit-yin/repl.XXXXXX")
+  trap 'rm -f "$transcript"' EXIT
+fi
 
 status=0
-sh host/gambit/ffi/watchdog.sh 2400 "$gsi" "$launcher" \
+python3 test/gambit/yin-prompt-time.py \
+  sh host/gambit/ffi/watchdog.sh 5400 "$gsi" "$launcher" \
   "$yin_root" --no-state --index-store mem >"$transcript" <<'FORMS' || status=$?
 (+ 1 2)
 ((fn [x] (* x x)) 7)

@@ -126,7 +126,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
 
 # Only mark PHONY targets for names that have file system conflicts:
 .PHONY: nsaudit kondocheck build install test ci bionic-ci ci-shard ci-shard-list gate-run-test gate-run-ci gate-run-bionic-ci gate-run-ci-shard gate-status hooks attributioncheck noticecheck monitormodel \
-        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitdht gambitseed gambitweb gambitprofile \
+        gambitcheck gambitkernel gambiteval gambitsourceload gambitdaobytes gambityinrepl gambitdht gambitdht-durable gambitseed gambitweb gambitprofile \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
@@ -1989,7 +1989,7 @@ gambitdaobytes:
 # The interpreted bootstrap is available through yin-repl-main.ss. Compiling
 # the same boot makes the full app closure fit the acceptance watchdog.
 GAMBIT_YIN_BOOT ?=
-gambityinrepl gambitdht: gambitffi-bridge
+gambityinrepl gambitdht gambitdht-durable: gambitffi-bridge
 	@yin_root="$(abspath $(DATOMWORLD_ROOT))"; \
 	if [ ! -f "$$yin_root/src/cljc/yin/repl/main.cljc" ]; then \
 	  echo "$@: no Yin source entry under $$yin_root. Set DATOMWORLD_ROOT to a Datomworld checkout." >&2; \
@@ -2002,6 +2002,8 @@ gambityinrepl gambitdht: gambitffi-bridge
 	fi; \
 	if [ "$@" = gambitdht ]; then \
 	  sh test/gambit/yin-dht-probe.sh "$(GAMBIT_GSI)" "$$yin_root" "$$boot"; \
+	elif [ "$@" = gambitdht-durable ]; then \
+	  python3 test/gambit/yin-dht-durable.py "$(GAMBIT_GSI)" "$$yin_root" "$$boot"; \
 	else \
 	  JOLT_GAMBIT_YIN_BOOT="$$boot" sh test/gambit/yin-repl-session.sh \
 	    "$(GAMBIT_GSI)" "$$yin_root" host/gambit/yin-repl-native.ss; \

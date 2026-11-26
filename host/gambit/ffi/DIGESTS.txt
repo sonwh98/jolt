@@ -1,4 +1,4 @@
-959c06c2b96833dbb31a0290acb56ce93b7d44c926bfd4de562fe0fa39d8dc36  host/gambit/ffi/joltffi-bridge.scm
+751dd661157743701ab8c6a666a171725e5eba01935393bbb24289d5bf3ad9eb  host/gambit/ffi/joltffi-bridge.scm
 5b32a1831f98b51d97ff27eaf6ce77d90780480dc2fc6b44a4efeb6b03dae976  host/gambit/ffi/generated-shims.scm
 eb94a858c05ea29cd058da27b0e86d168562cf1791441f1b3475b106f257bc64  host/gambit/ffi/shapes.json
 34f53a1e8c3833e2b4b4b42ca82bfa58646f8f6eb160f1b32692a416a24bb036  host/gambit/ffi/generate-shims.py

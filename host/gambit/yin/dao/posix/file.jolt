@@ -1,25 +1,71 @@
 (ns dao.posix.file
-  "Deferred capability refusal for durable storage in the local Gambit
-   profile. The in-memory store shares callers with the durable store."
+  "Gambit file seams for the shared Jing log and Yin metadata."
   (:require [jolt.scheme :as scheme]))
 
-(def ^:private refuse-blocking (scheme/proc "joltffi-public-blocking-raise"))
+(def ^:private open-log (scheme/proc "gambit-yin-open-log"))
+(def ^:private log-length (scheme/proc "gambit-yin-log-length"))
+(def ^:private read-int (scheme/proc "gambit-yin-log-read-s32be"))
+(def ^:private read-log (scheme/proc "gambit-yin-log-read"))
+(def ^:private truncate-log (scheme/proc "gambit-yin-log-truncate"))
+(def ^:private append-log (scheme/proc "gambit-yin-log-append"))
+(def ^:private sync-log (scheme/proc "gambit-yin-log-sync"))
+(def ^:private close-log (scheme/proc "gambit-yin-log-close"))
+(def ^:private lock-file (scheme/proc "gambit-yin-lock-file"))
+(def ^:private unlock-file (scheme/proc "gambit-yin-unlock-file"))
+(def ^:private read-file (scheme/proc "gambit-yin-read-file"))
+(def ^:private write-new (scheme/proc "gambit-yin-write-new"))
 
-(defn open [_path] (refuse-blocking))
-(defn length [_file] (refuse-blocking))
-(defn read-s32be [_file _offset] (refuse-blocking))
-(defn read-bytes [_file _offset _size] (refuse-blocking))
-(defn truncate! [_file _size] (refuse-blocking))
-(defn append-frame! [_file _frame] (refuse-blocking))
-(defn sync! [_file] (refuse-blocking))
-(defn close! [_file] (refuse-blocking))
-(defn classify [_path _follow?] (refuse-blocking))
-(defn fidentity [_fd] (refuse-blocking))
-(defn lock-file! [_path] (refuse-blocking))
-(defn realpath [_path] (refuse-blocking))
-(defn read-bounded [_path _limit] (refuse-blocking))
-(defn read-all [_path] (refuse-blocking))
-(defn write-new-synced! [_path _bytes] (refuse-blocking))
-(defn write-new-private! [_path _bytes] (refuse-blocking))
-(defn rename! [_from _to] (refuse-blocking))
-(defn sync-dir! [_path] (refuse-blocking))
+(defn open [path]
+  {:log (open-log path) :path path :closed (atom false) :failed (atom nil)})
+
+(defn length [file] (log-length (:log file)))
+(defn read-s32be [file offset] (read-int (:log file) offset))
+(defn read-bytes [file offset size] (read-log (:log file) offset size))
+(defn truncate! [file size] (truncate-log (:log file) size))
+
+(defn- write-log! [file op f]
+  (when-some [failed @(:failed file)]
+    (throw (ex-info (str "Content log refuses further writes after " failed
+                         " failed; close and reopen the file to recover")
+                    {:path (:path file) :operation failed
+                     :dao.posix.file/fail-closed true})))
+  (try (f (:log file))
+       (catch Throwable e
+         (compare-and-set! (:failed file) nil op)
+         (throw e))))
+
+(defn append-frame! [file frame]
+  (write-log! file :append #(append-log % frame)))
+
+(defn sync! [file]
+  (write-log! file :fsync sync-log))
+
+(defn lock-file! [path]
+  (let [fd (lock-file path)]
+    (if (= :held fd)
+      :held
+      {:fd fd :path path :closed (atom false)})))
+
+(defn close! [file]
+  (when (compare-and-set! (:closed file) false true)
+    (if-some [fd (:fd file)]
+      (unlock-file fd)
+      (close-log (:log file)))))
+
+(def classify (scheme/proc "gambit-yin-classify"))
+(def realpath (scheme/proc "gambit-yin-realpath"))
+(def rename! (scheme/proc "gambit-yin-rename-file"))
+(def sync-dir! (scheme/proc "gambit-yin-sync-dir"))
+
+(defn read-bounded [path limit]
+  (when-not (and (integer? limit) (<= 0 limit 2147483646))
+    (throw (ex-info (str "read-bounded limit out of range: " limit)
+                    {:path path :limit limit})))
+  (read-file path limit))
+(defn read-all [path] (read-file path nil))
+(defn write-new-synced! [path bytes] (write-new path bytes false))
+(defn write-new-private! [path bytes] (write-new path bytes true))
+
+(defn fidentity [fd]
+  (throw (ex-info "Gambit Yin does not expose raw file descriptor identity"
+                  {:fd fd})))

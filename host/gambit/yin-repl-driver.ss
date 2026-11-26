@@ -3,6 +3,7 @@
 (##include "source-loader.ss")
 (##include "unbound-vars-lib.ss")
 (##include "yin/blake3.ss")
+(##include "yin/file.ss")
 
 (define (gambit-yin-random-bytes size)
   (let* ((n (jnum->exact size))

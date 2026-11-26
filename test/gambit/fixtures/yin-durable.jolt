@@ -1,0 +1,28 @@
+
+;; Appended by the process gate to observe the actual selected store.
+(def ^:private durable-test-opened (atom nil))
+(def ^:private durable-test-value {:p2 "durable-gambit" :count 7331})
+
+(defn- durable-test-run [operation]
+  (let [opened @durable-test-opened
+        handle (:index-store opened)
+        address (jing/segment-key durable-test-value)]
+    (case operation
+      :put (when (= :missing (jing/get handle address :missing))
+             (jing/materialize! handle durable-test-value))
+      :get (jing/get handle address :missing)
+      :recovered (get-in opened [:recovery :manifest]))))
+
+(defn- activate-durable-test [registry]
+  (module/register-host-module
+    registry 'p2.probe
+    {'run durable-test-run}
+    {'run (vm/primitive-profile 'run :pure [1] #{} :none)}))
+
+(defn- durable-test-open [spec opts]
+  (let [opened (open-store spec opts)]
+    (reset! durable-test-opened opened)
+    (assoc-in opened [:engine-inputs :host-modules 'p2.probe] activate-durable-test)))
+
+(defn -main [& args]
+  (main/main! args (assoc composition :open durable-test-open)))

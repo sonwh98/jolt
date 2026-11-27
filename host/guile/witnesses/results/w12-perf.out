@@ -1,0 +1,13 @@
+### cmd: ./watchdog.sh 120 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w12-perf.scm
+=== W12 performance witness (Guile 3.0.11, aarch64-apple-darwin25.4.0) ===
+B1 child boot times (ms): (194.275 193.26799999999997 193.40400000000005) median=193.40400000000005
+CHECK-OK   B1 boot measurements completed (nonzero medians)
+E1 20000 interpreter evals of (+ 1 2): 74.27999999999997 ms (3.7139999999999986 us/eval)
+CHECK-OK   E1 interpreted eval measured
+E2 1M-iteration tail loop: 111.88900000000001 ms
+CHECK-OK   E2 loop baseline measured
+C1 1M-iteration closure: interpreted-eval'd 116.58699999999999 ms vs compiled 1.5370000000000346 ms (speedup 75.85361093038215 x)
+CHECK-OK   C1 compiled-vs-interpreted measured (both nonzero)
+PERF-SUMMARY: boot-median-ms=193.40400000000005 eval-us=3.7139999999999986 loop-ms=111.88900000000001 compiled-ms=1.5370000000000346
+W12-VERDICT: PASS (measurements recorded)
+### exit=0

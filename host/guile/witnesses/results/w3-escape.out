@@ -1,0 +1,31 @@
+### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w3-escape.scm
+=== W3 one-shot escape continuation witness ===
+CHECK-OK   E1 normal return passes value through
+CHECK-OK   E2 escape returns from the wrapper call
+E3 escape value=first second-use-during-unwind=#f
+CHECK-OK   E3 second invocation DURING the escape's unwind RAISES (one-shot enforced in-flight)
+CHECK-OK   E4a wrapper returns normally after capturing k
+E4b post-return invocation => #f
+CHECK-OK   E4b post-return invocation RAISES (frame gone)
+CHECK-OK   E5 escape value delivered from inside nested dynamic-wind
+CHECK-OK   E5b finally bodies ran on the way out, inner first
+E6 cross-thread invocation => #f
+CHECK-OK   E6 cross-thread invocation RAISES (ownership policy)
+CHECK-OK   P1 prompt-based normal return
+CHECK-OK   P2 prompt-based escape
+P3 sequential (k 1)(k 2) => 1 (second call unreachable — the first escape exits)
+CHECK-OK   P3a prompt-based escape delivers the first value
+CHECK-OK   P3b prompt wrapper returns normally after capture
+P3c prompt-based post-return invocation => #f
+CHECK-OK   P3c prompt-based post-return invocation RAISES (one-shot)
+CHECK-OK   P4 prompt-based escape unwinds dynamic-wind
+CHECK-OK   P4b finally ran
+NC1 raw call/cc observations: (one two)
+CHECK-OK   NC1 control: RAW call/cc re-enters the finished frame (two passes logged: one two) — the spent flag is load-bearing
+NC2 broken-wrapper observations: (one two)
+CHECK-OK   NC2 control: wrapper WITHOUT the spent flag re-enters too (two passes logged) — the spent flag, not the wrapper shape, is the fix
+NC3 real-wrapper observations: (one #f)
+CHECK-OK   NC3 control: the REAL wrapper RAISES where NC1/NC2 re-enter (second pass recorded as #f, not 'two)
+fibers-tier: prompt-based escape prototype works; see AUDIT.md area 3 for the feasibility ruling
+W3-VERDICT: PASS (one-shot enforced both prototypes)
+### exit=0

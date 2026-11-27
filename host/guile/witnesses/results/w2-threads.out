@@ -1,0 +1,32 @@
+### cmd: ./watchdog.sh 120 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w2-threads.scm
+=== W2 threads contract witness ===
+T1 parent *param* after fork returned: default
+CHECK-OK   T1c parent's own binding restored to default after parameterize
+T1 child observations: ((at-fork inner fouter tdefault) (after-parent-rebind inner))
+CHECK-OK   T1a child inherits the CREATING thread's CURRENT parameter value (nested parameterize: 'inner)
+CHECK-OK   T1b child inherits the creator's current FLUID value ('fouter)
+CHECK-OK   T2 thread-local fluid NOT propagated (default 'tdefault)
+N1 child saw before under post-fork rebinding to 'rebound-after-fork
+CHECK-OK   N1 control: child reads the fork-time value, not a later parent one
+T3a standard mutex owner re-acquire => #f
+CHECK-OK   T3a standard make-mutex: owner re-acquire RAISES (non-recursive)
+T3b unowned-kind spelling accepted: allow-external-unlock
+CHECK-OK   T3b0 one of the documented unowned spellings is accepted
+T3b unowned mutex owner re-acquire with 1s timeout => #f
+CHECK-OK   T3b unowned ('SRFI-18') mutex: owner re-acquire BLOCKS then times out (#f) — the pinned contract semantic
+CHECK-OK   T3c recursive mutex counts twice (needs two unlocks)
+T4 ping-pong rounds completed: 200
+CHECK-OK   T4a signal-based ping-pong completes 200 rounds with no lost wakeup
+CHECK-OK   T4b broadcast wakes all 4 parked waiters
+N2 un-signaled wait with 1s timeout => #f
+CHECK-OK   N2 control: an un-signaled condition wait times out (#f) — a lost wakeup would hang and the watchdog would record it
+T5 ids recorded from outside: (1 2 3 4 5); children's own: (1 2 3 4 5)
+CHECK-OK   T5a numeric ids recorded per thread from OUTSIDE the thread (sa-thread-id-of shape) while live
+CHECK-OK   N3 control: all ids are distinct numbers
+CHECK-OK   T5b exited threads answer #f (thread-exited? gates the mapping)
+CHECK-OK   T6 acquire/release mapped onto atomic-box accesses cross threads (monotonic, no lost increments)
+CHECK-OK   T7a (sleep 1) really sleeps ~1s
+CHECK-OK   T7b srfi-19 current-time zero-arg answers a time-utc object
+CHECK-OK   T7c srfi-18 current-time/thread-sleep! take TIME OBJECTS (the contract's R6RS sleep shape) and really sleep
+W2-VERDICT: PASS (threads rows + controls)
+### exit=0

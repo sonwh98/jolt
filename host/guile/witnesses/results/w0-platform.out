@@ -1,0 +1,25 @@
+### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w0-platform.scm
+=== W0 platform witness ===
+version=3.0.11
+effective-version=3.0
+host-type=aarch64-apple-darwin25.4.0
+native-endianness=little
+uname: sys="Darwin" node="darkstar" release="25.6.0" machine="arm64"
+threads-feature=#t
+CHECK-OK   threads feature provided: yes
+CHECK-OK   endian is a symbol: yes
+CHECK-OK   version string nonempty: yes
+srfi-18-resolvable=#t
+srfi-18 exports present: (current-thread make-thread thread-start! thread-join! thread-sleep! make-mutex mutex-lock! mutex-unlock! make-condition-variable condition-variable-signal! condition-variable-broadcast! current-time seconds->time time->seconds)
+CHECK-OK   srfi-18 module resolves with the thread/mutex/condvar names: yes
+ice-9-threads missing: ()
+CHECK-OK   ice-9 threads exports the contract's mapping names: yes
+guile-make-mutex-procedure-ok=#t
+CHECK-OK   ice-9 make-mutex constructs a primitive mutex: yes
+gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
+CHECK-OK   gc-stats is a nonempty alist: yes
+gc-stats heap-size = 2097152
+CHECK-OK   (gc) ran between two gc-stats reads (engine observable): yes
+host-tag-candidate="guile-3.0.11-aarch64-apple-darwin25.4.0"
+W0-VERDICT: PASS (platform recorded, all checks)
+### exit=0

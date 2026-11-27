@@ -1,0 +1,16 @@
+### cmd: ./watchdog.sh 90 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w9-net.scm
+=== W9 sockets / non-blocking / poller witness ===
+S1 bound to #(2 2130706433 52074)
+S1 received 1 byte(s): 90
+CHECK-OK   S1 UDP datagram round-trip on loopback
+CHECK-OK   S2a F_SETFL O_NONBLOCK applied (fcntl => 0)
+S2b recvfrom on empty socket => n=-1 errno=35
+CHECK-OK   S2b non-blocking recvfrom returns -1 with EAGAIN/EWOULDBLOCK captured at the boundary (darwin 35 / linux 11)
+CHECK-OK   NC1 control: select(0) says NOT ready before any datagram (strict single shot)
+CHECK-OK   S3 select(0) says ready within a poll window after the datagram (causality)
+CHECK-OK   S3b drain the ready datagram
+S4 read returned #vu8(81) after 6 waiter invocation(s)
+CHECK-OK   S4 the read that would block parks through current-read-waiter and completes when the datagram lands (the fibers scheduler hook)
+CHECK-OK   NC2 control: the waiter actually fired (> 0)
+W9-VERDICT: PASS (DHT/WebSocket parity prerequisites)
+### exit=0

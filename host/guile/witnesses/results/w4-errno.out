@@ -1,0 +1,21 @@
+### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w4-errno.scm
+=== W4 FFI errno boundary witness ===
+host-type=aarch64-apple-darwin25.4.0
+CHECK-OK   errno TLS accessor resolved (__error / __errno_location)
+E1 raw-slot probes: set-readback=0 read-after-plain-fail=0
+CHECK-OK   E1 raw errno slot is NOT a valid access path on this build (Guile manages errno across foreign calls — adapter must capture at the boundary)
+E2 concurrent captures: 500 rounds x2 (read->EBADF vs access->ENOENT), bad=0
+CHECK-OK   E2 both threads capture their OWN errno at the boundary, 1000 interleaved rounds (per-thread TLS errno proven)
+CHECK-OK   E3a boundary capture reports EBADF(9) for read(-1)
+CHECK-OK   E3b the captured pair survives a post-capture clobber (still 9)
+NC1 raw slot after clobber call = 0 (captured pair kept 9)
+CHECK-OK   NC1 control: a LATE raw read diverges from the captured pair (late-read is decisively wrong, not merely racy)
+CHECK-OK   CL1 qsort through procedure->pointer sorts (reference kept)
+CL2 qsort after dropping the only Scheme proc ref + 3 GCs => 1 arr=(2 4 6 8)
+CL2 outcome recorded: survival means Guile roots the trampoline internally; a crash here is the watchdog's record and means the adapter MUST keep a callback registry
+CHECK-OK   CL2 dropped-reference call: if it returned, values crossed correctly (survival implies correctness; refusal is separately recorded)
+CHECK-OK   D1 missing symbol lookup RAISES
+CHECK-OK   D2 missing library load RAISES
+CHECK-OK   D3 the #f handle resolves global (libc) symbols — the running executable's dynamic namespace
+W4-VERDICT: PASS (errno-at-boundary decisive)
+### exit=0

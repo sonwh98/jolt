@@ -1,0 +1,35 @@
+### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w1-reader.scm
+=== W1 reader/emit parity witness ===
+read-options-default: (square-brackets keywords #f positions)
+CHECK-OK   R1a default reader is case-SENSITIVE ('Abc distinct from 'abc)
+CHECK-OK   R1b #!no-fold-case directive keeps 'Abc distinct from 'abc
+CHECK-OK   N1 control: with case-insensitive ON 'Abc reads as 'abc (witness detects folding)
+CHECK-OK   N1b control: after read-disable, folding is off again
+CHECK-OK   R2 [1 2 3] reads as the list (1 2 3)
+CHECK-OK   R2b nested mix [(a [b] c)] reads with brackets as parens
+CHECK-OK   R3a datum comment #; removes next datum
+CHECK-OK   R3b block comment #| ... |# skipped
+CHECK-OK   R3c nested block comments
+R4 default read of "\\x41;B" => "A;B"
+CHECK-OK   N3 control: default reader does NOT decode \x41;B as "AB"
+R4 r6rs-escapes read of "\\x41;B" => "AB"
+CHECK-OK   R4 with r6rs-hex-escapes ON, \x41;B decodes as "AB" (boot must enable)
+CHECK-OK   R4b common escapes \n \t \" \\ identical everywhere
+R5 "|hello world|" default => |hello
+R5 default split it (bars are ordinary characters until r7rs-symbols is enabled)
+R5 after read-enable 'r7rs-symbols => #{hello world}#
+CHECK-OK   R5 boot action decided: enabling r7rs-symbols makes |...| read as ONE symbol
+CHECK-OK   R6a exact rational 1/3
+CHECK-OK   R6b #e1.5 is exact 3/2
+CHECK-OK   R6c exponent 1e3 is inexact 1000.0
+CHECK-OK   R6d #x10 is 16
+CHECK-OK   R6e negative rational -22/7 exact
+CHECK-OK   R6f +inf.0/-inf.0/+nan.0 read
+R7 #vu8(1 2 3 254) default => #vu8(1 2 3 254)
+CHECK-OK   R7a the DEFAULT reader reads #vu8(...) as a bytevector (native — no boot action)
+N2 control: #vu8(a b) default => #f
+CHECK-OK   N2 control: a malformed #vu8 literal RAISES (the row is decided, not vacuous)
+R7c SRFI-207 #u8"..." bytestring (option default off) => #f
+CHECK-OK   R7c SRFI-207 bytestrings stay OFF by default (not part of the emit surface; enabling is a read-set! away)
+W1-VERDICT: PASS (reader rows + controls)
+### exit=0

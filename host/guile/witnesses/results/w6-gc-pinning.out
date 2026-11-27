@@ -1,0 +1,22 @@
+### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w6-gc-pinning.scm
+=== W6 GC and pinning witness ===
+CHECK-OK   P1 bytevector pointer stayed address-stable across 10 collections (non-moving collector: lock/unlock may BOTH be no-ops)
+CHECK-OK   NC2 control: the aliased writes really reached the bytevector (alias tracks bv, not a copy)
+CHECK-OK   NC1 control: the collections were real (heap-size samples vary)
+CHECK-OK   P2 malloc'd foreign memory stable across GC (writes persist)
+P3 gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
+P3 heap-size: before=1785856 after-gc=1785856
+P3 heap-allocated-since-gc: before=25232 after-gc=4624
+P3 heap-total-allocated: before=2642416 after-gc=2654944
+P3 heap-free-size: before=172032 after-gc=196608
+P3 gc-times: before=19 after-gc=20
+P3 gc-time-taken: before=60687000 after-gc=63664000
+P3 protected-objects: before=0 after-gc=0
+CHECK-OK   P3a gc-stats carries heap-size (sa-total-memory-bytes candidate)
+CHECK-OK   P3b gc-stats carries allocation counters (sa-bytes-allocated candidates: heap-allocated-since-gc / heap-total-allocated)
+CHECK-OK   P3c no generation counters in gc-stats (sa-gc-max-generation: no generations on a BDW-GC build)
+P3d getrlimit(RLIMIT_AS=5) => 0 rlim_cur=9223372036854775807
+CHECK-OK   P3d getrlimit is FFI-reachable (heap ceiling source)
+CHECK-OK   P4 after-gc-hook fires on (gc) — sa-gc-install-after-collect! can be real, not the #f degradation
+W6-VERDICT: PASS (non-moving proven; stats mapped)
+### exit=0

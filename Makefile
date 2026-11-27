@@ -2002,13 +2002,7 @@ gambityinrepl gambitdht gambityinequivalence gambitdht-durable: gambitffi-bridge
 	  gambitdht) JOLT_GAMBIT_YIN_MODE=compiled sh test/gambit/yin-dht-probe.sh "$(GAMBIT_GSI)" "$$yin_root" ;; \
 	  gambityinrepl) JOLT_GAMBIT_YIN_MODE=compiled sh test/gambit/yin-repl-session.sh "$(GAMBIT_GSI)" "$$yin_root" ;; \
 	  gambityinequivalence) python3 test/gambit/yin-equivalence.py "$(GAMBIT_GSI)" "$$yin_root" ;; \
-	  gambitdht-durable) \
-	    boot="$(GAMBIT_YIN_BOOT)"; \
-	    if [ -z "$$boot" ]; then \
-	      boot=$$(sh host/gambit/ffi/watchdog.sh 2400 python3 host/gambit/build-yin-boot.py \
-	        "$(GAMBIT_GSC)" "$(GAMBIT_YIN_CACHE)") || exit $$?; \
-	    fi; \
-	    JOLT_GAMBIT_YIN_MODE=source python3 test/gambit/yin-dht-durable.py "$(GAMBIT_GSI)" "$$yin_root" "$$boot" ;; \
+	  gambitdht-durable) JOLT_GAMBIT_YIN_MODE=compiled python3 test/gambit/yin-dht-durable.py "$(GAMBIT_GSI)" "$$yin_root" ;; \
 	esac
 
 # Every Scheme global the full-profile boot references is defined — Gambit's

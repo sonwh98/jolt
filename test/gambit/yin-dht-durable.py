@@ -241,26 +241,21 @@ def exercise(launch, run, kind, ports):
     print(f"{kind}: {address} survived restart with HEAD {head}", flush=True)
 
 
-def main(gsi, datomworld, boot):
+def main(gsi, datomworld, boot=""):
     receipts = REPO / "build" / "gambit-dht-durable"
     receipts.mkdir(parents=True, exist_ok=True)
     run = Path(tempfile.mkdtemp(dir=receipts, prefix="run."))
     print(f"gambitdht-durable receipts: {run}", flush=True)
-    overlay = run / "jolt"
-    yin = overlay / "host" / "gambit" / "yin"
-    shutil.copytree(REPO / "host" / "gambit" / "yin", yin)
-    with (yin / "jolt" / "gambit" / "yin.jolt").open("a") as launcher:
-        launcher.write((REPO / "test" / "gambit" / "fixtures" / "yin-durable.jolt").read_text())
-    for name in ("build", "stdlib", "jolt-core"):
-        (overlay / name).symlink_to(REPO / name, target_is_directory=True)
-    env = dict(os.environ, JOLT_GAMBIT_YIN_BOOT=str(Path(boot).resolve()), JOLT_TRACE_SOURCE="1")
-    command = [gsi, REPO / "host" / "gambit" / "yin-repl-native.ss", datomworld]
+    env = dict(os.environ)
+    if boot:
+        env["JOLT_GAMBIT_YIN_BOOT"] = str(Path(boot).resolve())
+    command = [gsi, REPO / "test" / "gambit" / "yin-dht-durable-main.ss", datomworld]
 
     def launch(name, args, extra=None):
         session_env = dict(env, **(extra or {}))
         if name == "dht-write":
             session_env["JOLT_YIN_DURABLE_WITNESS"] = str(run / "dht-witness.ready")
-        return Session(run, name, command, overlay, session_env, args)
+        return Session(run, name, command, REPO, session_env, args)
 
     ports = reserve_ports()
     with ThreadPoolExecutor(max_workers=2) as pool:

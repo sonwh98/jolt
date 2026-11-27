@@ -10,6 +10,8 @@ transcript=${JOLT_YIN_REPL_TRANSCRIPT:-}
 if [ -z "$transcript" ]; then
   transcript=$(mktemp "$PWD/build/gambit-yin/repl.XXXXXX")
   trap 'rm -f "$transcript"; rm -rf /tmp/gambit-nope' EXIT
+else
+  trap 'rm -rf /tmp/gambit-nope' EXIT
 fi
 rm -rf /tmp/gambit-nope
 

@@ -26,7 +26,15 @@ python3 test/gambit/yin-prompt-time.py \
 (jolt.ffi/sizeof :int32)
 (require 'dao.jing.mem)
 (dao.jing.mem/materialize-sha256 {:witness 1})
+(use-store "file:/tmp/gambit-nope")
+(+ p1c-score 1)
+(reset)
+(use-store "file:/tmp/gambit-nope")
+(use-store "dht:/tmp/gambit-nope")
+(use-store "mem")
 (+ 21 22)
+(require 'jolt.ffi)
+(jolt.ffi/sizeof :int32)
 (quit)
 FORMS
 cat "$transcript"
@@ -47,12 +55,20 @@ awk '
   /^yin> 4$/ && step == 7 { step++; next }
   /^yin> \047dao[.]jing[.]mem$/ && step == 8 { step++; next }
   /^yin> Error: .*blocking ffi is unsupported on the gambit target/ && step == 9 { step++; next }
-  /^yin> 43$/ && step == 10 { step++; next }
-  /^yin> Bye$/ && step == 11 { step++; next }
+  /^yin> Error: cannot switch index store while the session holds evaluated state; run [(]reset[)] first$/ && step == 10 { step++; next }
+  /^yin> 101$/ && step == 11 { step++; next }
+  /^yin> SemanticVM reset$/ && step == 12 { step++; next }
+  /^yin> Error: .*blocking ffi is unsupported on the gambit target/ && step == 13 { step++; next }
+  /^yin> Error: .*blocking ffi is unsupported on the gambit target/ && step == 14 { step++; next }
+  /^yin> Switched index store to mem [(]code index cleared[)]$/ && step == 15 { step++; next }
+  /^yin> 43$/ && step == 16 { step++; next }
+  /^yin> \047jolt[.]ffi$/ && step == 17 { step++; next }
+  /^yin> 4$/ && step == 18 { step++; next }
+  /^yin> Bye$/ && step == 19 { step++; next }
   /^yin> / { unexpected = 1 }
-  END { exit !(step == 12 && !unexpected) }
+  END { exit !(step == 20 && !unexpected) }
 ' "$transcript" || {
   echo "gambityinrepl: the Yin session did not produce the expected replies" >&2
   exit 1
 }
-echo "gambityinrepl: PASS — Yin state, evaluation error, frontend refusal, FFI, blocking refusal, and clean quit"
+echo "gambityinrepl: PASS — Yin state, evaluation error, frontend refusal, FFI, blocking refusal, store swap, and clean quit"

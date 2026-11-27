@@ -1,0 +1,20 @@
+[claude-code:unrecognized_model] {"model":"glm-5.3","query_source":"sdk"}
+We're changing auto mode to no longer charge for classifier requests in Claude Code. However, this session isn't eligible because your requests go through open.bigmodel.cn, which isn't compatible with this update. Nothing breaks: auto mode keeps working, and its classifier requests are billed as before. To fix it and access the new version of auto mode, ask your gateway to implement: https://code.claude.com/docs/en/auto-mode-classifier-billing
+[claude-code:unrecognized_model] {"model":"glm-5.3-flash","query_source":"auto_mode"}
+ExitPlanMode isn't available in this session's toolset, so I'll present the plan for approval directly.
+
+## Plan summary
+
+**Task**: Complete the adversarial review of the uncommitted store-swap Slice 3 changes (Gambit overlay) per `collab/yin-repl/1795371200000-reviewer-store-swap-p3-gate.prompt.md`.
+
+**Investigation — already done (read-only)**: I read the full diff and both changed files byte-for-byte, the design contract (Decision 5 + file-spec item 6), the implementer's report, and verified the driver contract first-hand in the sibling worktree `../datomworld-store-swap` (branch `store-swap-p1`): `replace-store`/`swap_store`/`boot` in `main.cljc`, `parse-arg`/`describe-spec` in `store.cljc`, `swap-refusal`/`install-store`/`swap-summary` in `repl.cljc`, the reference `parse-store-command` in `cli.cljc`, and the dispatch in `driver.cljc`. I also confirmed `dao.posix.file`'s overlay requires only `jolt.scheme` and refuses unconditionally.
+
+**Review conclusions** (full detail in the plan file):
+1. **Decision 5 fidelity — PASS**: plain-data `dht-scheme`; `realpath` is the first expression on the durable path (no `java.io.File` reachable); startup `:parse-store-arg` untouched; `:mem` preserves host modules; `(constantly true)` has exactly two consumers and cannot hijack startup or non-swap paths.
+2. **Contract parity — PASS with one LOW**: grammar is a faithful clone of `yin.shell.cli`'s parser with the DHT machinery stripped per file-spec item 6; the only gap is the omitted `:opts` key in the return map — tolerated by `assoc`/`select-keys` on nil, consequence-free on Gambit.
+3. **Transcript FSM — PASS**: all 20 replies asserted in order; the C4 regexes are unanchored prefixes matching the full message; both declared deviations are accepted (one actually *implements* the design's failure story; the other is necessitated by fresh-VM semantics and precedented in `dht_test.cljc`). LOW: post-swap `dao.jing.mem` retention isn't probed.
+4. **Defect hunt — CLEAN**: no double-open/double-close, no error swallowing (the `Throwable` catch at `main.cljc:506` handles the host exception), C4 boundary unweakened, post-swap session is quiesced.
+
+**Verdict: APPROVED** (3 LOW + 2 INFO findings, none blocking).
+
+**Execution after approval** (single step, no source edits): capture timestamps via `date`, write the fully-drafted findings (verbatim in the plan file) to `collab/yin-repl/1795371200000-reviewer-store-swap-p3-gate.glm-5.3.findings.md`, and reply with the `Completed-GMT:`/`Completed-Local:` header, findings summary, and the verdict line.

@@ -18,12 +18,12 @@ guile-make-mutex-procedure-ok=#t
 CHECK-OK   ice-9 make-mutex constructs a primitive mutex: yes
 gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
 CHECK-OK   gc-stats is a nonempty alist: yes
-gc-stats gc-time-taken = 3862000
+gc-stats gc-time-taken = 3899000
 gc-stats gc-times = 2
-gc-stats heap-allocated-since-gc = 10176
+gc-stats heap-allocated-since-gc = 8032
 gc-stats heap-free-size = 487424
 gc-stats heap-size = 2097152
-gc-stats heap-total-allocated = 1673728
+gc-stats heap-total-allocated = 1671584
 gc-stats protected-objects = 0
 CHECK-OK   (gc) ran between two gc-stats reads (gc-times incremented): yes
 CHECK-OK   NC1 control: nonexistent feature is not provided: yes

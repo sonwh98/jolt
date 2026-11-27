@@ -73,11 +73,11 @@ with the current module restored"
                 (string-append (getenv "HOME") "/.cache")))
 (check "C3 compiled-file-name maps under the guile ccache dir"
        (string-prefix? (string-append xdg "/guile/ccache") cached))
-(check "NC2b control: the ccache entry exists only after a compile ran \
-(compile-file writes it when no output-file is given)"
-       (begin
-         (or (file-exists? cached)
-             (begin (compile-file src) (file-exists? cached)))))
+(check "NC2b control: ccache entry absent before compile-file and created by \
+compile-file"
+       (let ((existed-before (file-exists? cached)))
+         (compile-file src)
+         (and (not existed-before) (file-exists? cached))))
 
 ;; ---- C5 boot-file absence --------------------------------------------------------
 (let* ((m (resolve-interface '(system base compile)))

@@ -28,17 +28,26 @@
 
 ;; ---- B1 child boot ------------------------------------------------------------
 (define guile-bin (or (getenv "GUILE") "guile"))
-(define boots
+(define boot-runs
   (map (lambda (_)
          (let* ((t0 (now-ms))
-                (_ (system* guile-bin "--no-auto-compile" "-c" "0"))
+                (st (system* guile-bin "--no-auto-compile" "-c" "0"))
                 (t1 (now-ms)))
-           (- t1 t0)))
+           (cons st (- t1 t0))))
        '(1 2 3)))
+(define boot-statuses (map car boot-runs))
+(define boots (map cdr boot-runs))
+(define all-boots-ok
+  (every (lambda (st)
+           (and (eqv? (status:exit-val st) 0)
+                (not (status:term-sig st))))
+         boot-statuses))
 (define boot-median (second (sort boots <)))
-(format #t "B1 child boot times (ms): ~a median=~a~%" boots boot-median)
-(check "B1 boot measurements completed (nonzero medians)"
-       (> boot-median 0))
+(format #t "B1 child boot times (ms): ~a statuses=~s median=~a~%"
+        boots (map status:exit-val boot-statuses) boot-median)
+(check "B1 boot measurements completed with exit=0 for all 3 children \
+(nonzero median)"
+       (and all-boots-ok (> boot-median 0)))
 
 ;; ---- E1 interpreted eval -------------------------------------------------------
 (define n-eval 20000)

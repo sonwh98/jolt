@@ -287,30 +287,83 @@ a lost wakeup would hang and the watchdog would record it"
 
 ;; ---- T6 fences -------------------------------------------------------------
 ;; Guile threads are real OS pthreads sharing memory, so fences may NOT be
-;; no-ops; they map to (ice-9 atomic) accesses, which the manual pins to C11
-;; sequential consistency (a superset of acquire+release, §6.22.4).
-;; Two-thread producer/consumer message-passing pair (1000 rounds):
-;;   - Producer writes non-atomic payload slots, then release-stores fence-seq.
-;;   - Consumer acquire-loads fence-seq, reads payload slots, checks visibility,
-;;     then release-stores fence-ack.
+;; no-ops.  CONTRACT.txt:113-118 defines standalone zero-arg fences
+;; (memory-order-release) / (memory-order-acquire) around ordinary record/
+;; vector publication (seq.ss, cow-publish!).  Because (ice-9 atomic)
+;; provides C11 sequential consistency (§6.22.4), we model the standalone
+;; fences over a shared atomic word (%fence-word) and test:
+;;   T6a: the standalone fence publication pattern on plain Scheme vectors
+;;        across two concurrent threads (1000 rounds);
+;;   T6b: direct atomic-box release/acquire message passing (1000 rounds).
+(define %fence-word (make-atomic-box 0))
+(define (memory-order-release) (atomic-box-set! %fence-word 0))
+(define (memory-order-acquire) (atomic-box-ref %fence-word))
+
+(define pub-cell (vector 0))
+(define pub-ack (vector 0))
+(define pub-payload (vector 0 0))
+(define pub-mismatches 0)
+(define fence-rounds 1000)
+(define pub-consumer
+  (call-with-new-thread
+   (lambda ()
+     (let loop ((i 1))
+       (when (<= i fence-rounds)
+         (let spin ()
+           (let ((v (vector-ref pub-cell 0)))
+             (memory-order-acquire)
+             (unless (= v i)
+               (yield)
+               (spin))))
+         (unless (and (= (vector-ref pub-payload 0) i)
+                      (= (vector-ref pub-payload 1) (* i 7)))
+           (set! pub-mismatches (+ pub-mismatches 1)))
+         (memory-order-release)
+         (vector-set! pub-ack 0 i)
+         (loop (+ i 1)))))))
+(define pub-producer
+  (call-with-new-thread
+   (lambda ()
+     (let loop ((i 1))
+       (when (<= i fence-rounds)
+         (let spin ()
+           (let ((a (vector-ref pub-ack 0)))
+             (memory-order-acquire)
+             (unless (= a (- i 1))
+               (yield)
+               (spin))))
+         (vector-set! pub-payload 0 i)
+         (vector-set! pub-payload 1 (* i 7))
+         (memory-order-release)
+         (vector-set! pub-cell 0 i)
+         (loop (+ i 1)))))))
+(join-thread pub-producer)
+(join-thread pub-consumer)
+(format #t "T6a standalone fence publication: pub=~a ack=~a mismatches=~a~%"
+        (vector-ref pub-cell 0) (vector-ref pub-ack 0) pub-mismatches)
+(check "T6a standalone memory-order-release/acquire around plain vector \
+publication: 1000 rounds with zero payload mismatches"
+       (and (= (vector-ref pub-cell 0) fence-rounds)
+            (= (vector-ref pub-ack 0) fence-rounds)
+            (zero? pub-mismatches)))
+
 (define fence-seq (make-atomic-box 0))
 (define fence-ack (make-atomic-box 0))
 (define fence-payload (vector 0 0))
 (define fence-mismatches 0)
-(define fence-rounds 1000)
 (define fence-consumer
   (call-with-new-thread
    (lambda ()
      (let loop ((i 1))
        (when (<= i fence-rounds)
          (let spin ()
-           (unless (= (atomic-box-ref fence-seq) i) ; memory-order-acquire
+           (unless (= (atomic-box-ref fence-seq) i)
              (yield)
              (spin)))
          (unless (and (= (vector-ref fence-payload 0) i)
                       (= (vector-ref fence-payload 1) (* i 7)))
            (set! fence-mismatches (+ fence-mismatches 1)))
-         (atomic-box-set! fence-ack i)              ; memory-order-release
+         (atomic-box-set! fence-ack i)
          (loop (+ i 1)))))))
 (define fence-producer
   (call-with-new-thread
@@ -323,13 +376,13 @@ a lost wakeup would hang and the watchdog would record it"
              (spin)))
          (vector-set! fence-payload 0 i)
          (vector-set! fence-payload 1 (* i 7))
-         (atomic-box-set! fence-seq i)              ; memory-order-release
+         (atomic-box-set! fence-seq i)
          (loop (+ i 1)))))))
 (join-thread fence-producer)
 (join-thread fence-consumer)
-(format #t "T6 cross-thread fence rounds: seq=~a ack=~a mismatches=~a~%"
+(format #t "T6b atomic-box message passing: seq=~a ack=~a mismatches=~a~%"
         (atomic-box-ref fence-seq) (atomic-box-ref fence-ack) fence-mismatches)
-(check "T6 two-thread release/acquire message passing: 1000 rounds with \
+(check "T6b atomic-box release/acquire message passing: 1000 rounds with \
 zero payload visibility mismatches"
        (and (= (atomic-box-ref fence-seq) fence-rounds)
             (= (atomic-box-ref fence-ack) fence-rounds)

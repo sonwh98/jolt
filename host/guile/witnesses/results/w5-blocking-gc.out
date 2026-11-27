@@ -1,14 +1,15 @@
 ### cmd: ./watchdog.sh 90 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w5-blocking-gc.scm
 === W5 blocking-C-call vs GC witness ===
+CHECK-OK   compiled C-side handshake shim (w5_blocking_sleep / w5_is_in_c)
 CHECK-OK   B is provably executing (>=1 round before A enters C)
-A: blocking foreign call returned 0s
-observed state: rounds-before=327 rounds-after=999 rounds-during-block=999 gc-times-before=68 gc-times-after=267 gc-times-during=199
-CHECK-OK   A's C call really blocked ~3s (wall clock)
-CHECK-OK   DECISIVE: B completed rounds AND real GC collections (gc-times incremented) WHILE A sat in the C call (blocking collapses to plain: the collector does not stop)
+A: w5_blocking_sleep(3) returned rem=0 elapsed-ms=3007.7589999999996
+observed state (C-handshake delimited): rounds-before=346 rounds-after=1041 rounds-during-block=1041 gc-times-first-in-c=72 gc-times-last-in-c=280 gc-times-during=208
+CHECK-OK   A's C call returned 0 and really blocked ~3s wall-clock (>=2500ms)
+CHECK-OK   DECISIVE: B completed rounds AND real GC collections (gc-times incremented strictly inside the C-side handshake) WHILE A sat in C (blocking collapses to plain: the collector does not stop)
 heap-size samples during block: 1
 CHECK-OK   collections were real during block (gc-times delta > 0)
 CHECK-OK   live vector mutations intact after concurrent collections
-NC control (a-in-block=#f, 1s window): during 999->999, total 1326->1651
-CHECK-OK   NC control: rounds-during-block stays unchanged when a-in-block is #f while rounds-total advances
+NC control (w5_in_c=0, post-drain 1s window): during 1041->1041, total 1390->1739
+CHECK-OK   NC control: rounds-during-block stays unchanged when w5_in_c=0 while rounds-total advances
 W5-VERDICT: PASS (GC completes during a blocked C call)
 ### exit=0

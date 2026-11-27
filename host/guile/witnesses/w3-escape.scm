@@ -7,20 +7,21 @@
 ;;   dynamic-wind chain (jolt's `finally` rides it).
 ;;
 ;; Guile's call/cc is multi-shot and re-entrant after its extent exits
-;; (manual §6.11.6: "when a continuation is invoked, call/cc and
-;; subsequent code effectively 'returns' a second time") — so the adapter
-;; MUST carry a spent flag, exactly as guile.ss anticipated.  This witness
-;; prototypes two wrappers (call/cc-based and prompt-based — manual
-;; §6.11.5 recommends prompts for escapes) and pins their behavior.
-;;
-;; Negative controls:
-;;   NC1 the RAW call/cc post-return invocation re-enters the frame —
-;;      recorded to prove the spent flag is load-bearing (the wrapper
-;;      raises exactly where the raw primitive silently re-enters);
-;;   NC2 a deliberately broken wrapper WITHOUT the spent flag exhibits
-;;      the same re-entry through the wrapper shape.
+;; (manual §6.11.6) and leaves k re-entrant if a non-escape exception or
+;; outer escape unwinds past it unless guarded on every exit.  This
+;; witness therefore commits to Guile's recommended prompt primitive
+;; (call-with-prompt, §6.11.5) with:
+;;   - a FRESH (make-prompt-tag "escape") per call;
+;;   - a spent flag set BOTH on escape (before abort-to-prompt, catching
+;;     in-flight re-entry during dynamic-wind unwind) AND in a
+;;     dynamic-wind out-guard (catching normal return, thrown exceptions,
+;;     and outer-escape unwinds alike).
+;; call/cc is dropped as a Phase 2b option; raw call/cc and an unflagged
+;; wrapper are retained as negative controls (NC1-NC2) and platform
+;; continuation-barrier evidence (E6a).
 
 (use-modules (ice-9 threads)
+             (ice-9 atomic)
              (srfi srfi-1))
 
 (define fails 0)
@@ -30,28 +31,38 @@
 
 (format #t "=== W3 one-shot escape continuation witness ===~%")
 
-;; ---- prototype 1: call/cc + spent flag -------------------------------------
-;; Value flow: the call/cc result (proc's normal return value, or the
-;; escaped value) is captured, the frame is then marked spent (any later
-;; invocation of k raises — the one-shot pin), and the value returned.
+;; ---- Phase 2b prototype: call-with-prompt + fresh tag + every-exit spent ---
+;; Value flow: fresh prompt tag per call; spent becomes #t on escape
+;; (before abort-to-prompt) AND in a dynamic-wind out-guard on EVERY exit
+;; (normal return, thrown exception, or outer-escape unwind).
 ;; Prototype is single-value; the adapter generalizes to multiple values.
-;; CONTRACT NOTE (r3, review finding): the adapter's duty is the ONE-SHOT
-;; spent flag ONLY.  Thread/fiber ownership is the HOST's rule
-;; (TARGET-CONTRACT.md "Ownership ... is the HOST's rule, not yours") —
-;; and the platform already raises on cross-thread k use (E6 records it),
-;; so no owner check is baked in here.
+;; CONTRACT NOTE (r3/r4): the adapter's duty is the ONE-SHOT spent flag
+;; ONLY.  Thread/fiber ownership is the HOST's rule (TARGET-CONTRACT.md
+;; "Ownership ... is the HOST's rule, not yours").
 (define (sa-call-with-escape-continuation proc)
-  (let ((spent #f))
-    (let ((result
-           (call/cc
-            (lambda (k)
-              (proc (lambda (v)
-                      (if spent
-                          (error 'escape-continuation
-                                 "one-shot escape used twice")
-                          (begin (set! spent #t) (k v)))))))))
-      (set! spent #t)   ; reached on BOTH the normal and the escape path
-      result)))
+  (let ((tag (make-prompt-tag "escape"))
+        (spent #f))
+    (call-with-prompt tag
+      (lambda ()
+        (dynamic-wind
+          (lambda () #f)
+          (lambda ()
+            (proc (lambda (v)
+                    (if spent
+                        (error 'escape-continuation
+                               "one-shot escape used twice")
+                        (begin (set! spent #t)
+                               (abort-to-prompt tag v))))))
+          (lambda () (set! spent #t))))
+      (lambda (_ v) v))))
+
+(define (escape-error-key res)
+  ;; Return the symbol tag passed to (error 'escape-continuation ...) if any.
+  (and (pair? res)
+       (eq? (car res) 'misc-error)
+       (pair? (cadr res))
+       (let ((args (caddr (cadr res))))
+         (and (pair? args) (car args)))))
 
 ;; ---- E-battery on the wrapper ----------------------------------------------
 (check "E1 normal return passes value through"
@@ -108,47 +119,114 @@
   (check "E5b finally bodies ran on the way out, inner first"
          (equal? unwind-order '(out-outer out-inner in-inner in-outer))))
 
-;; E6: cross-thread invocation.  The adapter carries NO ownership policy
-;; (TARGET-CONTRACT.md pins ownership as the HOST's rule); this records
-;; what the PLATFORM itself does — the raw continuation refuses use from
-;; another thread, so the host layers its policy on a platform-enforced
-;; refusal, not on adapter machinery.
-(define cross-thread-result #f)
-(let ((ek #f))
-  (sa-call-with-escape-continuation
-   (lambda (k) (set! ek k) 'captured))
-  (join-thread (call-with-new-thread
-                (lambda ()
-                  (set! cross-thread-result
-                        (false-if-exception (ek 'x)))))))
-(format #t "E6 cross-thread invocation => ~s~%" cross-thread-result)
-(check "E6 cross-thread invocation RAISES in the invoking thread \
-(platform-enforced; ownership POLICY itself is the host layer's)"
-       (not cross-thread-result))
+;; E6: cross-thread invocation WHILE the capture frame is LIVE.
+;; The adapter carries NO ownership policy (TARGET-CONTRACT.md pins
+;; ownership as the HOST's rule); E6a keeps a raw call/cc capture live
+;; on the parent thread while a child invokes it (verifying Guile's own
+;; continuation-barrier error), and E6b keeps a live prompt-based
+;; escape open while a child invokes it (verifying Guile refuses abort
+;; across thread prompt stacks).
+(let ((raw-k #f)
+      (done (make-atomic-box #f))
+      (child-err #f)
+      (child-t #f))
+  (call/cc
+   (lambda (k)
+     (set! raw-k k)
+     (set! child-t
+           (call-with-new-thread
+            (lambda ()
+              (set! child-err
+                    (catch #t
+                      (lambda () (raw-k 'x) 'no-raise)
+                      (lambda (key . args) (list key args))))
+              (atomic-box-set! done #t))))
+     (let spin ()
+       (unless (atomic-box-ref done)
+         (yield) (spin)))))
+  (join-thread child-t)
+  (format #t "E6a live cross-thread raw call/cc => ~s~%" child-err)
+  (check "E6a live raw continuation cross-thread invocation hits Guile's \
+continuation barrier"
+         (and (pair? child-err)
+              (eq? (car child-err) 'misc-error)
+              (string-contains (cadr (cadr child-err))
+                               "continuation barrier"))))
 
-;; ---- prototype 2: prompt-based (cheaper escapes) ---------------------------
-;; r3 repairs (review P1): the r2 version shared ONE global prompt tag
-;; and never set spent on the normal-return path.  Both bugs were
-;; reproduced before this repair: a shared tag lets an inner call's
-;; handler catch an OUTER escape ((outer-continued escaped) instead of
-;; escaped), and a leaked k from a returned call silently HIJACKS a later
-;; active prompt-ec (returned 'hijacked instead of raising).  The repair:
-;; a FRESH tag per call and spent set on BOTH exit paths.
-(define (prompt-ec proc)
-  (let ((tag (make-prompt-tag "escape"))       ; fresh per call
-        (spent #f))
-    (let ((result
-           (call-with-prompt tag
-             (lambda ()
-               (proc (lambda (v)
-                       (if spent
-                           (error 'escape-continuation
-                                  "one-shot escape used twice")
-                           (begin (set! spent #t)
-                                  (abort-to-prompt tag v))))))
-             (lambda (_ v) v))))
-      (set! spent #t)             ; normal-return path: later uses raise
-      result)))
+(let ((done (make-atomic-box #f))
+      (child-err #f)
+      (child-t #f))
+  (sa-call-with-escape-continuation
+   (lambda (ek)
+     (set! child-t
+           (call-with-new-thread
+            (lambda ()
+              (set! child-err
+                    (catch #t
+                      (lambda () (ek 'x) 'no-raise)
+                      (lambda (key . args) (list key args))))
+              (atomic-box-set! done #t))))
+     (let spin ()
+       (unless (atomic-box-ref done)
+         (yield) (spin)))
+     'parent-finished))
+  (join-thread child-t)
+  (format #t "E6b live cross-thread prompt escape => ~s~%" child-err)
+  (check "E6b live prompt escape cross-thread invocation refuses \
+(Abort to unknown prompt; ownership policy itself stays in the host layer)"
+         (and (pair? child-err)
+              (eq? (car child-err) 'misc-error)
+              (string-contains (cadr (cadr child-err))
+                               "Abort to unknown prompt"))))
+
+;; E7: exit via THROWN EXCEPTION invalidates k on every exit path (r4 P1).
+(let ((thrown-k #f))
+  (catch #t
+    (lambda ()
+      (sa-call-with-escape-continuation
+       (lambda (k) (set! thrown-k k) (error 'boom "unrelated throw"))))
+    (lambda _ #f))
+  (let ((post-standalone
+         (catch #t
+           (lambda () (thrown-k 'x) 'no-raise)
+           (lambda (key . args) (list key args))))
+        (post-enclosing
+         (sa-call-with-escape-continuation
+          (lambda (_)
+            (catch #t
+              (lambda () (thrown-k 'x) 'no-raise)
+              (lambda (key . args) (list key args)))))))
+    (format #t "E7 after thrown exception: standalone=~s enclosing=~s~%"
+            (escape-error-key post-standalone)
+            (escape-error-key post-enclosing))
+    (check "E7 k invalidated when wrapper exits via thrown exception \
+(both standalone and inside an enclosing escape frame)"
+           (and (eq? (escape-error-key post-standalone) 'escape-continuation)
+                (eq? (escape-error-key post-enclosing) 'escape-continuation)))))
+
+;; E8: exit via OUTER ESCAPE invalidates inner k (r4 P1).
+(let ((inner-k #f))
+  (define outer-res
+    (sa-call-with-escape-continuation
+     (lambda (k-out)
+       (sa-call-with-escape-continuation
+        (lambda (k-in)
+          (set! inner-k k-in)
+          (k-out 'outer-escaped))))))
+  (let ((post-inner
+         (sa-call-with-escape-continuation
+          (lambda (_)
+            (catch #t
+              (lambda () (inner-k 'x) 'no-raise)
+              (lambda (key . args) (list key args)))))))
+    (format #t "E8 outer-res=~s post-inner-k=~s~%"
+            outer-res (escape-error-key post-inner))
+    (check "E8 inner k invalidated when an outer escape unwinds past it"
+           (and (eq? outer-res 'outer-escaped)
+                (eq? (escape-error-key post-inner) 'escape-continuation)))))
+
+;; ---- prompt-ec alias / battery (same call-with-prompt implementation) -------
+(define prompt-ec sa-call-with-escape-continuation)
 
 (check "P1 prompt-based normal return"
        (eq? (prompt-ec (lambda (k) 'pn)) 'pn))
@@ -290,6 +368,6 @@ logged: one two) — the spent flag is load-bearing"
 see AUDIT.md area 3 for the feasibility ruling~%")
 
 (if (zero? fails)
-    (format #t "W3-VERDICT: PASS (one-shot enforced both prototypes)~%")
+    (format #t "W3-VERDICT: PASS (call-with-prompt one-shot enforced on every exit)~%")
     (format #t "W3-VERDICT: FAIL (~a failed checks)~%" fails))
 (exit (if (zero? fails) 0 1))

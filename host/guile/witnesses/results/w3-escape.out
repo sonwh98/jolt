@@ -9,8 +9,14 @@ E4b post-return invocation => #f
 CHECK-OK   E4b post-return invocation RAISES (frame gone)
 CHECK-OK   E5 escape value delivered from inside nested dynamic-wind
 CHECK-OK   E5b finally bodies ran on the way out, inner first
-E6 cross-thread invocation => #f
-CHECK-OK   E6 cross-thread invocation RAISES in the invoking thread (platform-enforced; ownership POLICY itself is the host layer's)
+E6a live cross-thread raw call/cc => (misc-error ("%continuation-call" "invoking continuation would cross continuation barrier: ~A" (#<continuation 226 @ 10741e800>) #f))
+CHECK-OK   E6a live raw continuation cross-thread invocation hits Guile's continuation barrier
+E6b live cross-thread prompt escape => (misc-error ("abort" "Abort to unknown prompt" (("escape")) #f))
+CHECK-OK   E6b live prompt escape cross-thread invocation refuses (Abort to unknown prompt; ownership policy itself stays in the host layer)
+E7 after thrown exception: standalone=escape-continuation enclosing=escape-continuation
+CHECK-OK   E7 k invalidated when wrapper exits via thrown exception (both standalone and inside an enclosing escape frame)
+E8 outer-res=outer-escaped post-inner-k=escape-continuation
+CHECK-OK   E8 inner k invalidated when an outer escape unwinds past it
 CHECK-OK   P1 prompt-based normal return
 CHECK-OK   P2 prompt-based escape
 P3 sequential (k 1)(k 2) => 1 (second call unreachable — the first escape exits)
@@ -33,5 +39,5 @@ CHECK-OK   NC2 control: wrapper WITHOUT the spent flag re-enters too (two passes
 NC3 real-wrapper observations: (one #f)
 CHECK-OK   NC3 control: the REAL wrapper RAISES where NC1/NC2 re-enter (second pass recorded as #f, not 'two)
 fibers-tier: prompt-based escape prototype works; see AUDIT.md area 3 for the feasibility ruling
-W3-VERDICT: PASS (one-shot enforced both prototypes)
+W3-VERDICT: PASS (call-with-prompt one-shot enforced on every exit)
 ### exit=0

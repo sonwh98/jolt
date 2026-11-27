@@ -99,10 +99,35 @@
             heap-free-size gc-times gc-time-taken protected-objects))
 (check "P3a gc-stats carries heap-size (sa-total-memory-bytes candidate)"
        (assq-ref s1 'heap-size))
-(check "P3b gc-stats carries allocation counters (sa-bytes-allocated \
-candidates: heap-allocated-since-gc / heap-total-allocated)"
-       (and (assq-ref s1 'heap-allocated-since-gc)
-            (assq-ref s1 'heap-total-allocated)))
+(check "P3b gc-stats carries occupied-heap inputs (heap-size and \
+heap-free-size)"
+       (and (assq-ref s1 'heap-size)
+            (assq-ref s1 'heap-free-size)))
+;; P3e validate occupied-heap estimate (- heap-size heap-free-size) for
+;; sa-bytes-allocated: must stay <= heap-size, grow across (gc) when 2 MiB
+;; of bytevectors are retained, and drop after release + (gc).
+(define (live-heap-bytes)
+  (let ((s (gc-stats)))
+    (- (assq-ref s 'heap-size) (assq-ref s 'heap-free-size))))
+(gc)
+(define live-base (live-heap-bytes))
+(define live-retained (map (lambda (_) (make-bytevector 65536 1)) (iota 32)))
+(gc)
+(define live-stats (gc-stats))
+(define live-with-2m (- (assq-ref live-stats 'heap-size)
+                        (assq-ref live-stats 'heap-free-size)))
+(define live-total-2m (assq-ref live-stats 'heap-size))
+(set! live-retained #f)
+(gc)
+(define live-after-drop (live-heap-bytes))
+(format #t "P3e occupied heap (- heap-size heap-free-size): base=~a \
+with-2MiB=~a (heap-size=~a) after-drop=~a~%"
+        live-base live-with-2m live-total-2m live-after-drop)
+(check "P3e occupied-heap estimate tracks retained 2MiB allocations across GC \
+and remains <= heap-size"
+       (and (<= live-with-2m live-total-2m)
+            (>= (- live-with-2m live-base) 2000000)
+            (< live-after-drop live-with-2m)))
 ;; Guile's BDW-GC build has no generations: sa-gc-max-generation answers a
 ;; fixed sentinel; record that the stats expose none.
 (check "P3c no generation counters in gc-stats (sa-gc-max-generation: \

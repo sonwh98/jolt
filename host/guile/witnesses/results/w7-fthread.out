@@ -4,8 +4,8 @@ W7: guile-3.0 pkg-config flags: ("-I/opt/homebrew/Cellar/guile/3.0.11/include/gu
 CHECK-OK   F0 pkg-config guile-3.0 available to build the fixture
 W7: build: ("cc" "-O2" "-o" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/build/w7-fixture" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w7-fixture.c" "-I/opt/homebrew/Cellar/guile/3.0.11/include/guile/3.0" "-I/opt/homebrew/opt/gmp" "-I/opt/homebrew/opt/gmp/include" "-I/opt/homebrew/opt/readline/include" "-D_THREAD_SAFE" "-I/opt/homebrew/opt/bdw-gc/include" "-L/opt/homebrew/Cellar/guile/3.0.11/lib" "-lguile-3.0" "-L/opt/homebrew/opt/bdw-gc/lib" "-lgc")
 CHECK-OK   F0b fixture compiled
-W7 good-mode output:W7-FIXTURE-ENTRY-OK thread=1 result=41
-W7-FIXTURE-ENTRY-OK thread=2 result=42
+W7 good-mode output:W7-FIXTURE-ENTRY-OK thread=2 result=42
+W7-FIXTURE-ENTRY-OK thread=1 result=41
 W7-FIXTURE-VERDICT: PASS
 CHECK-OK   F1 both foreign pthreads entered Scheme (2 ENTRY-OK lines)
 CHECK-OK   F2 thread 1 computed 41 and thread 2 computed 42 (own args)

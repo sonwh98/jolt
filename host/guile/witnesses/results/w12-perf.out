@@ -1,15 +1,15 @@
 ### cmd: ./watchdog.sh 120 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w12-perf.scm
 === W12 performance witness (Guile 3.0.11, aarch64-apple-darwin25.4.0) ===
-B1 child boot times (ms): (162.22899999999998 166.24499999999998 159.81) median=162.22899999999998
-CHECK-OK   B1 boot measurements completed (nonzero medians)
-E1 20000 interpreter evals of (+ 1 2): 66.47799999999995 ms (3.3238999999999974 us/eval)
+B1 child boot times (ms): (167.601 153.23199999999997 153.317) statuses=(0 0 0) median=153.317
+CHECK-OK   B1 boot measurements completed with exit=0 for all 3 children (nonzero median)
+E1 20000 interpreter evals of (+ 1 2): 61.02099999999996 ms (3.051049999999998 us/eval)
 CHECK-OK   E1 interpreted eval measured
-E2 1M-iteration tail loop: 92.78499999999997 ms
+E2 1M-iteration tail loop: 90.30200000000002 ms
 CHECK-OK   E2 loop baseline measured
-C1 1M-iteration closure: interpreted-eval'd 106.68599999999992 ms vs compiled 1.225999999999999 ms (speedup 87.01957585644372 x)
+C1 1M-iteration closure: interpreted-eval'd 93.13800000000003 ms vs compiled 1.224999999999909 ms (speedup 76.03102040816894 x)
 CHECK-OK   C1 compiled-vs-interpreted measured (both nonzero)
-NC1 1-iteration interp-fn: 0.3120000000000118 ms vs 1M-iteration: 106.68599999999992 ms
+NC1 1-iteration interp-fn: 0.01999999999998181 ms vs 1M-iteration: 93.13800000000003 ms
 CHECK-OK   NC1 control: 1M-iteration timing strictly exceeds 1-iteration timing (timer distinguishes work)
-PERF-SUMMARY: boot-median-ms=162.22899999999998 eval-us=3.3238999999999974 loop-ms=92.78499999999997 compiled-ms=1.225999999999999
+PERF-SUMMARY: boot-median-ms=153.317 eval-us=3.051049999999998 loop-ms=90.30200000000002 compiled-ms=1.224999999999909
 W12-VERDICT: PASS (measurements recorded)
 ### exit=0

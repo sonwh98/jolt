@@ -49,10 +49,14 @@ linux-x86_64 with `GUILE=$(command -v guile) ./run-all.sh`; platform rows
 
 r1 staged these witnesses in a session whose permission mode denied
 execution; the orchestrator's first run then found them broken (only w5
-and w12 passed). r2 repaired every witness against the real 3.0.11, and
-r3 fixed all 8 cross-family review findings (`build/review-findings.md`
-— callback rooting, prompt-ec tag/spent-flag, foreign-pthread callable
-refusal, w5 `gc-times` + NC, w2 `T6`/`N1`/`T3b0`, w8 `IO3a1`/`utime`/Linux
-`stat` offsets, w0 `gc-stats` + NCs, w12 NC1) and re-ran the full suite:
-**13/13 PASS, recorded under `results/`** on darwin-arm64 (`guile
-3.0.11`, aarch64-apple-darwin25.4.0). Linux-x86_64 was NOT run.
+and w12 passed). r2 repaired every witness against the real 3.0.11, r3
+fixed the 8 initial review findings, and r4 resolved all 11 findings
+from `build/review-findings-r3.md` (`call-with-prompt` + `dynamic-wind`
+every-exit invalidation, live cross-thread continuation barrier check,
+C-side blocking-GC handshake + wall-clock/drain NC, standalone fence
+publication, C-constructed `struct flock` + boundary errno + unlock
+check, signed `time_t` + pre-epoch `utimensat`, occupied-heap
+validation, pre-absent `ccache` check, child exit-status enforcement)
+and re-ran the full suite: **13/13 PASS, recorded under `results/`** on
+darwin-arm64 (`guile 3.0.11`, aarch64-apple-darwin25.4.0). Linux-x86_64
+was NOT run.

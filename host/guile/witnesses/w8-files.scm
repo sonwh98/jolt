@@ -51,6 +51,9 @@
 (define F-SETLK (or (false-if-exception F_SETLK) (if darwin? 8 6)))
 (define F-WRLCK (or (false-if-exception F_WRLCK) (if darwin? 3 1)))
 (define F-UNLCK (or (false-if-exception F_UNLCK) (if darwin? 2 2)))
+(define EAGAIN-VAL (or (false-if-exception EAGAIN) (if darwin? 35 11)))
+(define EACCES-VAL (or (false-if-exception EACCES) 13))
+(define AT-FDCWD (if darwin? -2 -100))
 
 (define c-fcntl
   (foreign-library-function #f "fcntl"
@@ -58,24 +61,30 @@
                             #:arg-types (list int int '*)
                             #:return-errno? #t))
 
-;; struct flock bytevector (whole-file lock, whence = SEEK_SET = 0)
+;; struct flock bytevector (used only for the direct variadic EFAULT probe):
+;;   - darwin-arm64: 24 bytes (off_t start@0, off_t len@8, pid_t@16, short type@20, short whence@22)
+;;   - linux-x86_64: 32 bytes (short type@0, short whence@2, off_t start@8, off_t len@16, pid_t@24)
 (define (make-flock type)
-  (let ((bv (make-bytevector 24 0)))
+  (let ((bv (make-bytevector (if darwin? 24 32) 0)))
     (if darwin?
-        (begin ;; off_t l_start; off_t l_len; pid_t l_pid; short type; short whence
+        (begin
           (bytevector-u64-native-set! bv 0 0)
           (bytevector-u64-native-set! bv 8 0)
           (bytevector-u16-native-set! bv 20 type)
           (bytevector-u16-native-set! bv 22 0))
-        (begin ;; short type; short whence; off_t l_start; off_t l_len; pid
+        (begin
           (bytevector-u16-native-set! bv 0 type)
           (bytevector-u16-native-set! bv 2 0)
           (bytevector-u64-native-set! bv 8 0)
-          (bytevector-u64-native-set! bv 16 0)))
+          (bytevector-u64-native-set! bv 16 0)
+          (bytevector-s32-native-set! bv 24 0)))
     bv))
 
 ;; ---- child mode -------------------------------------------------------------
 ;; argv: w8-files.scm lock-child <file> <shim-lib>
+;; The C shim constructs struct flock from <fcntl.h> directly (ABI-safe on
+;; both darwin-arm64 and linux-x86_64) and returns errno at the boundary.
+;; Exit 42 ONLY on lock-conflict (EAGAIN/EACCES), 0 on acquisition, 43 otherwise.
 (define child-mode? (and (pair? script-args)
                          (string=? (car script-args) "lock-child")))
 (when child-mode?
@@ -84,19 +93,20 @@
          ;; O_RDWR: a write lock on an O_RDONLY fd is refused with EBADF
          ;; on darwin — recorded platform fact, so both sides open RDWR.
          (fd (open-fdes path (logior O_RDWR)))
-         ;; ADAPTER FACT: the flock bytevector must stay ROOTED across the
-         ;; foreign call — an anonymous (bytevector->pointer ...) can be
-         ;; collected first and the call then fails EFAULT(14).
-         (fl (make-flock F-WRLCK))
          (shim-setlk
           (foreign-library-function (load-foreign-library shim-path)
                                     "w8_setlk"
                                     #:return-type int
-                                    #:arg-types (list int '*)))
-         (rc (shim-setlk fd (bytevector->pointer fl))))
-    (if (= rc -1)
-        (exit 42)                            ; EAGAIN — excluded (expected)
-        (exit 0))))                          ; acquired
+                                    #:arg-types (list int int int64 int64)
+                                    #:return-errno? #t)))
+    (receive (rc err) (shim-setlk fd F-WRLCK 0 0)
+      (close-fdes fd)
+      (cond ((zero? rc) (exit 0))
+            ((and (= rc -1) (or (= err EAGAIN-VAL) (= err EACCES-VAL)))
+             (exit 42))
+            (else
+             (format #t "lock-child unexpected rc=~a errno=~a~%" rc err)
+             (exit 43))))))
 
 (define fails 0)
 (define (check label ok)
@@ -150,21 +160,31 @@ file (and /tmp itself)"
 ;; variads).
 (define guile-bin (or (getenv "GUILE") "guile"))
 (define shim-src (string-append tmpdir "/w8shim.c"))
-(define shim-lib (string-append tmpdir "/libw8shim.dylib"))
+(define shim-lib
+  (string-append tmpdir "/libw8shim." (if darwin? "dylib" "so")))
 (call-with-output-file shim-src
   (lambda (p)
     (display "#include <fcntl.h>\n" p)
-    (display "int w8_setlk (int fd, struct flock *fl) \
-{ return fcntl (fd, F_SETLK, fl); }\n" p)))
+    (display "#include <string.h>\n" p)
+    (display "int w8_setlk (int fd, int l_type, long long l_start, long long l_len) {\n" p)
+    (display "  struct flock fl;\n" p)
+    (display "  memset (&fl, 0, sizeof (fl));\n" p)
+    (display "  fl.l_type = (short) l_type;\n" p)
+    (display "  fl.l_whence = SEEK_SET;\n" p)
+    (display "  fl.l_start = (off_t) l_start;\n" p)
+    (display "  fl.l_len = (off_t) l_len;\n" p)
+    (display "  return fcntl (fd, F_SETLK, &fl);\n" p)
+    (display "}\n" p)))
 (let ((rc (system* "cc" "-shared" "-fPIC" "-o" shim-lib shim-src)))
-  (check "IO3a0 compiled the non-variadic fcntl shim (variadic-direct \
-calls EFAULT — recorded)"
+  (check "IO3a0 compiled the non-variadic fcntl shim (constructs struct flock \
+from <fcntl.h>; variadic-direct calls EFAULT — recorded)"
          (zero? rc)))
 (define shim-setlk
   (foreign-library-function (load-foreign-library shim-lib)
                             "w8_setlk"
                             #:return-type int
-                            #:arg-types (list int '*)))
+                            #:arg-types (list int int int64 int64)
+                            #:return-errno? #t))
 (define lock-file (string-append tmpdir "/locked"))
 (call-with-output-file lock-file (lambda (p) (display "L" p)))
 ;; record the direct-variadic failure for the audit trail (O_RDWR so EBADF
@@ -180,12 +200,11 @@ calls EFAULT — recorded)"
       (check "IO3a1 direct variadic fcntl F_SETLK fails EFAULT(14) on darwin-arm64"
              (and (= direct-rc -1) (= direct-err 14))))))
 (define parent-fd (open-fdes lock-file O_RDWR))
-(define parent-fl (make-flock F-WRLCK))     ; rooted across the call
-(define locked (shim-setlk parent-fd (bytevector->pointer parent-fl)))
-(format #t "IO3a parent F_SETLK via shim (whole-file write lock) => ~a~%"
-        locked)
-(check "IO3a parent acquired the whole-file write lock (F_SETLK => 0)"
-       (= locked 0))
+(receive (locked lock-err) (shim-setlk parent-fd F-WRLCK 0 0)
+  (format #t "IO3a parent F_SETLK via shim (whole-file write lock) => rc=~a errno=~a~%"
+          locked lock-err)
+  (check "IO3a parent acquired the whole-file write lock (F_SETLK => 0)"
+         (= locked 0)))
 (define (run-lock-child)
   (let* ((pr (pipe))
          (pid (spawn guile-bin
@@ -199,12 +218,14 @@ calls EFAULT — recorded)"
     (close-port (car pr))
     (status:exit-val (cdr (waitpid pid)))))
 (define excluded-code (run-lock-child))
-(format #t "IO3b child under parent lock exit code = ~a (42 = EAGAIN)~%"
+(format #t "IO3b child under parent lock exit code = ~a (42 = EAGAIN/EACCES)~%"
         excluded-code)
-(check "IO3b child process is EXCLUDED while the parent holds the lock"
+(check "IO3b child process is EXCLUDED (EAGAIN/EACCES) while parent holds lock"
        (eqv? excluded-code 42))
-(define parent-unfl (make-flock F-UNLCK))   ; rooted across the call
-(shim-setlk parent-fd (bytevector->pointer parent-unfl))
+(receive (unlocked unlock-err) (shim-setlk parent-fd F-UNLCK 0 0)
+  (format #t "IO3c parent F_UNLCK via shim => rc=~a errno=~a~%"
+          unlocked unlock-err)
+  (check "IO3c parent unlock F_UNLCK succeeds (rc=0)" (= unlocked 0)))
 (define free-code (run-lock-child))
 (format #t "NC3 child after release exit code = ~a~%" free-code)
 (check "NC3 control: child acquires the lock after the parent releases"
@@ -224,21 +245,26 @@ calls EFAULT — recorded)"
 ;; apply to the underlying inode (tv_nsec=456000000 observed via FFI stat),
 ;; while Guile's core stat:mtimensec answers 0 for EVERY file on darwin
 ;; (so sa-file-mtime-ms through core stat has SECOND resolution on darwin).
-;; The repair is an FFI stat(2) reading st_mtimespec / st_mtim:
-;;   - darwin-arm64: st_mtimespec at offset 48 (tv_sec u64@48, tv_nsec u64@56)
-;;   - linux-x86_64: st_mtim at offset 88 (tv_sec u64@88, tv_nsec u64@96)
+;; The repair is an FFI stat(2) reading signed time_t (s64) + tv_nsec:
+;;   - darwin-arm64: st_mtimespec at offset 48 (tv_sec s64@48, tv_nsec s64@56)
+;;   - linux-x86_64: st_mtim at offset 88 (tv_sec s64@88, tv_nsec s64@96)
 (define c-stat
   (foreign-library-function #f "stat"
                             #:return-type int
                             #:arg-types (list '* '*)))
+(define c-utimensat
+  (foreign-library-function #f "utimensat"
+                            #:return-type int
+                            #:arg-types (list int '* '* int)
+                            #:return-errno? #t))
 (define (ffi-mtime-ms path)
   (let* ((buf (make-bytevector 144 0))     ; rooted across the call
          (rc (c-stat (string->pointer path) (bytevector->pointer buf)))
          (sec-off (if darwin? 48 88))
          (nsec-off (if darwin? 56 96)))
     (and (zero? rc)
-         (+ (* (bytevector-u64-native-ref buf sec-off) 1000)
-            (quotient (bytevector-u64-native-ref buf nsec-off) 1000000)))))
+         (+ (* (bytevector-s64-native-ref buf sec-off) 1000)
+            (quotient (bytevector-s64-native-ref buf nsec-off) 1000000)))))
 (define mt-file (string-append tmpdir "/mtime"))
 (call-with-output-file mt-file (lambda (p) (display "m" p)))
 (utime mt-file 1700000000 1700000000 0 456000000)
@@ -258,6 +284,24 @@ calls EFAULT — recorded)"
   (check "IO5b FFI stat recovers exact sub-second mtime from utime ns \
 (1700000000456 ms)"
          (eqv? ffi-ms 1700000000456)))
+
+;; IO5c pre-epoch signed time_t case (-10s + 250ms = -9750ms) via utimensat
+(define mt-pre (string-append tmpdir "/mtime-pre"))
+(call-with-output-file mt-pre (lambda (p) (display "p" p)))
+(let ((ts (make-bytevector 32 0)))
+  (bytevector-s64-native-set! ts 0 -10)
+  (bytevector-s64-native-set! ts 8 250000000)
+  (bytevector-s64-native-set! ts 16 -10)
+  (bytevector-s64-native-set! ts 24 250000000)
+  (receive (rc err)
+      (c-utimensat AT-FDCWD (string->pointer mt-pre) (bytevector->pointer ts) 0)
+    (let ((pre-ms (ffi-mtime-ms mt-pre)))
+      (format #t "IO5c pre-epoch utimensat(-10s, 250ms) rc=~a err=~a => \
+ffi-mtime-ms=~a (core stat:mtime=~a)~%"
+              rc err pre-ms (stat:mtime (stat mt-pre)))
+      (check "IO5c FFI stat reads signed time_t for pre-epoch mtime \
+(-9750 ms)"
+             (and (zero? rc) (eqv? pre-ms -9750))))))
 
 ;; ---- IO6 subprocess ----------------------------------------------------------------
 (let* ((pr (pipe))

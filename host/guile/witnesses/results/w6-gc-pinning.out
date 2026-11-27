@@ -6,14 +6,16 @@ CHECK-OK   NC1 control: the collections were real (heap-size samples vary)
 CHECK-OK   P2 malloc'd foreign memory stable across GC (writes persist)
 P3 gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
 P3 heap-size: before=1785856 after-gc=1785856
-P3 heap-allocated-since-gc: before=26368 after-gc=3008
-P3 heap-total-allocated: before=2646576 after-gc=2656976
+P3 heap-allocated-since-gc: before=25232 after-gc=5296
+P3 heap-total-allocated: before=2642416 after-gc=2655104
 P3 heap-free-size: before=172032 after-gc=196608
 P3 gc-times: before=19 after-gc=20
-P3 gc-time-taken: before=48228000 after-gc=50903000
+P3 gc-time-taken: before=57134000 after-gc=60537000
 P3 protected-objects: before=0 after-gc=0
 CHECK-OK   P3a gc-stats carries heap-size (sa-total-memory-bytes candidate)
-CHECK-OK   P3b gc-stats carries allocation counters (sa-bytes-allocated candidates: heap-allocated-since-gc / heap-total-allocated)
+CHECK-OK   P3b gc-stats carries occupied-heap inputs (heap-size and heap-free-size)
+P3e occupied heap (- heap-size heap-free-size): base=1593344 with-2MiB=3821568 (heap-size=5242880) after-drop=1589248
+CHECK-OK   P3e occupied-heap estimate tracks retained 2MiB allocations across GC and remains <= heap-size
 CHECK-OK   P3c no generation counters in gc-stats (sa-gc-max-generation: no generations on a BDW-GC build)
 P3d getrlimit(RLIMIT_AS=5) => 0 rlim_cur=9223372036854775807
 CHECK-OK   P3d getrlimit is FFI-reachable (heap ceiling source)

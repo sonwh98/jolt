@@ -5,8 +5,6 @@
          '[jolt.scheme :as p1e-scheme])
 
 (def ^:private p1e-var (p1e-scheme/proc "var-deref"))
-(def ^:private p1e-dir (jolt.host/getenv "JOLT_P1E_STORE"))
-(def ^:private p1e-durable (atom nil))
 (def ^:private p1e-memory (atom nil))
 (def ^:private p1e-session-store (atom nil))
 (def ^:private p1e-requests (atom nil))
@@ -24,16 +22,6 @@
 
 (defn- p1e-next [ring cursor]
   (p1e-stream/next ring (:dao.stream/cursor cursor)))
-
-(defn- p1e-open-shell []
-  (let [opened (p1e-call "yin.shell.store" "open" {:type :dht :dir p1e-dir} {})]
-    (reset! p1e-durable (:index-store opened))
-    :durable-dht-opened))
-
-(defn- p1e-open-dir []
-  (let [handle (p1e-call "dao.space.store" "open" p1e-dir)]
-    (jing/close! handle)
-    :durable-directory-opened))
 
 (defn- p1e-open-memory []
   (let [requests (p1e-make-ring)
@@ -93,14 +81,6 @@
 
 (defn- p1e-run [op]
   (case op
-    :shell-open (p1e-open-shell)
-    :durable-put (if-let [handle @p1e-durable]
-                   (jing/materialize! handle p1e-value)
-                   :blocked-no-durable-dht-handle)
-    :durable-get (if-let [handle @p1e-durable]
-                   (jing/get handle (jing/segment-key p1e-value) :missing)
-                   :blocked-no-durable-dht-handle)
-    :directory-open (p1e-open-dir)
     :memory-open (p1e-open-memory)
     :memory-put (if-let [handle @p1e-memory]
                   (jing/materialize! handle p1e-value)
@@ -113,8 +93,8 @@
     :session-round-trip (p1e-session-round-trip)
     :udp-loopback (p1e-loopback)
     :udp-native-load (do (require 'jolt.socket.native) :socket-native-loaded)
-    :c4-control (p1e-call "dao.posix.file" "realpath" p1e-dir)
-    :close (do (jing/close! @p1e-durable) (jing/close! @p1e-memory) :closed)))
+    :c4-control ((p1e-scheme/proc "joltffi-public-blocking-raise"))
+    :close (do (jing/close! @p1e-memory) :closed)))
 
 (defn- p1e-activate [registry]
   (module/register-host-module
@@ -129,6 +109,4 @@
     (assoc-in opened [:engine-inputs :host-modules 'p1e.probe] p1e-activate)))
 
 (defn -main [& args]
-  (main/main! args {:composition-spec? #{:mem :dht}
-                    :parse-store-arg parse-store
-                    :open p1e-open}))
+  (main/main! args (assoc composition :open p1e-open)))

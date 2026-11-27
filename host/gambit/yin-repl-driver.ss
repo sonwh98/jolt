@@ -3,6 +3,7 @@
 (##include "source-loader.ss")
 (##include "unbound-vars-lib.ss")
 (##include "yin/blake3.ss")
+(##include "yin/file.ss")
 
 ;; Only startup uses these thunks. Every thunk initializes a namespace in the
 ;; live loader's file/namespace context and can require another namespace.

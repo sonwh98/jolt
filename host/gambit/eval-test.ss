@@ -28,6 +28,9 @@
 (check "(+ 1 2)" "3")
 (check "(* 2/3 6)" "4")
 (check "(+ 9007199254740993 1)" "9007199254740994")
+(check (string-append "(let [r (rand) q (rand-int 2147483647)] "
+                      "(and (<= 0 r) (< r 1) (int? q) (<= 0 q) (< q 2147483647)))")
+       "true" "rand and DHT query IDs stay within their bounds")
 ;; collections + rendering
 (check "{:a 1 :b 2}" "{:a 1, :b 2}")
 (check "(conj [1 2] 3)" "[1 2 3]")

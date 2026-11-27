@@ -1,9 +1,10 @@
 (ns jolt.gambit.yin
-  "The memory and memory-backed DHT compositions for the Gambit terminal."
+  "Yin's shared durable-store composition and Gambit's host modules."
   (:require [dao.jing :as jing]
             [jolt.ffi :as ffi]
             [yin.repl.main :as main]
             [yin.repl.store :as store]
+            [yin.shell.main :as shell]
             [yin.vm :as vm]
             [yin.vm.module :as module]))
 
@@ -23,15 +24,11 @@
     {'materialize-sha256
      (vm/primitive-profile 'materialize-sha256 :pure [1] #{} :none)}))
 
-(def ^:private memory-engine-inputs
+(def ^:private gambit-engine-inputs
   {:host-modules {'jolt.ffi activate-ffi
                   'dao.jing.mem activate-store}})
 
-(defn- open-memory [spec _opts]
-  {:index-store (store/open spec)
-   :engine-inputs memory-engine-inputs})
-
-(defn- open-dht []
+(defn- open-memory-dht []
   (let [join (requiring-resolve 'dao.space.dht/join)
         payload-budget (requiring-resolve 'dao.space.dht/payload-budget)
         local (store/open :mem)
@@ -49,24 +46,30 @@
         (throw e)))))
 
 (defn- open-store [spec opts]
-  (if (= spec :dht)
-    (assoc (open-dht) :engine-inputs memory-engine-inputs)
-    (open-memory spec opts)))
+  (let [opened (if (= spec :dht)
+                 (open-memory-dht)
+                 ((:open shell/composition) spec opts))]
+    (update-in opened [:engine-inputs :host-modules]
+               merge (:host-modules gambit-engine-inputs))))
 
 (defn- parse-store [arg]
-  (if (= arg "dht:")
-    :dht
-    (let [spec (store/parse-arg arg [{:prefix "dht:" :label "dht:"
-                                     :parse (fn [dir]
-                                              (throw (ex-info
-                                                       "Gambit supports --index-store dht: with memory backing. Durable dht:<dir> requires Chez."
-                                                       {:dir dir})))}])]
-      (when-not (= spec :mem)
-        (throw (ex-info "The local Gambit session supports --index-store mem or dht:"
-                        {:store spec})))
-      spec)))
+  (if (= arg "dht:") :dht ((:parse-store-arg shell/composition) arg)))
+
+(defn- parse-store-command [args]
+  (if (= ["dht:"] (vec args))
+    {:spec :dht :label "dht:" :opts {:index-store-spec :dht}}
+    ((:parse-store-command shell/composition) args)))
+
+(def ^:private composition
+  (assoc shell/composition
+         :composition-spec? (constantly true)
+         :parse-store-arg parse-store
+         :parse-store-command parse-store-command
+         :open open-store
+         :help-lines (into (:help-lines shell/composition)
+                           [""
+                            "Gambit also accepts dht: with memory backing."
+                            "WebSocket serving and signed DHT names and heads are unavailable."])))
 
 (defn -main [& args]
-  (main/main! args {:composition-spec? #{:mem :dht}
-                    :parse-store-arg parse-store
-                    :open open-store}))
+  (main/main! args composition))

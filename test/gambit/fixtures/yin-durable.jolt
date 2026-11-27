@@ -1,0 +1,93 @@
+
+;; Appended by the process gate to observe the actual selected store.
+(require '[jolt.scheme :as durable-test-scheme])
+(require '[dao.host.text :as durable-test-text])
+(require '[dao.posix.file :as durable-test-file])
+(def ^:private durable-witness-trigger
+  ((durable-test-scheme/proc "getenv") "JOLT_YIN_DURABLE_WITNESS" false))
+(def ^:private durable-trigger-exists? (durable-test-scheme/proc "file-exists?"))
+(def ^:private durable-test-scratch
+  ((durable-test-scheme/proc "getenv") "JOLT_YIN_DURABLE_SCRATCH" false))
+(def ^:private durable-test-store
+  ((durable-test-scheme/proc "getenv") "JOLT_YIN_DURABLE_STORE" false))
+(def ^:private durable-test-alias
+  ((durable-test-scheme/proc "getenv") "JOLT_YIN_DURABLE_ALIAS" false))
+(def ^:private durable-witness-written? (atom false))
+(def ^:private durable-test-opened (atom nil))
+(def ^:private durable-test-value {:p2 "durable-gambit" :count 7331})
+
+(defn- durable-test-write-new []
+  ;; The key-file seam must never truncate an existing entry: the first
+  ;; O_EXCL create writes, the second answers :exists, the bytes survive,
+  ;; and the HEAD-temp seam still reports the exclusive-create failure.
+  (if-not durable-test-scratch
+    :write-new-skipped
+    (let [path (str durable-test-scratch "/exclusive-key")
+          key-bytes (durable-test-text/utf8-encode "p2-key")]
+      (try
+        (let [first (durable-test-file/write-new-private! path key-bytes)
+              second (durable-test-file/write-new-private! path
+                       (durable-test-text/utf8-encode "x"))
+              kept (durable-test-file/read-all path)
+              public-threw?
+              (try (durable-test-file/write-new-synced! path
+                     (durable-test-text/utf8-encode "y"))
+                   false
+                   (catch Throwable _ true))]
+          (if (and (nil? first)
+                   (= :exists second)
+                   (= (vec key-bytes) (vec kept))
+                   public-threw?)
+            :write-new-ok
+            [:write-new-failed first second (vec kept) public-threw?]))
+        (catch Throwable e
+          [:write-new-error (str e)])))))
+
+(defn- durable-test-alias-lock []
+  ;; The writer already owns <store>/lock. The symlinked spelling must be
+  ;; refused before this process opens a second descriptor for that inode:
+  ;; closing one would release the lock the writer holds. The refusal comes
+  ;; from the device/inode hold table, not from a lexical path key.
+  (if-not (and durable-test-store durable-test-alias)
+    :alias-lock-skipped
+    (let [held (durable-test-file/lock-file!
+                 (str durable-test-alias "/lock"))]
+      (if (= :held held) :alias-lock-ok [:alias-lock-failed held]))))
+
+(defn- durable-test-run [operation]
+  (let [opened @durable-test-opened
+        handle (:index-store opened)
+        address (jing/segment-key durable-test-value)]
+    (case operation
+      :put (when (= :missing (jing/get handle address :missing))
+             (jing/materialize! handle durable-test-value))
+      :get (jing/get handle address :missing)
+      :write-new (durable-test-write-new)
+      :alias-lock (durable-test-alias-lock)
+      :recovered (get-in opened [:recovery :manifest]))))
+
+(defn- activate-durable-test [registry]
+  (module/register-host-module
+    registry 'p2.probe
+    {'run durable-test-run}
+    {'run (vm/primitive-profile 'run :pure [1] #{} :none)}))
+
+(defn- durable-test-open [spec opts]
+  (let [opened (open-store spec opts)]
+    (reset! durable-test-opened opened)
+    (assoc-in opened [:engine-inputs :host-modules 'p2.probe] activate-durable-test)))
+
+(defn- durable-test-step [session now]
+  (let [[next lines events] ((:step composition) session now)]
+    ;; Replicate the witness before the fixture's REPL commands publish their
+    ;; own code indexes. The actual composition and UDP owner do the transport.
+    (if (and durable-witness-trigger
+             (not @durable-witness-written?)
+             (durable-trigger-exists? durable-witness-trigger))
+      (let [address (durable-test-run :put)]
+        (reset! durable-witness-written? true)
+        [next (conj lines (str "p2 durable witness " address)) events])
+      [next lines events])))
+
+(defn -main [& args]
+  (main/main! args (assoc composition :open durable-test-open :step durable-test-step)))

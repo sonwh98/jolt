@@ -1,0 +1,39 @@
+diff --git a/src/dev/yin_repl_launch.clj b/src/dev/yin_repl_launch.clj
+--- a/src/dev/yin_repl_launch.clj
++++ b/src/dev/yin_repl_launch.clj
+@@ -17,7 +17,7 @@
+
+
+ (def ^:private gambit-capabilities
+-  "Local --index-store mem session; no :yang/python frontend or WebSocket serving.")
++  "--index-store mem, dht: (memory), file:<dir> and dht:<dir> (durable). No :yang/python frontend or WebSocket serving.")
+
+
+ (def ^:private gambit-blocking
+diff --git a/src/cljc/yin/vm/docs/yin.repl.md b/src/cljc/yin/vm/docs/yin.repl.md
+--- a/src/cljc/yin/vm/docs/yin.repl.md
++++ b/src/cljc/yin/vm/docs/yin.repl.md
+@@ -78,7 +78,7 @@
+ x86_64) is callable in-session. Evidence: `make gambityinrepl` in the jolt
+ clone (both-platform PASS transcripts); the acceptance gate is
+ `host/gambit/yin-repl-session.sh` — a 12-step ordered state machine over real
+-`yin>` replies. Yin args pass through (`--index-store mem`, etc.). Per-backend
++`yin>` replies. Yin args pass through (`--index-store mem`, `file:<dir>`, `dht:` and `dht:<dir>`). Per-backend
+ capability summary: JVM/Node/Dart = full (all frontends, all stores);
+ `jolt-chez` = full minus native-parser availability as provisioned;
+ `jolt-gambit` = core Yin (Clojure frontend, yin.vm, qualified FFI) with
+@@ -223,10 +223,9 @@
+   - `(use-store ...)` always executes on the local driver (even while attached to a remote server via `(connect ...)`) and is refused over remote `--port` evaluation requests (`Error: (use-store ...) is a local host command and cannot be run over a remote endpoint`).
+   - Like `(vm :type)` and `(trust ...)` / `(untrust ...)`, `(use-store ...)` never reads or writes `<node-dir>/state.edn`, so saved startup profiles are never clobbered by exploratory in-session store switches.
+
+-- **Gambit boundary (`jolt-gambit`, owner ruling C4):**
+-  - On `jolt-gambit`, `(use-store "mem")` (or `:mem`) on a quiesced session opens a fresh in-memory store and preserves the Gambit host modules (`jolt.ffi` and `dao.jing.mem`; re-require them in the rebuilt session before calling their exports).
+-  - Durable targets `(use-store "file:<dir>")` and `(use-store "dht:<dir>" ...)` hit the C4 blocking-FFI refusal inline during `open-first`:
+-    `Error: blocking ffi is unsupported on the gambit target — GC-safe blocking is unqualified on Gambit 4.9.8 (no verified release/claim transition)`
+-  - The active `:mem` store and REPL session survive the refusal intact.
++- **Gambit stores (`jolt-gambit`):**
++  - `mem` and `dht:` are memory-backed. `file:<dir>` and `dht:<dir>` use the durable directory store and resume from `state.edn`.
++  - Store changes preserve the Gambit host modules (`jolt.ffi` and `dao.jing.mem`; re-require them in the rebuilt session).
++  - The C4 refusal still applies to user-declared blocking FFI. WebSocket serving and signed DHT names and heads are unavailable on this host.
+
+ ---

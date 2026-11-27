@@ -2,8 +2,8 @@
 
 This tier implements native memory, scoped loading, registered ordinary calls,
 invocation-local errno capture, and real `##gc`. It is qualified here only on
-**macOS arm64, the provisioned single-threaded Gambit 4.9.8**. P2/P3 consumers
-remain Chez-only. It does not provide GC-safe blocking or callbacks.
+**macOS arm64, the provisioned single-threaded Gambit 4.9.8**. Public
+GC-safe blocking calls and foreign-thread callbacks remain unavailable.
 
 Run from the checkout root:
 
@@ -142,13 +142,36 @@ over the host-owned primitives. Public two-argument `read-array` and
 `write-array` copy raw bytes via the adapter's u8vector bulk copies. String
 arguments remain refused; native copies via `string->ptr` work.
 
-`make gambitdht` runs native Yin with `--index-store dht:` for a memory-backed
-DHT index and checks the UDP loopback seam in the session. This CLI profile
-starts a solo node. Durable `dht:<dir>` requires Chez in the Jolt launchers.
-Generic socket close and file I/O remain subject to C4. For owned Internet
-datagram descriptors, a native close worker owns the syscall and its errno.
-Gambit yields while it waits for completion. The Linux execution leg is
-separate from the Darwin gate.
+`make gambitdht` exercises the memory-backed `dht:` session, the DHT
+request ring and the native UDP loopback. `make gambitdht-durable` opens
+both `file:<dir>` and `dht:<dir>`, checks a second launch is refused while
+the writer owns the directory, waits for a second UDP peer to read a
+replicated value and verifies the bytes and HEAD in new Yin processes
+resuming from `state.edn`. Pass `DATOMWORLD_ROOT` when the checkouts are
+not siblings.
+
+Yin uses Gambit file ports for the Jing content log, native metadata
+file reads, exclusive temporary writes and rename. `force-output` at
+level 1 supplies POSIX `fsync` for open file ports. Temporary and key
+writes open with `create: #t` (Gambit's `O_CREAT|O_EXCL`): an existing
+entry is never truncated, the key-file seam answers `:exists`, and the
+HEAD-temp seam reports the exclusive-create failure. Directory creation,
+classification and directory canonicalization use Gambit's filesystem
+primitives. Canonicalization is lexical rather than `realpath(3)` — this
+host has no `readlink` port — so a symlinked spelling keeps its given
+form; the lock seam keys its in-process holdings by the lock file's
+device/inode so two spellings of one directory still name one owner. The
+directory lock uses `fcntl(F_SETLK)` with the same whole-file record lock
+as Chez. Lock open and close, recovery truncation, directory sync and
+writability checks run on a private native worker. The bridge only
+submits and polls these jobs, and Gambit parks between polls. The worker
+owns C memory and enters no Scheme code. Public `:blocking` FFI continues
+to refuse. Gambit's Yin adapter still lacks WebSocket serving and signed
+DHT names and heads.
+
+`host/gambit/yin/datomworld-launcher.patch` updates the Datomworld
+`bb yin-repl` capability banner and manual for a checkout using this
+runtime.
 
 The real collector witness clears an unreachable weak key. It does not test
 collection during C execution. Bulk copies borrow Scheme storage only for a

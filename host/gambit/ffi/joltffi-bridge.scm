@@ -26,6 +26,10 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <time.h>
 _Static_assert(sizeof(void*) == 8 && sizeof(long) == 8 && sizeof(int) == 4, "stage-1 requires LP64");
 
 static int joltffi_capture_test_enabled(void)
@@ -141,6 +145,173 @@ static int64_t joltffi_poll_datagram_close(unsigned long address)
   if (!atomic_load_explicit(&job->done, memory_order_acquire))
     return INT64_MIN;
   return job->result * INT64_C(4294967296) + job->error;
+}
+
+
+/* Store syscalls with no Gambit port equivalent. Submission copies the path
+   and returns immediately. All filesystem calls, including fd disposal,
+   take place on the worker. No worker sees a Scheme object or runs Scheme. */
+enum joltffi_file_op {
+  JOLT_FILE_LOCK, JOLT_FILE_UNLOCK, JOLT_FILE_TRUNCATE,
+  JOLT_FILE_SYNC_DIR, JOLT_FILE_WRITABLE
+};
+enum joltffi_file_state { JOLT_FILE_RUNNING, JOLT_FILE_READY,
+                         JOLT_FILE_TAKEN, JOLT_FILE_ABANDONED };
+
+struct joltffi_file_job {
+  atomic_int refs;
+  atomic_int state;
+  int op;
+  int fd;
+  int64_t size;
+  uint64_t device;
+  uint64_t inode;
+  int result;
+  char path[];
+};
+
+static int joltffi_file_open(const char *path, int flags)
+{
+  int fd;
+  do {
+    fd = open(path, flags | O_CLOEXEC | O_NONBLOCK, 0666);
+  } while (fd < 0 && errno == EINTR);
+  return fd;
+}
+
+static int joltffi_file_close(int fd)
+{
+  if (close(fd) == 0 || errno == EINTR)
+    return 0;
+  return -errno;
+}
+
+static int joltffi_file_run(struct joltffi_file_job *job)
+{
+  if (job->op == JOLT_FILE_UNLOCK)
+    return joltffi_file_close(job->fd);
+  if (job->op == JOLT_FILE_WRITABLE)
+    return access(job->path, W_OK | X_OK) == 0 ? 1 : 0;
+
+  int flags = job->op == JOLT_FILE_SYNC_DIR ? O_RDONLY | O_DIRECTORY :
+              job->op == JOLT_FILE_LOCK ? O_RDWR | O_CREAT | O_NOFOLLOW :
+              O_WRONLY;
+  int fd = joltffi_file_open(job->path, flags);
+  if (fd < 0)
+    return -errno;
+
+  int result;
+  struct stat st;
+  if (job->op == JOLT_FILE_SYNC_DIR) {
+    result = fsync(fd) == 0 ? 0 : -errno;
+  } else if (fstat(fd, &st) != 0) {
+    result = -errno;
+  } else if (!S_ISREG(st.st_mode)) {
+    result = -EINVAL;
+  } else if (job->op == JOLT_FILE_LOCK) {
+    /* F_SETLK excludes the Chez, JVM and Dart record locks. Never queue
+       behind another owner. Reject aliased lock inodes in separate dirs. */
+    struct flock lock = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+    if (st.st_nlink != 1)
+      result = -EINVAL;
+    else {
+      int rc;
+      do {
+        rc = fcntl(fd, F_SETLK, &lock);
+      } while (rc < 0 && errno == EINTR);
+      if (rc == 0)
+        return fd;
+      result = errno == EACCES || errno == EAGAIN ? INT_MAX : -errno;
+    }
+  } else if ((uint64_t)st.st_dev != job->device ||
+             (uint64_t)st.st_ino != job->inode) {
+    result = -ESTALE;
+  } else {
+    int rc;
+    do {
+      rc = ftruncate(fd, (off_t)job->size);
+    } while (rc < 0 && errno == EINTR);
+    result = rc == 0 ? 0 : -errno;
+  }
+  int closed = joltffi_file_close(fd);
+  return result == 0 ? closed : result;
+}
+
+static void joltffi_file_job_unref(struct joltffi_file_job *job)
+{
+  if (atomic_fetch_sub_explicit(&job->refs, 1, memory_order_acq_rel) == 1)
+    free(job);
+}
+
+static void *joltffi_file_worker(void *arg)
+{
+  struct joltffi_file_job *job = arg;
+  job->result = joltffi_file_run(job);
+  int expected = JOLT_FILE_RUNNING;
+  atomic_compare_exchange_strong_explicit(&job->state, &expected,
+      JOLT_FILE_READY, memory_order_release, memory_order_relaxed);
+  if (job->op == JOLT_FILE_LOCK && job->result >= 0 && job->result != INT_MAX) {
+    /* An interrupted wait hands the unclaimed lock back to this worker. */
+    int state;
+    const struct timespec delay = { .tv_nsec = 1000000 };
+    while ((state = atomic_load_explicit(&job->state, memory_order_acquire))
+           == JOLT_FILE_READY)
+      nanosleep(&delay, NULL);
+    if (state == JOLT_FILE_ABANDONED)
+      joltffi_file_close(job->result);
+  }
+  joltffi_file_job_unref(job);
+  return NULL;
+}
+
+static unsigned long joltffi_start_file(int op, const char *path, int fd,
+                                        int64_t size, uint64_t device, uint64_t inode)
+{
+  size_t length = strlen(path) + 1;
+  struct joltffi_file_job *job = malloc(sizeof *job + length);
+  if (job == NULL)
+    return 0;
+  atomic_init(&job->refs, 2);
+  atomic_init(&job->state, JOLT_FILE_RUNNING);
+  job->op = op;
+  job->fd = fd;
+  job->size = size;
+  job->device = device;
+  job->inode = inode;
+  memcpy(job->path, path, length);
+
+  pthread_attr_t attrs;
+  pthread_t worker;
+  int error = pthread_attr_init(&attrs);
+  if (error == 0) {
+    error = pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_DETACHED);
+    if (error == 0)
+      error = pthread_create(&worker, &attrs, joltffi_file_worker, job);
+    pthread_attr_destroy(&attrs);
+  }
+  if (error != 0) {
+    /* Distinct from a syscall failure: the job never started. */
+    job->result = INT_MIN + error;
+    atomic_store_explicit(&job->state, JOLT_FILE_READY, memory_order_release);
+    joltffi_file_job_unref(job);
+  }
+  return (unsigned long)job;
+}
+
+static int64_t joltffi_poll_file(unsigned long address)
+{
+  struct joltffi_file_job *job = (struct joltffi_file_job *)address;
+  if (atomic_load_explicit(&job->state, memory_order_acquire) != JOLT_FILE_READY)
+    return INT64_MIN;
+  return job->result;
+}
+
+static void joltffi_release_file(unsigned long address, int taken)
+{
+  struct joltffi_file_job *job = (struct joltffi_file_job *)address;
+  atomic_store_explicit(&job->state,
+      taken ? JOLT_FILE_TAKEN : JOLT_FILE_ABANDONED, memory_order_release);
+  joltffi_file_job_unref(job);
 }
 
 /* ---- memory ----------------------------------------------------------------- */
@@ -294,6 +465,34 @@ JOLTFFI-C-BEGIN
                               (+ result 8589934592)))
                       (else result)))))
           (lambda () (release job))))))
+
+
+;; Private store bridge. The VM polls atomic state and parks between polls.
+;; The operation IDs are joltffi_file_op's closed set above.
+(define (joltffi-await-file op path fd size dev ino)
+  (let* ((start (c-lambda (int char-string int int64 unsigned-int64 unsigned-int64)
+                          unsigned-long "joltffi_start_file"))
+         (poll (c-lambda (unsigned-long) int64 "joltffi_poll_file"))
+         (release (c-lambda (unsigned-long int) void "joltffi_release_file"))
+         (job (start op path fd size dev ino))
+         (taken 0))
+    (when (= job 0)
+      (error "Gambit file worker allocation failed"))
+    (dynamic-wind
+      (lambda () #f)
+      (lambda ()
+        (let loop ()
+          (let ((result (poll job)))
+            (cond ((= result -9223372036854775808)
+                   (thread-sleep! 0.001)
+                   (loop))
+                  ((< result -1073741824)
+                   (error "Gambit file worker submission failed"
+                          (+ result 2147483648)))
+                  (else
+                   (set! taken 1)
+                   result)))))
+      (lambda () (release job taken)))))
 
 ;; ---- loader wrappers ----------------------------------------------------------
 (define (joltffi-dlopen path)

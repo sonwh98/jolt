@@ -1056,9 +1056,11 @@
 ;; GAMBIT ADAPTATION (see port-log): no lazy clock-seed. Gambit's default
 ;; random source is already seeded from time+pid at process start, so the
 ;; Chez seeding machinery (random-seeded?/random-seed-counter/seed-random!)
-;; is deleted; every jolt-level draw is (random-integer n), same [0, n) contract
-;; as Chez's (random n).
-(define (jolt-random n) (random-integer n))
+;; is deleted. Gambit separates exact-integer bounds from real draws.
+(define (jolt-random n)
+  (if (exact-integer? n)
+      (random-integer n)
+      (* n (random-real))))
 
 ;; GAMBIT ADAPTATION (see port-log): no OS CSPRNG on this target — the whole
 ;; entropy-source region (/dev/urandom, BCryptGenRandom, the warn-once

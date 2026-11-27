@@ -40,7 +40,8 @@ def session_key(kernel, runtime, datomworld):
              for name in ("jolt", "cljc", "clj")), runtime / "stdlib", runtime / "jolt-core",
              REPO / "jolt-core"]
     paths = [kernel, REPO / "Makefile", *HOST.glob("yin-*.ss"), HOST / "source-loader.ss",
-             HOST / "host-apply.ss", HOST / "unbound-vars-lib.ss", HOST / "yin/blake3.ss",
+             HOST / "host-apply.ss", HOST / "unbound-vars-lib.ss",
+             *HOST.joinpath("yin").glob("*.ss"),
              HOST / "build-yin-session.py", HOST / "gen-seed.ss",
              REPO / "host/chez/emit-image.ss", *HOST.joinpath("ffi").glob("*.*"),
              runtime / "build/gambit-ffi/joltffi-bridge.o1"]

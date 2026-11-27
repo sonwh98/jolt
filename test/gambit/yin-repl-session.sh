@@ -9,8 +9,9 @@ mkdir -p build/gambit-yin
 transcript=${JOLT_YIN_REPL_TRANSCRIPT:-}
 if [ -z "$transcript" ]; then
   transcript=$(mktemp "$PWD/build/gambit-yin/repl.XXXXXX")
-  trap 'rm -f "$transcript"' EXIT
+  trap 'rm -f "$transcript"; rm -rf /tmp/gambit-nope' EXIT
 fi
+rm -rf /tmp/gambit-nope
 
 status=0
 python3 test/gambit/yin-prompt-time.py \
@@ -58,8 +59,8 @@ awk '
   /^yin> Error: cannot switch index store while the session holds evaluated state; run [(]reset[)] first$/ && step == 10 { step++; next }
   /^yin> 101$/ && step == 11 { step++; next }
   /^yin> SemanticVM reset$/ && step == 12 { step++; next }
-  /^yin> Error: .*blocking ffi is unsupported on the gambit target/ && step == 13 { step++; next }
-  /^yin> Error: .*blocking ffi is unsupported on the gambit target/ && step == 14 { step++; next }
+  /^yin> Switched index store to file:\/tmp\/gambit-nope [(]empty code index[)]$/ && step == 13 { step++; next }
+  /^yin> Error: \/tmp\/gambit-nope is locked by another process/ && step == 14 { step++; next }
   /^yin> Switched index store to mem [(]code index cleared[)]$/ && step == 15 { step++; next }
   /^yin> 43$/ && step == 16 { step++; next }
   /^yin> \047jolt[.]ffi$/ && step == 17 { step++; next }

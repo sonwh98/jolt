@@ -218,8 +218,14 @@
 (defn- tree-sorted? [x] (or (sorted-map? x) (sorted-set? x)))
 ;; Clojure: (instance? clojure.lang.Sorted coll). Any deftype/reify declaring
 ;; Sorted qualifies (data.priority-map, user B-trees). instance-check: the
-;; instance? macro is tier 30.
-(defn sorted? [x] (or (tree-sorted? x) (instance-check clojure.lang.Sorted x)))
+;; instance? macro is tier 30. Guarded by jrec-method? (like empty and ifn? in
+;; 22-coll.clj) so built-in values and records without seqFrom never enter
+;; instance-check, whose value-host-tags walk re-enters any __register-class!
+;; predicate that calls sorted?.
+(defn sorted? [x]
+  (or (tree-sorted? x)
+      (and (jolt.host/jrec-method? x "seqFrom")
+           (instance-check clojure.lang.Sorted x))))
 
 ;; --- subseq / rsubseq ---------------------------------------------------------
 ;; test is one of < <= > >= applied Clojure-style to the comparator result:

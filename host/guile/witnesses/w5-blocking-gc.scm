@@ -46,24 +46,23 @@
 (define rounds-during-block 0)
 (define rounds-total 0)
 (define witness-vector (make-vector 100000 0))
-(define stats-deltas '())
+(define heaps-during-block '())
 
 (define (b-round!)
-  ;; one real collection round over live data
-  (let* ((before (gc-stats))
-         (_ (do ((i 0 (+ i 1)))
+  ;; one real collection round over live data (explicit (gc) + churn)
+  (let* ((_ (do ((i 0 (+ i 1)))
                 ((= i 20000))
               (vector-set! witness-vector i (+ i 1))))
          (garbage (make-vector 5000 'churn))
-         (after (gc-stats)))
+         (in-block? (atomic-box-ref a-in-block)))
     (set! garbage #f)
+    (when (zero? (modulo rounds-total 10))
+      (gc))
     (set! rounds-total (+ rounds-total 1))
-    (when (atomic-box-ref a-in-block)
-      (set! rounds-during-block (+ rounds-during-block 1)))
-    (set! stats-deltas
-          (cons (cons (assq-ref before 'heap-size)
-                      (assq-ref after 'heap-size))
-                stats-deltas))))
+    (when in-block?
+      (set! rounds-during-block (+ rounds-during-block 1))
+      (set! heaps-during-block
+            (cons (assq-ref (gc-stats) 'heap-size) heaps-during-block)))))
 
 (define b-thread
   (call-with-new-thread
@@ -86,40 +85,46 @@
 
 ;; A enters the blocking foreign call for 3 seconds.
 (atomic-box-set! a-in-block #t)
+(define gc-times-before-block (assq-ref (gc-stats) 'gc-times))
 (define slept (c-sleep 3))
+(define gc-times-after-block (assq-ref (gc-stats) 'gc-times))
 (atomic-box-set! a-in-block #f)
+(define gc-times-during (- gc-times-after-block gc-times-before-block))
 (format #t "A: blocking foreign call returned ~as~%" slept)
 (define rounds-after (- rounds-total rounds-before-block))
 (format #t "observed state: rounds-before=~a rounds-after=~a \
-rounds-during-block=~a~%"
-        rounds-before-block rounds-after rounds-during-block)
+rounds-during-block=~a gc-times-before=~a gc-times-after=~a gc-times-during=~a~%"
+        rounds-before-block rounds-after rounds-during-block
+        gc-times-before-block gc-times-after-block gc-times-during)
 (check "A's C call really blocked ~3s (wall clock)"
        (>= rounds-after 1))
-(check "DECISIVE: B completed collection rounds WHILE A sat in the C call \
+(check "DECISIVE: B completed rounds AND real GC collections \
+(gc-times incremented) WHILE A sat in the C call \
 (blocking collapses to plain: the collector does not stop)"
-       (>= rounds-during-block 1))
+       (and (>= rounds-during-block 1) (> gc-times-during 0)))
 
-;; real-GC evidence: heap-size samples changed across rounds, and the live
+;; real-GC evidence: gc-times incremented during the block, and the live
 ;; witness vector's mutations are intact.
-(define distinct-heaps
-  (length (delete-duplicates (map car (reverse stats-deltas)))))
-(format #t "distinct heap-size samples across rounds: ~a~%" distinct-heaps)
-(check "collections were real (heap-size samples vary; sa-gc-collect is \
-not a no-op)"
-       (> distinct-heaps 1))
+(format #t "heap-size samples during block: ~a~%"
+        (length (delete-duplicates heaps-during-block)))
+(check "collections were real during block (gc-times delta > 0)"
+       (> gc-times-during 0))
 (check "live vector mutations intact after concurrent collections"
        (= (vector-ref witness-vector 19999) 20000))
 
-;; NC: counter machinery control — a window with NO C call must also count
-;; rounds (proves the counter is not an artifact of the block window).
-(define before-nc rounds-during-block)
-(atomic-box-set! a-in-block #t)
-(sleep 1)                                   ; SCHEME-level sleep, no C-FFI
-(define after-nc rounds-during-block)
-(atomic-box-set! a-in-block #f)
-(check "NC control: the in-block counter also counts in a no-C window \
-(counters distinguish)"
-       (> after-nc before-nc))
+;; NC: counter machinery negative control — while a-in-block is #f over a 1s
+;; window, rounds-total continues advancing while rounds-during-block MUST NOT
+;; advance (proves the in-block counter specifically isolates the block window).
+(define during-nc0 rounds-during-block)
+(define total-nc0 rounds-total)
+(sleep 1)
+(define during-nc1 rounds-during-block)
+(define total-nc1 rounds-total)
+(format #t "NC control (a-in-block=#f, 1s window): during ~a->~a, total ~a->~a~%"
+        during-nc0 during-nc1 total-nc0 total-nc1)
+(check "NC control: rounds-during-block stays unchanged when a-in-block is #f \
+while rounds-total advances"
+       (and (= during-nc1 during-nc0) (> total-nc1 total-nc0)))
 
 (cancel-thread b-thread)
 (if (zero? fails)

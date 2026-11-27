@@ -2,7 +2,7 @@
 === W7 foreign-pthread-entry witness ===
 W7: guile-3.0 pkg-config flags: ("-I/opt/homebrew/Cellar/guile/3.0.11/include/guile/3.0" "-I/opt/homebrew/opt/gmp" "-I/opt/homebrew/opt/gmp/include" "-I/opt/homebrew/opt/readline/include" "-D_THREAD_SAFE" "-I/opt/homebrew/opt/bdw-gc/include" "-L/opt/homebrew/Cellar/guile/3.0.11/lib" "-lguile-3.0" "-L/opt/homebrew/opt/bdw-gc/lib" "-lgc")
 CHECK-OK   F0 pkg-config guile-3.0 available to build the fixture
-W7: build: ("cc" "-O2" "-o" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w7-fixture" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w7-fixture.c" "-I/opt/homebrew/Cellar/guile/3.0.11/include/guile/3.0" "-I/opt/homebrew/opt/gmp" "-I/opt/homebrew/opt/gmp/include" "-I/opt/homebrew/opt/readline/include" "-D_THREAD_SAFE" "-I/opt/homebrew/opt/bdw-gc/include" "-L/opt/homebrew/Cellar/guile/3.0.11/lib" "-lguile-3.0" "-L/opt/homebrew/opt/bdw-gc/lib" "-lgc")
+W7: build: ("cc" "-O2" "-o" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/build/w7-fixture" "/Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w7-fixture.c" "-I/opt/homebrew/Cellar/guile/3.0.11/include/guile/3.0" "-I/opt/homebrew/opt/gmp" "-I/opt/homebrew/opt/gmp/include" "-I/opt/homebrew/opt/readline/include" "-D_THREAD_SAFE" "-I/opt/homebrew/opt/bdw-gc/include" "-L/opt/homebrew/Cellar/guile/3.0.11/lib" "-lguile-3.0" "-L/opt/homebrew/opt/bdw-gc/lib" "-lgc")
 CHECK-OK   F0b fixture compiled
 W7 good-mode output:W7-FIXTURE-ENTRY-OK thread=1 result=41
 W7-FIXTURE-ENTRY-OK thread=2 result=42
@@ -11,7 +11,9 @@ CHECK-OK   F1 both foreign pthreads entered Scheme (2 ENTRY-OK lines)
 CHECK-OK   F2 thread 1 computed 41 and thread 2 computed 42 (own args)
 CHECK-OK   F3 fixture exited 0 with the PASS marker
 CHECK-OK   NC1 control: verdict marker requires the entry lines (the check cannot pass vacuously)
-W7 bad-mode (raw unattached entry) output: exit-status=11
+W7 bad-mode (raw unattached entry) output: exit-val=#f term-sig=11
 W7: raw-entry outcome recorded (survival is NOT qualification; a crash is the expected refusal shape on a target without an entry protocol — Guile documents one, so either outcome is evidence)
+W7 callback-mode (procedure->pointer run on a foreign pthread) output: exit-val=#f term-sig=11
+CHECK-OK   CB1 a procedure->pointer trampoline invoked on an UNATTACHED foreign pthread refuses (SIGSEGV) — collect-safe foreign-thread callables need a compiled C libffi-closure helper whose handler enters scm_with_guile; plain procedure->pointer is same-thread (Guile-mode) only
 W7-VERDICT: PASS (documented entry protocol works)
 ### exit=0

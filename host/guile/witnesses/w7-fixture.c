@@ -79,6 +79,35 @@ static void *main_body_bad (void *unused)
   return NULL;
 }
 
+/* callback mode (r3, review P1): create a Scheme procedure->pointer
+ * trampoline of the pthread start-routine signature, then run it AS the
+ * start routine of a fresh pthread — i.e. the ffi_closure is invoked on
+ * a foreign thread WITHOUT scm_with_guile.  libguile's closure entry
+ * does not attach the thread, so this is the refusal mode for
+ * sa-foreign-callable-collect-safe via plain procedure->pointer
+ * (expected SIGSEGV; recorded, never a pass). */
+static void *make_trampoline (void *unused)
+{
+  (void) unused;
+  SCM proc = scm_c_eval_string
+    ("(begin (use-modules (system foreign))"
+     "  (procedure->pointer '* (lambda (x) x) (list '*)))");
+  scm_gc_protect_object (proc);
+  return scm_to_pointer (proc);
+}
+
+static void *main_body_callback (void *unused)
+{
+  (void) unused;
+  void *(*tramp)(void *) = (void *(*)(void *)) scm_with_guile (make_trampoline, NULL);
+  pthread_t t;
+  pthread_create (&t, NULL, tramp, NULL);
+  pthread_join (t, NULL);
+  printf ("W7-FIXTURE-CALLBACK-SURVIVED\n");
+  fflush (stdout);
+  return NULL;
+}
+
 int main (int argc, char **argv)
 {
   if (argc > 1 && strcmp (argv[1], "bad") == 0)
@@ -86,6 +115,8 @@ int main (int argc, char **argv)
       scm_with_guile (main_body_bad, NULL);
       printf ("W7-FIXTURE-BAD-MAIN-SURVIVED\n");
     }
+  else if (argc > 1 && strcmp (argv[1], "callback") == 0)
+    scm_with_guile (main_body_callback, NULL);
   else
     scm_with_guile (main_body_good, NULL);
   return 0;

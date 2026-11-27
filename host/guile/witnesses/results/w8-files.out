@@ -1,7 +1,7 @@
 ### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w8-files.scm
 === W8 file I/O witness ===
 platform: Darwin darwin?=#t F-SETLK=8 F-WRLCK=3
-IO1 canonicalize-path through two symlinks => "/private/tmp/w8-82576/real.txt"
+IO1 canonicalize-path through two symlinks => "/private/tmp/w8-52277/real.txt"
 CHECK-OK   IO1 canonicalize-path resolves the symlink chain to the real file (and /tmp itself)
 NC2 canonicalize-path on missing component => #f
 CHECK-OK   NC2 control: canonicalize-path RAISES on a missing component (dangling links are not fabricated)
@@ -9,7 +9,8 @@ CHECK-OK   IO2a first O_CREAT|O_EXCL create succeeds
 NC1 second O_CREAT|O_EXCL create => #f
 CHECK-OK   NC1 control: second O_CREAT|O_EXCL create RAISES (EEXIST)
 CHECK-OK   IO3a0 compiled the non-variadic fcntl shim (variadic-direct calls EFAULT — recorded)
-IO3a1 direct variadic fcntl F_SETLK => -1 (EFAULT evidence)
+IO3a1 direct variadic fcntl F_SETLK (O_RDWR) => rc=-1 errno=14
+CHECK-OK   IO3a1 direct variadic fcntl F_SETLK fails EFAULT(14) on darwin-arm64
 IO3a parent F_SETLK via shim (whole-file write lock) => 0
 CHECK-OK   IO3a parent acquired the whole-file write lock (F_SETLK => 0)
 IO3b child under parent lock exit code = 42 (42 = EAGAIN)
@@ -17,9 +18,9 @@ CHECK-OK   IO3b child process is EXCLUDED while the parent holds the lock
 NC3 child after release exit code = 0
 CHECK-OK   NC3 control: child acquires the lock after the parent releases
 CHECK-OK   IO4 fsync on a directory fd succeeds (directory sync reachable)
-IO5 core stat mtime-ms=1795793995000 (nsec=0); FFI st_mtimespec mtime-ms=1795793995978
-CHECK-OK   IO5a core stat carries SECOND-resolution mtime (sa-file-mtime-ms degraded floor)
-CHECK-OK   IO5b FFI stat repair reaches sub-second mtime (ns field nonzero on a rewritten file)
+IO5 after utime(..., 456000000 ns): core stat mtime-ms=1700000000000 (nsec=0); FFI stat mtime-ms=1700000000456
+CHECK-OK   IO5a darwin core stat drops ns to 0 (second-resolution floor)
+CHECK-OK   IO5b FFI stat recovers exact sub-second mtime from utime ns (1700000000456 ms)
 IO6 subprocess output="w6-out" status=0
 CHECK-OK   IO6 sa-run-process shape: spawn + pipe + waitpid exit 0
 CHECK-OK   IO7 opendir/readdir/closedir list the scratch dir

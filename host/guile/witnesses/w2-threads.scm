@@ -55,12 +55,10 @@
 (define (report! x) (with-mutex mailbox-mutex (set! mailbox (cons x mailbox))))
 
 ;; child forked under (parameterize ((*param* 'outer)) ...) and a nested
-;; (parameterize ((*param* 'inner)) (fork ...)) — reads, then sleeps so the
-;; parent can rebind *param* AFTER the fork (N1 probe), then re-reads.
+;; (parameterize ((*param* 'inner)) (fork ...)) — reads the inherited
+;; parameter, fluid, and thread-local fluid at fork time.
 (define child
-  (parameterize ((*param* 'outer)
-                 ;; fluid bound around the fork too
-                 )
+  (parameterize ((*param* 'outer))
     (with-fluids ((*fluid* 'fouter))
       (parameterize ((*param* 'inner))
         (call-with-new-thread
@@ -69,8 +67,6 @@
                           (*param*)
                           (fluid-ref *fluid*)
                           (fluid-ref *tlf*)))
-           (sleep 1)                     ; let the parent rebind (N1)
-           (report! (list 'after-parent-rebind (*param*)))
            'child-done))))))
 
 ;; control reading in the PARENT: the nested parameterize is over by the
@@ -83,8 +79,7 @@
 (join-thread child)
 (set! mailbox (reverse mailbox))
 (format #t "T1 child observations: ~s~%" mailbox)
-(let ((at-fork (assq 'at-fork mailbox))
-      (after (assq 'after-parent-rebind mailbox)))
+(let ((at-fork (assq 'at-fork mailbox)))
   (check "T1a child inherits the CREATING thread's CURRENT parameter value \
 (nested parameterize: 'inner)"
          (and at-fork (eq? (second at-fork) 'inner)))
@@ -93,21 +88,41 @@
   (check "T2 thread-local fluid NOT propagated (default 'tdefault)"
          (and at-fork (eq? (fourth at-fork) 'tdefault))))
 
-;; N1: rebind AFTER the fork; the child already reported its fork-time view.
-;; The child slept to straddle the rebind; re-check with a second fork.
+;; N1a: synchronize via an atomic flag so the child is GUARANTEED to read
+;; (*param*) ONLY AFTER the parent executes (*param* 'rebound-after-fork).
 (define late-seen
   (parameterize ((*param* 'before))
-    (let* ((cell (make-atomic-box 'unforked))
+    (let* ((rebound-ready (make-atomic-box #f))
+           (cell (make-atomic-box 'unforked))
            (t (call-with-new-thread
                (lambda ()
+                 (let spin ()
+                   (unless (atomic-box-ref rebound-ready)
+                     (yield)
+                     (spin)))
                  (atomic-box-set! cell (*param*))))))
       (*param* 'rebound-after-fork)     ; rebind AFTER creating the thread
+      (atomic-box-set! rebound-ready #t)
       (join-thread t)
       (atomic-box-ref cell))))
-(format #t "N1 child saw ~s under post-fork rebinding to 'rebound-after-fork~%"
-        late-seen)
-(check "N1 control: child reads the fork-time value, not a later parent one"
+(format #t "N1a child saw ~s under synchronized post-fork parent rebinding \
+to 'rebound-after-fork~%" late-seen)
+(check "N1a control: child reads the fork-time value ('before), not the \
+post-fork parent rebinding"
        (eq? late-seen 'before))
+
+;; N1b: reverse isolation (*txn* clear pattern in CONTRACT.txt): a child
+;; mutating (*param* #f) does NOT mutate the parent's binding.
+(define parent-after-child-clear
+  (parameterize ((*param* 'parent-val))
+    (let ((t (call-with-new-thread (lambda () (*param* #f)))))
+      (join-thread t)
+      (*param*))))
+(format #t "N1b parent *param* after child (*param* #f) => ~s~%"
+        parent-after-child-clear)
+(check "N1b control: child mutating (*param* #f) leaves parent's binding \
+untouched ('parent-val)"
+       (eq? parent-after-child-clear 'parent-val))
 
 ;; ---- T3 mutex kinds --------------------------------------------------------
 (define m-std (make-mutex))
@@ -128,13 +143,15 @@
     (and m
          (begin (lock-mutex m) (unlock-mutex m)
                 (cons m kind)))))
-(define unowned-kind (or (try-unowned 'unowned)
-                         (try-unowned 'allow-external-unlock)))
-(format #t "T3b unowned-kind spelling accepted: ~s~%"
-        (and unowned-kind (cdr unowned-kind)))
-(check "T3b0 one of the documented unowned spellings is accepted"
-       (and unowned-kind #t))
-(let ((m-un (and unowned-kind (car unowned-kind))))
+(define unowned-rejected (not (try-unowned 'unowned)))
+(define allow-ext-kind (try-unowned 'allow-external-unlock))
+(format #t "T3b unowned rejected=~a; allow-external-unlock accepted=~a~%"
+        unowned-rejected (and allow-ext-kind #t))
+(check "T3b0 'unowned raises on 3.0.11 while 'allow-external-unlock is accepted"
+       (and unowned-rejected
+            allow-ext-kind
+            (eq? (cdr allow-ext-kind) 'allow-external-unlock)))
+(let ((m-un (and allow-ext-kind (car allow-ext-kind))))
   (when m-un
     (lock-mutex m-un)
     (let ((got (lock-mutex m-un (+ (current-time) 1)))) ; blocks ~1s, then timeout
@@ -269,26 +286,54 @@ a lost wakeup would hang and the watchdog would record it"
        (every (lambda (t) (not (id-of t))) id-workers))
 
 ;; ---- T6 fences -------------------------------------------------------------
-;; The DECISION (not directly provable by a short witness): Guile threads
-;; are real OS pthreads sharing memory, so the fences may NOT be no-ops;
-;; they map to (ice-9 atomic) accesses, which the manual pins to C11
-;; sequential consistency (a superset of acquire+release).  Record that
-;; the mapped operations work and are ordered-visible across threads.
-(define fence-box (make-atomic-box 0))
-(define fence-data 0)
-(define fence-thread
+;; Guile threads are real OS pthreads sharing memory, so fences may NOT be
+;; no-ops; they map to (ice-9 atomic) accesses, which the manual pins to C11
+;; sequential consistency (a superset of acquire+release, §6.22.4).
+;; Two-thread producer/consumer message-passing pair (1000 rounds):
+;;   - Producer writes non-atomic payload slots, then release-stores fence-seq.
+;;   - Consumer acquire-loads fence-seq, reads payload slots, checks visibility,
+;;     then release-stores fence-ack.
+(define fence-seq (make-atomic-box 0))
+(define fence-ack (make-atomic-box 0))
+(define fence-payload (vector 0 0))
+(define fence-mismatches 0)
+(define fence-rounds 1000)
+(define fence-consumer
   (call-with-new-thread
    (lambda ()
-     (let loop ((n 0))
-       (when (< n 1000)
-         (let ((v (atomic-box-ref fence-box)))   ; memory-order-acquire
-           (when (even? v) (set! fence-data (+ fence-data 1)))
-           (atomic-box-set! fence-box (+ v 1)))  ; memory-order-release
-         (loop (+ n 1)))))))
-(join-thread fence-thread)
-(check "T6 acquire/release mapped onto atomic-box accesses cross threads \
-(monotonic, no lost increments)"
-       (= (atomic-box-ref fence-box) 1000))
+     (let loop ((i 1))
+       (when (<= i fence-rounds)
+         (let spin ()
+           (unless (= (atomic-box-ref fence-seq) i) ; memory-order-acquire
+             (yield)
+             (spin)))
+         (unless (and (= (vector-ref fence-payload 0) i)
+                      (= (vector-ref fence-payload 1) (* i 7)))
+           (set! fence-mismatches (+ fence-mismatches 1)))
+         (atomic-box-set! fence-ack i)              ; memory-order-release
+         (loop (+ i 1)))))))
+(define fence-producer
+  (call-with-new-thread
+   (lambda ()
+     (let loop ((i 1))
+       (when (<= i fence-rounds)
+         (let spin ()
+           (unless (= (atomic-box-ref fence-ack) (- i 1))
+             (yield)
+             (spin)))
+         (vector-set! fence-payload 0 i)
+         (vector-set! fence-payload 1 (* i 7))
+         (atomic-box-set! fence-seq i)              ; memory-order-release
+         (loop (+ i 1)))))))
+(join-thread fence-producer)
+(join-thread fence-consumer)
+(format #t "T6 cross-thread fence rounds: seq=~a ack=~a mismatches=~a~%"
+        (atomic-box-ref fence-seq) (atomic-box-ref fence-ack) fence-mismatches)
+(check "T6 two-thread release/acquire message passing: 1000 rounds with \
+zero payload visibility mismatches"
+       (and (= (atomic-box-ref fence-seq) fence-rounds)
+            (= (atomic-box-ref fence-ack) fence-rounds)
+            (zero? fence-mismatches)))
 
 ;; ---- T7 sleep / current-time shapes ----------------------------------------
 (define t-start (get-internal-real-time))

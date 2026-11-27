@@ -35,23 +35,21 @@
 ;; escaped value) is captured, the frame is then marked spent (any later
 ;; invocation of k raises — the one-shot pin), and the value returned.
 ;; Prototype is single-value; the adapter generalizes to multiple values.
+;; CONTRACT NOTE (r3, review finding): the adapter's duty is the ONE-SHOT
+;; spent flag ONLY.  Thread/fiber ownership is the HOST's rule
+;; (TARGET-CONTRACT.md "Ownership ... is the HOST's rule, not yours") —
+;; and the platform already raises on cross-thread k use (E6 records it),
+;; so no owner check is baked in here.
 (define (sa-call-with-escape-continuation proc)
-  (let ((spent #f)
-        (owner (current-thread)))
+  (let ((spent #f))
     (let ((result
            (call/cc
             (lambda (k)
               (proc (lambda (v)
-                      (cond
-                        (spent
-                         (error 'escape-continuation
-                                "one-shot escape used twice"))
-                        ((not (eq? owner (current-thread)))
-                         (error 'escape-continuation
-                                "escape invoked from wrong thread"))
-                        (else
-                         (set! spent #t)
-                         (k v)))))))))
+                      (if spent
+                          (error 'escape-continuation
+                                 "one-shot escape used twice")
+                          (begin (set! spent #t) (k v)))))))))
       (set! spent #t)   ; reached on BOTH the normal and the escape path
       result)))
 
@@ -110,7 +108,11 @@
   (check "E5b finally bodies ran on the way out, inner first"
          (equal? unwind-order '(out-outer out-inner in-inner in-outer))))
 
-;; E6: thread ownership (adapter policy beyond the contract minimum).
+;; E6: cross-thread invocation.  The adapter carries NO ownership policy
+;; (TARGET-CONTRACT.md pins ownership as the HOST's rule); this records
+;; what the PLATFORM itself does — the raw continuation refuses use from
+;; another thread, so the host layers its policy on a platform-enforced
+;; refusal, not on adapter machinery.
 (define cross-thread-result #f)
 (let ((ek #f))
   (sa-call-with-escape-continuation
@@ -120,20 +122,33 @@
                   (set! cross-thread-result
                         (false-if-exception (ek 'x)))))))
 (format #t "E6 cross-thread invocation => ~s~%" cross-thread-result)
-(check "E6 cross-thread invocation RAISES (ownership policy)"
+(check "E6 cross-thread invocation RAISES in the invoking thread \
+(platform-enforced; ownership POLICY itself is the host layer's)"
        (not cross-thread-result))
 
 ;; ---- prototype 2: prompt-based (cheaper escapes) ---------------------------
-(define tag (make-prompt-tag "escape"))
+;; r3 repairs (review P1): the r2 version shared ONE global prompt tag
+;; and never set spent on the normal-return path.  Both bugs were
+;; reproduced before this repair: a shared tag lets an inner call's
+;; handler catch an OUTER escape ((outer-continued escaped) instead of
+;; escaped), and a leaked k from a returned call silently HIJACKS a later
+;; active prompt-ec (returned 'hijacked instead of raising).  The repair:
+;; a FRESH tag per call and spent set on BOTH exit paths.
 (define (prompt-ec proc)
-  (let ((spent #f))
-    (call-with-prompt tag
-      (lambda ()
-        (proc (lambda (v)
-                (if spent
-                    (error 'escape-continuation "one-shot escape used twice")
-                    (begin (set! spent #t) (abort-to-prompt tag v))))))
-      (lambda (_ v) v))))
+  (let ((tag (make-prompt-tag "escape"))       ; fresh per call
+        (spent #f))
+    (let ((result
+           (call-with-prompt tag
+             (lambda ()
+               (proc (lambda (v)
+                       (if spent
+                           (error 'escape-continuation
+                                  "one-shot escape used twice")
+                           (begin (set! spent #t)
+                                  (abort-to-prompt tag v))))))
+             (lambda (_ v) v))))
+      (set! spent #t)             ; normal-return path: later uses raise
+      result)))
 
 (check "P1 prompt-based normal return"
        (eq? (prompt-ec (lambda (k) 'pn)) 'pn))
@@ -147,10 +162,18 @@ the first escape exits)~%" p3)
 (define p-saved #f)
 (let ((pn (prompt-ec (lambda (k) (set! p-saved k) 'pcap))))
   (check "P3b prompt wrapper returns normally after capture" (eq? pn 'pcap))
-  (let ((p-post (false-if-exception (p-saved 'x))))
+  (let ((p-post (catch #t
+                  (lambda () (p-saved 'x) #f)
+                  (lambda (key . args) (list key args)))))
     (format #t "P3c prompt-based post-return invocation => ~s~%" p-post)
-    (check "P3c prompt-based post-return invocation RAISES (one-shot)"
-           (not p-post))))
+    (check "P3c prompt-based post-return invocation RAISES via the SPENT \
+flag (not via 'unknown prompt')"
+           (and (pair? p-post)
+                (eq? (car p-post) 'misc-error)
+                (pair? (cadr p-post))
+                (let ((msg-args (caddr (cadr p-post))))
+                  (and (pair? msg-args)
+                       (eq? (car msg-args) 'escape-continuation)))))))
 (define p-order '())
 (let ((r (prompt-ec
           (lambda (k)
@@ -160,6 +183,52 @@ the first escape exits)~%" p3)
                 (lambda () (set! p-order (cons 'ran p-order))))))))
   (check "P4 prompt-based escape unwinds dynamic-wind" (eq? r 'pv))
   (check "P4b finally ran" (equal? p-order '(ran))))
+
+;; P5 NESTED escapes (the shared-tag bug's missing check): invoking the
+;; OUTER escape from inside an inner call must deliver to the OUTER call.
+(let ((nested (prompt-ec
+               (lambda (k-out)
+                 (list 'outer-continued
+                       (prompt-ec (lambda (k-in) (k-out 'escaped))))))))
+  (format #t "P5 nested outer-escape delivery => ~s~%" nested)
+  (check "P5 a fresh tag per call delivers the OUTER escape to the OUTER \
+handler (shared-tag bug would answer (outer-continued escaped))"
+         (eq? nested 'escaped)))
+
+;; P6 HIJACK control (the missing normal-return-spent check): a k leaked
+;; from a RETURNED prompt-ec, invoked inside another ACTIVE prompt-ec,
+;; must RAISE, not silently abort the enclosing call.
+(let* ((leaked #f)
+       (_ (prompt-ec (lambda (k) (set! leaked k) 'leak-captured)))
+       (attempt (prompt-ec
+                 (lambda (k2)
+                   (list 'inner-completed
+                         (catch #t
+                           (lambda () (leaked 'hijacked) 'hijacked-no-raise)
+                           (lambda (key . args)
+                             (list 'raised key
+                                   (car (caddr args))))))))))
+  (format #t "P6 leaked-k invocation inside an active prompt-ec => ~s~%"
+          attempt)
+  (check "P6 a spent k RAISES via spent flag inside a later active prompt-ec \
+instead of hijacking it"
+         (equal? attempt '(inner-completed (raised misc-error escape-continuation)))))
+
+;; P7 in-flight second use during the escape's dynamic-wind unwind
+;; (the E3-equivalent the r2 prompt battery never ran).
+(define p7-second-use 'not-attempted)
+(let ((r (prompt-ec
+          (lambda (k)
+            (dynamic-wind
+                (lambda () #f)
+                (lambda () (k 'pfirst))
+                (lambda ()
+                  (set! p7-second-use
+                        (false-if-exception (k 'psecond)))))))))
+  (format #t "P7 escape value=~s second-use-during-unwind=~s~%" r
+          p7-second-use)
+  (check "P7 prompt-based second invocation DURING the unwind RAISES"
+         (and (eq? r 'pfirst) (not p7-second-use))))
 
 ;; ---- negative controls ------------------------------------------------------
 ;; NC1: the RAW primitive re-enters a function frame after its first

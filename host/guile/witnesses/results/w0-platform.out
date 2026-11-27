@@ -18,8 +18,16 @@ guile-make-mutex-procedure-ok=#t
 CHECK-OK   ice-9 make-mutex constructs a primitive mutex: yes
 gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
 CHECK-OK   gc-stats is a nonempty alist: yes
+gc-stats gc-time-taken = 3862000
+gc-stats gc-times = 2
+gc-stats heap-allocated-since-gc = 10176
+gc-stats heap-free-size = 487424
 gc-stats heap-size = 2097152
-CHECK-OK   (gc) ran between two gc-stats reads (engine observable): yes
+gc-stats heap-total-allocated = 1673728
+gc-stats protected-objects = 0
+CHECK-OK   (gc) ran between two gc-stats reads (gc-times incremented): yes
+CHECK-OK   NC1 control: nonexistent feature is not provided: yes
+CHECK-OK   NC2 control: nonexistent module does not resolve: yes
 host-tag-candidate="guile-3.0.11-aarch64-apple-darwin25.4.0"
 W0-VERDICT: PASS (platform recorded, all checks)
 ### exit=0

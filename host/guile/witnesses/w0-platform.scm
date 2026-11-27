@@ -92,11 +92,18 @@
    (lambda (k)
      (format #t "gc-stats ~a = ~a~%" k (assq-ref stats-after k)))
    (filter (lambda (k) (memq k key-have))
-           '(heap-size heap-size-bytes bytes-since-gc gc-time-total
-             heap-consumed-since-gc collections msecs))))
-(check "(gc) ran between two gc-stats reads (engine observable)"
-       (or (assq-ref stats-after 'bytes-since-gc)
-           #t)) ; shape recorded; W6 proves collection real
+           '(gc-time-taken gc-times heap-allocated-since-gc heap-free-size
+             heap-size heap-total-allocated protected-objects))))
+(check "(gc) ran between two gc-stats reads (gc-times incremented)"
+       (> (assq-ref stats-after 'gc-times)
+          (assq-ref stats-before 'gc-times)))
+
+;; Negative controls: feature/module probes must fail on nonexistent targets
+;; (not vacuously true).
+(check "NC1 control: nonexistent feature is not provided"
+       (not (provided? 'definitely-no-such-feature-w0)))
+(check "NC2 control: nonexistent module does not resolve"
+       (not (false-if-exception (resolve-interface '(no such module w0)))))
 
 ;; sa-host-tag candidate: any stable identifier; nothing parses it.
 (format #t "host-tag-candidate=~s~%"

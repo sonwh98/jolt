@@ -2,16 +2,18 @@
 === W2 threads contract witness ===
 T1 parent *param* after fork returned: default
 CHECK-OK   T1c parent's own binding restored to default after parameterize
-T1 child observations: ((at-fork inner fouter tdefault) (after-parent-rebind inner))
+T1 child observations: ((at-fork inner fouter tdefault))
 CHECK-OK   T1a child inherits the CREATING thread's CURRENT parameter value (nested parameterize: 'inner)
 CHECK-OK   T1b child inherits the creator's current FLUID value ('fouter)
 CHECK-OK   T2 thread-local fluid NOT propagated (default 'tdefault)
-N1 child saw before under post-fork rebinding to 'rebound-after-fork
-CHECK-OK   N1 control: child reads the fork-time value, not a later parent one
+N1a child saw before under synchronized post-fork parent rebinding to 'rebound-after-fork
+CHECK-OK   N1a control: child reads the fork-time value ('before), not the post-fork parent rebinding
+N1b parent *param* after child (*param* #f) => parent-val
+CHECK-OK   N1b control: child mutating (*param* #f) leaves parent's binding untouched ('parent-val)
 T3a standard mutex owner re-acquire => #f
 CHECK-OK   T3a standard make-mutex: owner re-acquire RAISES (non-recursive)
-T3b unowned-kind spelling accepted: allow-external-unlock
-CHECK-OK   T3b0 one of the documented unowned spellings is accepted
+T3b unowned rejected=#t; allow-external-unlock accepted=#t
+CHECK-OK   T3b0 'unowned raises on 3.0.11 while 'allow-external-unlock is accepted
 T3b unowned mutex owner re-acquire with 1s timeout => #f
 CHECK-OK   T3b unowned ('SRFI-18') mutex: owner re-acquire BLOCKS then times out (#f) — the pinned contract semantic
 CHECK-OK   T3c recursive mutex counts twice (needs two unlocks)
@@ -24,7 +26,8 @@ T5 ids recorded from outside: (1 2 3 4 5); children's own: (1 2 3 4 5)
 CHECK-OK   T5a numeric ids recorded per thread from OUTSIDE the thread (sa-thread-id-of shape) while live
 CHECK-OK   N3 control: all ids are distinct numbers
 CHECK-OK   T5b exited threads answer #f (thread-exited? gates the mapping)
-CHECK-OK   T6 acquire/release mapped onto atomic-box accesses cross threads (monotonic, no lost increments)
+T6 cross-thread fence rounds: seq=1000 ack=1000 mismatches=0
+CHECK-OK   T6 two-thread release/acquire message passing: 1000 rounds with zero payload visibility mismatches
 CHECK-OK   T7a (sleep 1) really sleeps ~1s
 CHECK-OK   T7b srfi-19 current-time zero-arg answers a time-utc object
 CHECK-OK   T7c srfi-18 current-time/thread-sleep! take TIME OBJECTS (the contract's R6RS sleep shape) and really sleep

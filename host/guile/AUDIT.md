@@ -2,18 +2,19 @@
 
 - Auditor: glm-5.3 (VM & Host Adapter Engineer), Phase 2a slice, branch
   `guile/audit`.
-- Date: 2026-11-27 (+07). Revision r2 (same lane): witnesses repaired
-  against the executed runtime and re-run; every verdict below cites a
-  recorded `results/*.out` line. The r1 document was doc-derived only —
-  the r1 staging session's permission mode denied execution, the
-  orchestrator's first run found the witnesses broken (only w5 and w12
-  passed), and r2 fixed them for real. Where execution contradicted the
-  r1 doc-tier expectations, THIS document sides with the witness and
-  says so.
+- Date: 2026-11-28 (+07). Revision r3 (same lane): resolved every finding
+  from the cross-family review (`build/review-findings.md`, 3 P1, 4 P2,
+  1 P3) against the executed runtime and re-ran all 13 witnesses under
+  the external watchdog (`RUN-ALL: PASS`). Where r2's witnesses or claims
+  were too weak or wrong (callback rooting, shared prompt tag / missing
+  normal-return spent flag, owner-thread boundary, `sa-foreign-callable-
+  collect-safe` on foreign pthreads, w5 `gc-times`, w2 `T6`/`N1`, w8
+  `IO3a1`/`utime`/Linux `stat` offsets, w0 `gc-stats` tautology), THIS
+  revision fixes both the witnesses and the verdicts below.
 - Ruling followed: DOC-FIRST (the p1a method, `origin/gambit-ffi-p1:p1a/AUDIT.md`)
-  — manual first, execution decides. All 13 witnesses now end in their
+  — manual first, execution decides. All 13 witnesses end in their
   `Wn-VERDICT: PASS` marker under the external watchdog; every witness
-  retains its negative controls.
+  retains negative/sanity controls.
 - Scope: audit + witnesses ONLY. No adapter code was written.
 - Provisioned target: `/opt/homebrew/opt/guile/bin/guile`, GNU Guile 3.0.11,
   darwin-arm64 (Darwin 25.6.0, T6000, aarch64-apple-darwin25.4.0).
@@ -25,7 +26,7 @@
   3.0.11 (gnu.org/software/guile/manual/html_node/, title page: "This
   manual documents Guile version 3.0.11").
 - `[wN]` = the recorded witness output
-  `host/guile/witnesses/results/wN-*.out` (r2 run, 13/13 PASS;
+  `host/guile/witnesses/results/wN-*.out` (r3 run, 13/13 PASS;
   `RUN-ALL: PASS` line at the end of the run).
 - `CONTRACT.txt` / `TARGET-CONTRACT.md` / `THREADS.md` — the pinned
   semantics under audit.
@@ -37,24 +38,31 @@
 
 13/13 witnesses PASS under the external watchdog
 (`witnesses/results/*.out`, verbatim, `### exit=0` each; `RUN-ALL: PASS`).
-One recorded refusal exists by design and is evidence, not a failure: the
-w7 bad-mode raw foreign-thread entry crashes (SIGSEGV, exit-status 11
-[w7]) while the documented `scm_with_guile` entry is clean — that pair IS
-the foreign-thread row.
+Recorded refusals that serve as decisive evidence (not failures):
+- `[w4 CL2b]`: retaining ONLY the raw `pointer-address` and dropping the
+  `<pointer>` object from `procedure->pointer` crashes with `SIGSEGV`
+  (`term-sig=11`) after GC in the same process, proving a callable
+  registry is mandatory.
+- `[w7]`: raw unattached foreign-thread entry crashes (`SIGSEGV`,
+  `term-sig=11`) while documented `scm_with_guile` entry succeeds; and
+  invoking a plain `procedure->pointer` trampoline directly on an
+  unattached foreign pthread also crashes (`SIGSEGV`, `term-sig=11`,
+  `[w7 CB1]`), proving `sa-foreign-callable-collect-safe` needs a C
+  `libffi` + `scm_with_guile` closure helper.
 
 ## Capability matrix
 
 | # | capability | verdict | decisive evidence |
 |---|---|---|---|
 | 1 | Reader/emit parity | **GO** | [w1] all rows + 3 controls |
-| 2 | Threads (`threads` tier) | **GO** | [w2] T1–T7 + N1–N3 |
-| 3 | One-shot escape continuations | **GO** | [w3] E/P batteries + NC1–NC3 |
-| 4 | FFI (errno, blocking, foreign threads, dlopen, callbacks) | **GO** | [w4] [w5] [w7] |
+| 2 | Threads (`threads` tier) | **GO** | [w2] T1–T7 + N1a/N1b/N2/N3 |
+| 3 | One-shot escape continuations | **GO** | [w3] E1–E6, P1–P7 + NC1–NC3 |
+| 4 | FFI (errno, blocking, foreign threads, dlopen, callbacks) | **GO** (`sa-foreign-callable-collect-safe` on foreign pthreads needs C libffi+`scm_with_guile` helper; callable registry required) | [w4] [w5] [w7] |
 | 5 | GC + pinning | **GO** | [w6] P1–P4 + controls |
 | 6 | I/O (realpath, O_EXCL, locks, sync, mtime, subprocess, sockets) | **GO** (fcntl locks need a compiled shim on darwin) | [w8] [w9] |
 | 7 | Native compile / AOT cache | **PARTIAL** (VM bytecode + JIT; boot-file raises) | [w10] C1–C6 + NC |
 | 8 | Cryptography | **PARTIAL** (FFI libcrypto + getentropy; BLAKE3 vendored) | [w11] K1–K5 |
-| 9 | Performance | **GO (measured)** | [w12] PERF-SUMMARY |
+| 9 | Performance | **GO (measured)** | [w12] PERF-SUMMARY + NC1 |
 | 10 | Platform parity darwin/linux | **PARTIAL** (darwin-arm64 executed; Linux NOT RUN) | [w0] + per-witness uname-derived branches |
 
 Headline: **no NO-GO row on darwin-arm64** — the two Gambit p1a killers
@@ -96,26 +104,29 @@ The 3.0.11 default option set (recorded live: `read-options-default:
 
 ## Area 2 — Threads
 
-**Verdict GO.** `[w2]` (results/w2-threads.out), T1–T7 + N1–N3 PASS.
+**Verdict GO.** `[w2]` (results/w2-threads.out), T1–T7 + N1a/N1b/N2/N3 PASS.
 
 - **Thread-parameter fork-inheritance — native, executed.** A child
   forked under nested `parameterize` sees the creator's CURRENT value
   (`inner`) [w2 T1a]; the creator's current FLUID conveys (`fouter`)
   [w2 T1b]; thread-local fluids do NOT propagate (`tdefault`) [w2 T2];
-  a post-fork parent rebinding is invisible to the child [w2 N1:
-  "child saw before"]. This is the load-bearing CONTRACT pin, and it
-  holds with zero adapter machinery (`[man §6.22.2]`: "new threads
-  inherit the fluid bindings that were in place in their creator
-  threads").
+  under atomic-flag synchronization guaranteeing the parent rebinds
+  before the child reads, the post-fork parent rebinding is invisible to
+  the child [w2 N1a: `"child saw before"`]; and a child mutating
+  `(*param* #f)` (the `*txn*` clear pattern in `CONTRACT.txt:48-50`)
+  leaves the parent's binding untouched [w2 N1b: `"parent-val"`]. This
+  is the load-bearing CONTRACT pin, and it holds with zero adapter
+  machinery (`[man §6.22.2]`: "new threads inherit the fluid bindings
+  that were in place in their creator threads").
 - **Mutexes — kind must be `allow-external-unlock`.** Standard
   `make-mutex`: owner re-acquire RAISES [w2 T3a] (fail-fast, never
   silent recursion). The contract's pinned SRFI-18 block semantic is met
   by the SRFI-18-tailored kind: owner re-acquire BLOCKS then times out
   (`=> #f` after 1s) [w2 T3b]. **Executed correction to the manual:**
   `[man §6.22.5]`'s `make-mutex` entry says "pass `unowned`" — on this
-  build that spelling RAISES "unsupported mutex kind: unowned"; only
-  `'allow-external-unlock` is accepted [w2 T3b0: "spelling accepted:
-  allow-external-unlock"]. Recursive mutexes count [w2 T3c].
+  build that spelling explicitly RAISES (`unowned rejected=#t`); only
+  `'allow-external-unlock` is accepted [w2 T3b0]. Recursive mutexes count
+  [w2 T3c].
 - **Conditions — no lost wakeups.** A 200-round signal baton (state
   changes under the mutex, both sides predicate-loop) completes [w2 T4a];
   broadcast wakes all 4 parked waiters [w2 T4b]; an un-signaled wait
@@ -128,8 +139,11 @@ The 3.0.11 default option set (recorded live: `read-options-default:
   both directions) [w2 T5a], distinct [w2 N3], and exited threads answer
   `#f` through the `(thread-exited?)` gate [w2 T5b].
 - **Fences.** Mapped onto `(ice-9 atomic)` accesses (SC ⊇ acq+rel,
-  `[man §6.22.4]`); 1000 cross-thread monotonic increments with zero
-  loss [w2 T6]. Not a no-op: Guile threads are real pthreads.
+  `[man §6.22.4]`); a two-thread producer/consumer pair passing 1000
+  messages via non-atomic payload slots gated by `atomic-box-set!`
+  (release) and `atomic-box-ref` (acquire) completes with zero payload
+  visibility mismatches (`seq=1000 ack=1000 mismatches=0`) [w2 T6]. Not
+  a no-op: Guile threads are real pthreads.
 - **`sleep`/`current-time` shapes.** Core `(sleep 1)` sleeps [w2 T7a];
   SRFI-19 `current-time` zero-arg answers `time-utc` [w2 T7b]; SRFI-18
   `current-time`/`thread-sleep!` take TIME OBJECTS — the contract's
@@ -144,14 +158,33 @@ The 3.0.11 default option set (recorded live: `read-options-default:
 **Verdict GO (wrapper mandatory).** `[w3]` (results/w3-escape.out), all
 rows + NC1–NC3 PASS.
 
-- The wrapper prototype (call/cc + spent flag + owner-thread check):
-  normal return [w3 E1], escape value delivery [w3 E2], **one-shot
-  enforced in-flight** — a second use from inside the escape's own
-  dynamic-wind unwind RAISES [w3 E3], post-return invocation RAISES
-  [w3 E4b], cross-thread invocation RAISES [w3 E6]. `finally` bodies
-  run on the way out, inner first [w3 E5/E5b].
-- The prompt-based prototype (cheaper; `[man §6.11.5]` recommends
-  prompts for escapes) passes the same battery [w3 P1–P4, P3c].
+- **Contract boundary (r3 correction):** per `TARGET-CONTRACT.md:49-50`
+  and `CONTRACT.txt:291-293`, ownership (which thread/fiber may invoke an
+  escape) is the **HOST** layer's rule (`continuations.ss`), NOT the
+  target adapter's; the adapter owes only the one-shot/extent `spent`
+  flag. `[w3 E6]` records that Guile's platform itself refuses
+  cross-thread continuation invocation (`=> #f`), so no owner-thread
+  check is baked into the adapter wrapper.
+- Prototype 1 (`call/cc` + `spent` flag): normal return [w3 E1], escape
+  value delivery [w3 E2], **one-shot enforced in-flight** — a second use
+  from inside the escape's own `dynamic-wind` unwind RAISES [w3 E3],
+  post-return invocation RAISES [w3 E4b], cross-thread invocation RAISES
+  by platform enforcement [w3 E6]. `finally` bodies run on the way out,
+  inner first [w3 E5/E5b].
+- Prototype 2 (`prompt-ec`, `[man §6.11.5]` recommends prompts for
+  escapes): **r3 repair required two critical fixes** (r2 shared one
+  global prompt tag and never set `spent` on normal return, so `P3c`
+  previously passed only via `"Abort to unknown prompt"`). With a
+  **fresh `(make-prompt-tag "escape")` per call** and **`(set! spent
+  #t)` on both the escape and normal-return paths**, `prompt-ec` passes
+  the full battery: normal/escape/post-return raising via
+  `escape-continuation` (`spent` flag) [w3 P1–P3c], `dynamic-wind`
+  unwind [w3 P4/P4b], nested outer-escape delivery (`=> escaped`, which
+  the shared-tag bug turned into `(outer-continued escaped)`) [w3 P5],
+  leaked `k` raising inside a later active `prompt-ec` (`(raised
+  misc-error escape-continuation)`, instead of hijacking the enclosing
+  prompt) [w3 P6], and in-flight second invocation during `dynamic-wind`
+  unwind [w3 P7].
 - Negative controls: the RAW `call/cc` re-enters a finished frame (two
   passes logged `(one two)`) [w3 NC1]; a wrapper WITHOUT the spent flag
   re-enters too [w3 NC2]; the real wrapper RAISES where both re-enter
@@ -164,7 +197,9 @@ rows + NC1–NC3 PASS.
 
 ## Area 4 — FFI
 
-**Verdict GO.** `[w4]` `[w5]` `[w7]` all PASS.
+**Verdict GO (callable registry required; foreign-thread
+`sa-foreign-callable-collect-safe` requires a compiled C helper).**
+`[w4]` `[w5]` `[w7]` all PASS.
 
 - **errno at the call boundary — native and decisive.**
   `#:return-errno?` captures per-thread errno at the boundary: 1000
@@ -179,22 +214,47 @@ rows + NC1–NC3 PASS.
   two-value form, never a slot read.
 - **Blocking calls vs GC — the Gambit p1a W2 killer, PASS here.** While
   thread A sat 3s inside a libc `sleep` entered via the FFI, thread B
-  completed 823 real collection rounds (heap-size samples varied, live
-  vector mutations intact) [w5]. Blocking collapses to plain, exactly as
+  completed `rounds-during-block=999` rounds (including explicit `(gc)`
+  every 10 rounds) and BDW-GC ran `gc-times-during=199` real collections
+  (`gc-times` rose from `68` to `267`, live vector mutations intact) [w5].
+  The negative control proves `rounds-during-block` stays unchanged
+  (`999->999`) while `rounds-total` advances (`1326->1651`) when
+  `a-in-block` is `#f` [w5 NC]. Blocking collapses to plain, exactly as
   `[man §6.22.6]` documents ("blocked threads no longer hinder garbage
   collection", since 2.0).
 - **Foreign pthread entry — the Gambit p1a W3 killer, PASS here.** A
   compiled fixture enters Scheme from two concurrent foreign pthreads
   through `scm_with_guile`; each evaluates a Scheme lambda on its own
   argument (41 and 42) [w7 F1–F3]. The raw unattached entry probe
-  crashes (exit-status 11, SIGSEGV) [w7] — the documented protocol is
-  the only entry. `sa-foreign-callable-entry-point` must route through
-  a `scm_with_guile` trampoline.
-- **Callback lifetime — internally rooted (executed).** qsort through
-  `procedure->pointer` with the reference dropped and 3 forced GCs still
-  sorts correctly [w4 CL2: "arr=(2 4 6 8)"] — Guile roots the
-  trampoline; the adapter does NOT need its own registry (a defensive
-  one is harmless).
+  crashes (`term-sig=11`, `SIGSEGV`) [w7] — `scm_with_guile` is the
+  required entry protocol.
+- **`sa-foreign-callable` vs `sa-foreign-callable-collect-safe` (r3
+  correction).** `sa-foreign-callable-entry-point` merely extracts the C
+  function pointer from a callable (`CONTRACT.txt:269`). Guile's
+  `procedure->pointer` creates a `libffi` closure whose C entry point
+  (`invoke_closure` in `libguile/foreign.c`) does **NOT** call
+  `scm_with_guile`: invoking a `procedure->pointer` trampoline directly
+  as a foreign pthread start routine crashes with `SIGSEGV`
+  (`term-sig=11`) [w7 CB1]. Because `scm_with_guile` only accepts
+  `void *(*)(void *)`, pure-Scheme `procedure->pointer` satisfies
+  `sa-foreign-callable` (same-thread callbacks already in Guile mode),
+  whereas `sa-foreign-callable-collect-safe` invoked from unattached
+  foreign pthreads requires a compiled C `libffi` closure helper
+  (`ffi_prep_closure_loc`) whose handler enters `scm_with_guile` before
+  invoking `scm_call_N` (or must be qualified/degraded until built).
+- **Callback lifetime — adapter callable registry REQUIRED (r3
+  correction).** In `procedure->pointer`, the `ffi_closure` and Scheme
+  procedure are rooted **by the returned `<pointer>` object** [w4 CL2a:
+  dropping the Scheme proc ref while keeping `<pointer>` alive across 3
+  GCs still sorts `(2 4 6 8)`]. Retaining ONLY the raw C address
+  `(pointer-address cptr)` (the shape `sa-foreign-callable-entry-point`
+  hands to C) and dropping `<pointer>` collects the closure and
+  crashes with `SIGSEGV` (`term-sig=11`) after GC in the same process
+  [w4 CL2b-dropped], whereas keeping `<pointer>` rooted and invoking
+  `(make-pointer addr)` survives and sorts `(1 2 3 4 5)` [w4
+  CL2b-kept]. Therefore, the Phase 2b adapter **MUST** maintain a
+  callable registry keeping every `<pointer>` object rooted for as long
+  as C holds its `sa-foreign-callable-entry-point` address.
 - **dlopen/dlsym.** Missing symbol RAISES [w4 D1]; missing library
   RAISES [w4 D2]; the `#f` handle resolves libc symbols from the running
   executable's namespace [w4 D3]. Search order and darwin extension
@@ -235,22 +295,26 @@ rows + NC1–NC3 PASS.
 - **Exclusive create**: first `O_CREAT|O_EXCL` succeeds, second RAISES
   EEXIST [w8 IO2a/NC1].
 - **Advisory locking — with an executed platform finding.** Direct FFI
-  calls to VARIADIC `fcntl(2)` fail EFAULT(14) on darwin-arm64 even with
-  a rooted struct [w8 IO3a1] — the fixed-arity libffi convention does
-  not match the variadic ABI. The repair (the adapter's row decision):
-  a compiled NON-variadic shim (`w8_setlk`), which acquires the
-  whole-file write lock [w8 IO3a `=> 0`], EXCLUDES a child process
-  (exit 42 = EAGAIN) [w8 IO3b], and releases causally (child then
-  acquires, exit 0) [w8 NC3]. Also recorded: a write lock on an
-  O_RDONLY fd is refused (open RDWR on both sides).
+  calls to VARIADIC `fcntl(2)` on an `O_RDWR` fd fail `rc=-1 errno=14`
+  (`EFAULT`) on darwin-arm64 even with a rooted struct [w8 IO3a1] — the
+  fixed-arity libffi convention does not match the variadic ABI. The
+  repair (the adapter's row decision): a compiled NON-variadic shim
+  (`w8_setlk`), which acquires the whole-file write lock [w8 IO3a
+  `=> 0`], EXCLUDES a child process (exit 42 = EAGAIN) [w8 IO3b], and
+  releases causally (child then acquires, exit 0) [w8 NC3]. Also
+  recorded: a write lock on an O_RDONLY fd is refused (open RDWR on
+  both sides).
 - **Directory sync**: `fsync` on an O_RDONLY directory fd succeeds [w8
   IO4] (core `fsync` returns unspecified — reachability is the row).
-- **`sa-file-mtime-ms` — second-resolution floor, FFI repair proven.**
-  Executed finding: `stat:mtimensec` answers 0 for EVERY file on this
-  darwin build (and `utime`'s ns args do not apply) [w8 IO5a]; an FFI
-  `stat(2)` reading `st_mtimespec` (offset 48/56 on darwin arm64)
-  reaches sub-second mtime (`...978` ms vs `...000`) [w8 IO5b]. The
-  adapter implements mtime-ms over the FFI stat on darwin.
+- **`sa-file-mtime-ms` — second-resolution floor on darwin, FFI repair
+  proven.** Executed finding: `(utime mt-file 1700000000 1700000000 0
+  456000000)`'s ns argument DOES apply to the inode (`456000000` ns is
+  preserved on disk), whereas Guile's core `stat:mtimensec` answers `0`
+  for EVERY file on this darwin build (`1700000000000` ms) [w8 IO5a]; an
+  FFI `stat(2)` reading `st_mtimespec` (offsets `48/56` on darwin-arm64,
+  `88/96` for `st_mtim` on linux-x86_64) recovers the exact sub-second
+  mtime (`1700000000456` ms) [w8 IO5b]. The adapter uses core `stat`
+  where `stat:mtimensec` works (Linux) and FFI `stat` on darwin.
 - **Subprocess**: `spawn` + pipe + `waitpid`, output captured, exit 0
   [w8 IO6]; `opendir/readdir/closedir` [w8 IO7]. `[man §7.2.7]`.
 - **Sockets / poller / suspendable ports — DHT and WebSocket parity
@@ -284,7 +348,7 @@ rows + NC1–NC3 PASS.
   mark — r1 had the wrong name); it reflects `--no-auto-compile` (it
   reads `#f` under the witnesses' runner) and is settable [w10 C6].
 - PARTIAL because: `.go` is Guile VM bytecode, not an AOT machine-code
-  object (the JIT makes hot code native at run time — the 75.9× compiled
+  object (the JIT makes hot code native at run time — the 87.0× compiled
   speedup in w12 is the executed proof the cache serves its purpose);
   and `sa-make-boot-file` MUST raise — `(system base compile)` exports
   no boot-file API [w10 C5: "make-boot-file bound: #f"], the
@@ -318,16 +382,16 @@ rows + NC1–NC3 PASS.
 **GO (measured).** `[w12]` (results/w12-perf.out), PERF-SUMMARY line:
 
 - child-process boot (`guile --no-auto-compile -c 0`), median of 3:
-  **193.4 ms**
-- interpreter `eval` of `(+ 1 2)`: **3.71 µs/eval** (20000 evals)
-- 1M-iteration tail loop (plain closure): **111.9 ms** (~9M simple
+  **162.2 ms**
+- interpreter `eval` of `(+ 1 2)`: **3.32 µs/eval** (20000 evals)
+- 1M-iteration tail loop (plain closure): **92.8 ms** (~10.8M simple
   calls/s)
-- 1M-iteration closure: interpreted-eval'd **116.6 ms** vs `compile`d
-  **1.537 ms** — **75.9× speedup** (the JIT/VM-compile path the AOT
-  cache buys)
+- 1M-iteration closure: interpreted-eval'd **106.7 ms** vs `compile`d
+  **1.23 ms** — **87.0× speedup** (the JIT/VM-compile path the AOT
+  cache buys); `NC1` confirms 1 iteration takes `0.31 ms` << `106.7 ms`.
 
 Context: suspendable-ports I/O costs "a factor of 3 or 4" vs C port ops
-(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~194 ms
+(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~162 ms
 is heavy for short-lived CLI processes (the Chez comparison number is a
 Phase 2b measurement on the same corpus, not part of 2a).
 
@@ -342,20 +406,21 @@ Phase 2b measurement on the same corpus, not part of 2a).
   `uname`, and a Linux run must confirm each: `EAGAIN` (35 darwin /
   11 linux — recorded 35 [w9 S2b]); `__error` vs `__errno_location`
   (both probed, `__error` wins on darwin [w4]); `struct flock` layout +
-  `F_SETLK` (8/3 darwin [w8]); FFI `stat` `st_mtimespec` offsets (48/56
-  darwin arm64 [w8 IO5b]); `RLIMIT_AS` (5 darwin / 9 linux [w6 P3d]);
-  foreign-library extension order (`.bundle/.so/.dylib` darwin).
+  `F_SETLK` (8/3 darwin [w8]); FFI `stat` `st_mtimespec`/`st_mtim`
+  offsets (48/56 darwin arm64, 88/96 linux x86_64 [w8 IO5b]);
+  `RLIMIT_AS` (5 darwin / 9 linux [w6 P3d]); foreign-library extension
+  order (`.bundle/.so/.dylib` darwin).
 - Executed darwin facts a Linux run will differ on: variadic-FFI EFAULT
   (linux libffi may or may not pass variads — the w8 shim is the
   portable answer either way); `stat:mtimensec` dead at 0 (Linux Guile
-  populates it — the adapter prefers core stat there and falls back to
-  the FFI probe).
+  populates it — `w8 IO5a` branches on `darwin?` and expects
+  `1700000000456` ms from core `stat` on Linux).
 - `getaffinity/setaffinity` are GNU-only (`[man §7.2.7]`) — not contract
   rows; recorded as surface.
 
 ---
 
-## Surprises (r2, executed)
+## Surprises (r2/r3, executed)
 
 1. **`#vu8(...)` reads NATIVELY** — r1's doc-derived claim that the
    default reader fails on it (needing `read-hash-extend!`) was wrong
@@ -367,19 +432,27 @@ Phase 2b measurement on the same corpus, not part of 2a).
 3. **The raw errno slot is unusable** — Guile manages errno across
    foreign calls; boundary capture (`#:return-errno?`) is not just
    preferable, it is the ONLY sound mechanism [w4 E1/NC1].
-4. **Callbacks are internally rooted** — dropped-reference qsort
-   trampolines survive GC and run correctly [w4 CL2]; no adapter
-   registry required.
+4. **Callbacks require an adapter registry AND foreign-thread helper** —
+   `procedure->pointer` roots its closure ONLY via the returned
+   `<pointer>` object [w4 CL2a]; keeping only the raw C address
+   (`sa-foreign-callable-entry-point`) and dropping `<pointer>` SIGSEGVs
+   after GC [w4 CL2b], so the adapter **MUST** maintain a callable
+   registry. Furthermore, `procedure->pointer` does not call
+   `scm_with_guile`, so invoking it directly on an unattached foreign
+   pthread SIGSEGVs [w7 CB1]; `sa-foreign-callable-collect-safe` on
+   foreign threads needs a compiled C `libffi` + `scm_with_guile` shim.
 5. **Variadic libc functions EFAULT through the FFI** on darwin-arm64
-   (fcntl) — the compiled-shim technique is now a recorded adapter
-   requirement for record locks (and any other variad) [w8 IO3].
-6. **`stat:mtimensec` is dead on this darwin build** (always 0) and
-   `utime` ns args do not apply — ms-resolution mtime needs the FFI
-   stat [w8 IO5].
+   (fcntl `rc=-1 errno=14` [w8 IO3a1]) — the compiled-shim technique is
+   now a recorded adapter requirement for record locks (and any other
+   variad) [w8 IO3].
+6. **`stat:mtimensec` is dead on this darwin build, while `utime` ns
+   args DO apply** — `utime(..., 456000000 ns)` sets the inode's
+   nanoseconds (`1700000000456` ms via FFI `stat`), while darwin core
+   `stat:mtimensec` drops it to `0` (`1700000000000` ms) [w8 IO5a/IO5b].
 7. **Both Gambit p1a NO-GO rows are recorded PASSes** — GC completes
-   during a blocked C call (823 rounds [w5]) and foreign pthreads enter
-   cleanly through `scm_with_guile` (41/42 [w7]) while raw entry
-   segfaults (exit 11 [w7]).
+   during a blocked C call (`999` rounds, `gc-times-during=199` [w5])
+   and foreign pthreads enter cleanly through `scm_with_guile` (41/42
+   [w7]) while raw entry segfaults (`term-sig=11` [w7]).
 8. **`(srfi srfi-18)` exists** in 3.0.11 with the full surface (the r1
    brief and the guile.ss header note are stale) [w0]; there is NO
    `(ice-9 sockets)` module — the socket API is core [w9].
@@ -397,16 +470,24 @@ Phase 2b measurement on the same corpus, not part of 2a).
    over `make-parameter`; numeric id registry + `(thread-exited?)` gate;
    mutexes from `(make-mutex 'allow-external-unlock)`; fences via
    `(ice-9 atomic)` ops.
-3. `sa-call-with-escape-continuation` on prompts (or call/cc) + spent
-   flag + owner-thread raise; unwind via dynamic-wind.
+3. `sa-call-with-escape-continuation` on prompts (fresh `(make-prompt-tag
+   "escape")` per call — never a global tag!) or `call/cc`, with a
+   `spent` flag set on **both** the escape and normal-return paths;
+   unwind via `dynamic-wind`. **Do NOT** bake in an owner-thread check
+   (ownership is the host layer's rule per `TARGET-CONTRACT.md:49-50`).
 4. FFI: `#:return-errno?` for native-error (never slot reads); blocking
-   collapses to plain; `sa-foreign-callable-entry-point` returns a
-   `scm_with_guile` trampoline; root FFI buffer args across calls; a
-   variadic-shim C file for fcntl-style locks.
+   collapses to plain; maintain a **callable registry** rooting every
+   `procedure->pointer` `<pointer>` while C holds its
+   `sa-foreign-callable-entry-point` address; use `procedure->pointer`
+   for `sa-foreign-callable` (same-thread Guile mode), and either build a
+   compiled C `libffi` closure helper (`ffi_prep_closure_loc` entering
+   `scm_with_guile`) for `sa-foreign-callable-collect-safe` on foreign
+   pthreads or qualify it as degraded until built; root FFI buffer args
+   across calls; a variadic-shim C file for `fcntl`-style locks.
 5. GC: lock/unlock no-ops; `(gc)`; stats mapping per w6's recorded key
    set; real `after-gc-hook` install.
-6. I/O per w8/w9: FFI stat for ms mtime on darwin; canonicalize-path;
-   O_EXCL; shim-based locks; spawn/waitpid; suspendable-ports event loop
-   for DHT/WebSocket.
+6. I/O per w8/w9: FFI stat for ms mtime on darwin (core `stat` where
+   `stat:mtimensec` works); canonicalize-path; O_EXCL; shim-based locks;
+   spawn/waitpid; suspendable-ports event loop for DHT/WebSocket.
 7. Compile tier per w10; crypto per w11 (libcrypto EVP + getentropy +
    vendored BLAKE3 decision).

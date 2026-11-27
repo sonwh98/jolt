@@ -77,6 +77,18 @@
 (check "C1 compiled-vs-interpreted measured (both nonzero)" (and (> i-ms 0)
                                                                  (> c-ms 0)))
 
+;; ---- NC1 negative/sanity control ------------------------------------------------
+;; Verify the timing harness actually measures work (1 iteration << 1M
+;; iterations; not a constant or broken clock).
+(set! t0 (now-ms))
+(interp-fn 1)
+(define one-ms (- (now-ms) t0))
+(format #t "NC1 1-iteration interp-fn: ~a ms vs 1M-iteration: ~a ms~%"
+        one-ms i-ms)
+(check "NC1 control: 1M-iteration timing strictly exceeds 1-iteration timing \
+(timer distinguishes work)"
+       (> i-ms one-ms))
+
 ;; ---- record for AUDIT ---------------------------------------------------------------
 (format #t "PERF-SUMMARY: boot-median-ms=~a eval-us=~a loop-ms=~a \
 compiled-ms=~a~%"

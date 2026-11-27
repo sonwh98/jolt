@@ -2,12 +2,13 @@
 === W5 blocking-C-call vs GC witness ===
 CHECK-OK   B is provably executing (>=1 round before A enters C)
 A: blocking foreign call returned 0s
-observed state: rounds-before=278 rounds-after=830 rounds-during-block=830
+observed state: rounds-before=327 rounds-after=999 rounds-during-block=999 gc-times-before=68 gc-times-after=267 gc-times-during=199
 CHECK-OK   A's C call really blocked ~3s (wall clock)
-CHECK-OK   DECISIVE: B completed collection rounds WHILE A sat in the C call (blocking collapses to plain: the collector does not stop)
-distinct heap-size samples across rounds: 3
-CHECK-OK   collections were real (heap-size samples vary; sa-gc-collect is not a no-op)
+CHECK-OK   DECISIVE: B completed rounds AND real GC collections (gc-times incremented) WHILE A sat in the C call (blocking collapses to plain: the collector does not stop)
+heap-size samples during block: 1
+CHECK-OK   collections were real during block (gc-times delta > 0)
 CHECK-OK   live vector mutations intact after concurrent collections
-CHECK-OK   NC control: the in-block counter also counts in a no-C window (counters distinguish)
+NC control (a-in-block=#f, 1s window): during 999->999, total 1326->1651
+CHECK-OK   NC control: rounds-during-block stays unchanged when a-in-block is #f while rounds-total advances
 W5-VERDICT: PASS (GC completes during a blocked C call)
 ### exit=0

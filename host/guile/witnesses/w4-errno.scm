@@ -28,6 +28,7 @@
 (use-modules (system foreign)
              (system foreign-library)
              (rnrs bytevectors)
+             (rnrs io ports)
              (ice-9 threads)
              (ice-9 atomic)
              (srfi srfi-1)
@@ -138,14 +139,16 @@ interleaved rounds (per-thread TLS errno proven)"
 
 ;; ---- CL callback lifetime under GC --------------------------------------------
 ;; Manual §6.19.8 documents procedure->pointer but says nothing about
-;; rooting; the adapter needs to know whether a trampoline survives once
-;; the Scheme procedure reference is dropped.  qsort through the pointer,
-;; kept-reference variant MUST sort; dropped-reference variant: outcome
-;; recorded either way (survival = internally rooted; crash = the adapter
-;; must keep a registry; the watchdog records a hang/crash as failure).
+;; rooting.  r3 (review P1): the r2 CL2 kept the <pointer> OBJECT alive in
+;; a local variable, so it proved nothing — the closure is rooted BY the
+;; <pointer> object procedure->pointer returns.  The decisive row is what
+;; happens when only the raw C address survives (the shape
+;; sa-foreign-callable-entry-point hands to C): that CRASHES (SIGSEGV,
+;; reproduced in r3), so the adapter MUST keep every <pointer> in a
+;; callable registry for as long as C holds its address.
 (define c-qsort
   (foreign-library-function #f "qsort"
-                            #:return-type int
+                            #:return-type void
                             #:arg-types (list '* size_t size_t '*)))
 (define (make-comparator)
   (procedure->pointer
@@ -158,25 +161,67 @@ interleaved rounds (per-thread TLS errno proven)"
        (cb (make-comparator)))
   (c-qsort (bytevector->pointer arr) (bytevector-length arr) 1 cb)
   (gc)
-  (check "CL1 qsort through procedure->pointer sorts (reference kept)"
+  (check "CL1 qsort through procedure->pointer sorts (references kept)"
          (equal? (bytevector->u8-list arr) '(1 3 5 7 9))))
+;; CL2a: drop the Scheme PROCEDURE reference, keep the <pointer> object.
 (let* ((arr2 (u8-list->bytevector '(8 2 6 4)))
        (holder (list (make-comparator))))
-  (define cptr (car holder))
+  (define cptr (car holder))          ; the <pointer> object, kept LIVE
   (set! holder #f)
   (gc) (gc) (gc)
-  (let ((r (false-if-exception
-            (c-qsort (bytevector->pointer arr2) (bytevector-length arr2)
-                     1 cptr))))
-    (format #t "CL2 qsort after dropping the only Scheme proc ref + 3 GCs \
-=> ~s arr=~s~%" r (bytevector->u8-list arr2))
-    (format #t "CL2 outcome recorded: survival means Guile roots the \
-trampoline internally; a crash here is the watchdog's record and means \
-the adapter MUST keep a callback registry~%")
-    (check "CL2 dropped-reference call: if it returned, values crossed \
-correctly (survival implies correctness; refusal is separately recorded)"
-           (or (not r)
-               (equal? (bytevector->u8-list arr2) '(2 4 6 8))))))
+  (c-qsort (bytevector->pointer arr2) (bytevector-length arr2) 1 cptr)
+  (format #t "CL2a proc ref dropped, <pointer> kept, 3 GCs => arr=~s~%"
+          (bytevector->u8-list arr2))
+  (check "CL2a the <pointer> object roots the trampoline (proc ref \
+dropped, still sorts)"
+         (equal? (bytevector->u8-list arr2) '(2 4 6 8))))
+;; CL2b: same-process child tests via guile -c (top-level read-eval clears
+;; frames between forms so BDW-GC collects dropped <pointer> reliably):
+;;   - kept:    keep <pointer>, pass (make-pointer addr), GC -> sorts cleanly
+;;   - dropped: drop <pointer>, keep ONLY addr, GC, pass (make-pointer addr) -> SIGSEGV
+(define guile-bin (or (getenv "GUILE") "guile"))
+(define (make-cb-child-code keep?)
+  (string-append
+   "(use-modules (system foreign) (system foreign-library) (rnrs bytevectors)) "
+   "(define cb-qsort (foreign-library-function #f \"qsort\" #:return-type void #:arg-types (list '* size_t size_t '*))) "
+   "(define (cb-make-cmp) (let ((zero (string->number \"0\"))) (procedure->pointer int (lambda (a b) (+ zero (- (bytevector-u8-ref (pointer->bytevector a 1) 0) (bytevector-u8-ref (pointer->bytevector b 1) 0)))) (list '* '*)))) "
+   "(define cb-holder (list (cb-make-cmp))) "
+   "(define cb-raw (pointer-address (car cb-holder))) "
+   (if keep? "" "(set! cb-holder #f) ")
+   "(gc) (gc) (gc) "
+   "(define cb-arr (u8-list->bytevector '(5 1 4 2 3))) "
+   "(cb-qsort (bytevector->pointer cb-arr) (bytevector-length cb-arr) 1 (make-pointer cb-raw)) "
+   "(format #t \"" (if keep? "W4-CALLBACK-CHILD-KEPT" "W4-CALLBACK-CHILD-SURVIVED")
+   " arr=~s~%\" (bytevector->u8-list cb-arr))"))
+(define (run-cb-child keep?)
+  (let* ((pr (pipe))
+         (pid (spawn guile-bin
+                     (list guile-bin "--no-auto-compile" "-c"
+                           (make-cb-child-code keep?))
+                     #:output (cdr pr)
+                     #:error (cdr pr))))
+    (close-port (cdr pr))
+    (let ((out (get-string-all (car pr))))
+      (close-port (car pr))
+      (cons out (cdr (waitpid pid))))))
+(let* ((r-kept (run-cb-child #t))
+       (out-k (car r-kept))
+       (st-k (cdr r-kept)))
+  (format #t "CL2b-kept child output:~a status: exit-val=~s term-sig=~s~%"
+          out-k (status:exit-val st-k) (status:term-sig st-k))
+  (check "CL2b-kept (make-pointer addr) survives GC and sorts when <pointer> \
+is rooted in the same process"
+         (and (eqv? (status:exit-val st-k) 0)
+              (string-contains out-k "W4-CALLBACK-CHILD-KEPT arr=(1 2 3 4 5)"))))
+(let* ((r-drop (run-cb-child #f))
+       (out-d (car r-drop))
+       (st-d (cdr r-drop)))
+  (format #t "CL2b-dropped child output:~a status: exit-val=~s term-sig=~s~%"
+          out-d (status:exit-val st-d) (status:term-sig st-d))
+  (check "CL2b retaining ONLY the raw address and dropping the <pointer> \
+SIGSEGVs in the same process — the adapter MUST root the <pointer> objects \
+(callable registry) while C holds their addresses"
+         (eqv? (status:term-sig st-d) 11)))
 
 ;; ---- D1/D2 dlopen/dlsym error reporting ---------------------------------------
 (let ((sym (false-if-exception

@@ -10,10 +10,14 @@ CHECK-OK   E3a boundary capture reports EBADF(9) for read(-1)
 CHECK-OK   E3b the captured pair survives a post-capture clobber (still 9)
 NC1 raw slot after clobber call = 0 (captured pair kept 9)
 CHECK-OK   NC1 control: a LATE raw read diverges from the captured pair (late-read is decisively wrong, not merely racy)
-CHECK-OK   CL1 qsort through procedure->pointer sorts (reference kept)
-CL2 qsort after dropping the only Scheme proc ref + 3 GCs => 1 arr=(2 4 6 8)
-CL2 outcome recorded: survival means Guile roots the trampoline internally; a crash here is the watchdog's record and means the adapter MUST keep a callback registry
-CHECK-OK   CL2 dropped-reference call: if it returned, values crossed correctly (survival implies correctness; refusal is separately recorded)
+CHECK-OK   CL1 qsort through procedure->pointer sorts (references kept)
+CL2a proc ref dropped, <pointer> kept, 3 GCs => arr=(2 4 6 8)
+CHECK-OK   CL2a the <pointer> object roots the trampoline (proc ref dropped, still sorts)
+CL2b-kept child output:W4-CALLBACK-CHILD-KEPT arr=(1 2 3 4 5)
+ status: exit-val=0 term-sig=#f
+CHECK-OK   CL2b-kept (make-pointer addr) survives GC and sorts when <pointer> is rooted in the same process
+CL2b-dropped child output: status: exit-val=#f term-sig=11
+CHECK-OK   CL2b retaining ONLY the raw address and dropping the <pointer> SIGSEGVs in the same process — the adapter MUST root the <pointer> objects (callable registry) while C holds their addresses
 CHECK-OK   D1 missing symbol lookup RAISES
 CHECK-OK   D2 missing library load RAISES
 CHECK-OK   D3 the #f handle resolves global (libc) symbols — the running executable's dynamic namespace

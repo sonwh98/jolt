@@ -13,7 +13,8 @@
 ;;        self-spawns in lock-child mode); release then allows;
 ;;   IO4 directory sync: open-fdes O_RDONLY on a directory + fsync;
 ;;   IO5 sa-file-mtime-ms: stat:mtime + stat:mtimensec (manual §7.2.3),
-;;        sub-millisecond round-trip through utime's ns arguments;
+;;        sub-millisecond round-trip through utime's ns arguments (platform-
+;;        branched FFI stat repair on darwin where stat:mtimensec is 0);
 ;;   IO6 sa-run-process: spawn + pipe + waitpid (manual §7.2.7).
 ;;
 ;; Negative controls:
@@ -31,7 +32,8 @@
              (system foreign-library)
              (rnrs bytevectors)
              (rnrs io ports)
-             (srfi srfi-1))
+             (srfi srfi-1)
+             (srfi srfi-8))
 
 (define here (dirname (current-filename)))
 ;; script args: find the mode marker regardless of how the driver spelled
@@ -53,7 +55,8 @@
 (define c-fcntl
   (foreign-library-function #f "fcntl"
                             #:return-type int
-                            #:arg-types (list int int '*)))
+                            #:arg-types (list int int '*)
+                            #:return-errno? #t))
 
 ;; struct flock bytevector (whole-file lock, whence = SEEK_SET = 0)
 (define (make-flock type)
@@ -162,15 +165,20 @@ calls EFAULT — recorded)"
                             "w8_setlk"
                             #:return-type int
                             #:arg-types (list int '*)))
-;; record the direct-variadic failure for the audit trail
-(let ((fl (make-flock F-WRLCK)))
-  (define direct-rc
-    (c-fcntl (open-fdes shim-src O_RDONLY) F-SETLK
-             (bytevector->pointer fl)))
-  (format #t "IO3a1 direct variadic fcntl F_SETLK => ~a (EFAULT evidence)~%"
-          direct-rc))
 (define lock-file (string-append tmpdir "/locked"))
 (call-with-output-file lock-file (lambda (p) (display "L" p)))
+;; record the direct-variadic failure for the audit trail (O_RDWR so EBADF
+;; cannot mask EFAULT; boundary-captured errno proves EFAULT = 14 on darwin-arm64)
+(let ((fl (make-flock F-WRLCK))
+      (fd (open-fdes lock-file O_RDWR)))
+  (receive (direct-rc direct-err)
+      (c-fcntl fd F-SETLK (bytevector->pointer fl))
+    (close-fdes fd)
+    (format #t "IO3a1 direct variadic fcntl F_SETLK (O_RDWR) => rc=~a errno=~a~%"
+            direct-rc direct-err)
+    (when darwin?
+      (check "IO3a1 direct variadic fcntl F_SETLK fails EFAULT(14) on darwin-arm64"
+             (and (= direct-rc -1) (= direct-err 14))))))
 (define parent-fd (open-fdes lock-file O_RDWR))
 (define parent-fl (make-flock F-WRLCK))     ; rooted across the call
 (define locked (shim-setlk parent-fd (bytevector->pointer parent-fl)))
@@ -212,39 +220,44 @@ calls EFAULT — recorded)"
 (close-fdes dirfd)
 
 ;; ---- IO5 mtime-ms ---------------------------------------------------------------
-;; RECORDED FINDING (darwin-arm64, Guile 3.0.11): stat:mtimensec answers 0
-;; for EVERY file (Guile's darwin stat does not populate the ns fields),
-;; and utime's ns arguments do not apply — so sa-file-mtime-ms through the
-;; core stat has SECOND resolution here.  The repair is an FFI stat(2)
-;; reading st_mtimespec; darwin arm64 struct stat puts st_mtimespec at
-;; offset 48 (tv_sec u64@48, tv_nsec u64@56).
+;; RECORDED FINDING (darwin-arm64, Guile 3.0.11): utime's ns arguments DO
+;; apply to the underlying inode (tv_nsec=456000000 observed via FFI stat),
+;; while Guile's core stat:mtimensec answers 0 for EVERY file on darwin
+;; (so sa-file-mtime-ms through core stat has SECOND resolution on darwin).
+;; The repair is an FFI stat(2) reading st_mtimespec / st_mtim:
+;;   - darwin-arm64: st_mtimespec at offset 48 (tv_sec u64@48, tv_nsec u64@56)
+;;   - linux-x86_64: st_mtim at offset 88 (tv_sec u64@88, tv_nsec u64@96)
 (define c-stat
   (foreign-library-function #f "stat"
                             #:return-type int
                             #:arg-types (list '* '*)))
 (define (ffi-mtime-ms path)
   (let* ((buf (make-bytevector 144 0))     ; rooted across the call
-         (rc (c-stat (string->pointer path) (bytevector->pointer buf))))
+         (rc (c-stat (string->pointer path) (bytevector->pointer buf)))
+         (sec-off (if darwin? 48 88))
+         (nsec-off (if darwin? 56 96)))
     (and (zero? rc)
-         (+ (* (bytevector-u64-native-ref buf 48) 1000)
-            (quotient (bytevector-u64-native-ref buf 56) 1000000)))))
+         (+ (* (bytevector-u64-native-ref buf sec-off) 1000)
+            (quotient (bytevector-u64-native-ref buf nsec-off) 1000000)))))
 (define mt-file (string-append tmpdir "/mtime"))
 (call-with-output-file mt-file (lambda (p) (display "m" p)))
-(sleep 1)
-(call-with-output-file mt-file (lambda (p) (display "m2" p)))
+(utime mt-file 1700000000 1700000000 0 456000000)
 (let* ((st (stat mt-file))
        (core-ms (+ (* (stat:mtime st) 1000)
                    (quotient (stat:mtimensec st) 1000000)))
        (ffi-ms (ffi-mtime-ms mt-file)))
-  (format #t "IO5 core stat mtime-ms=~a (nsec=~a); FFI st_mtimespec \
-mtime-ms=~a~%" core-ms (stat:mtimensec st) ffi-ms)
-  (check "IO5a core stat carries SECOND-resolution mtime (sa-file-mtime-ms \
-degraded floor)"
-         (= core-ms (* (stat:mtime st) 1000)))
-  (check "IO5b FFI stat repair reaches sub-second mtime (ns field nonzero \
-on a rewritten file)"
-         (and ffi-ms (> (modulo ffi-ms 1000) 0)
-              (< (abs (- ffi-ms core-ms)) 2000))))
+  (format #t "IO5 after utime(..., 456000000 ns): core stat mtime-ms=~a \
+(nsec=~a); FFI stat mtime-ms=~a~%" core-ms (stat:mtimensec st) ffi-ms)
+  (if darwin?
+      (check "IO5a darwin core stat drops ns to 0 (second-resolution floor)"
+             (and (= (stat:mtime st) 1700000000)
+                  (= (stat:mtimensec st) 0)
+                  (= core-ms 1700000000000)))
+      (check "IO5a non-darwin core stat preserves utime ns (ms resolution)"
+             (= core-ms 1700000000456)))
+  (check "IO5b FFI stat recovers exact sub-second mtime from utime ns \
+(1700000000456 ms)"
+         (eqv? ffi-ms 1700000000456)))
 
 ;; ---- IO6 subprocess ----------------------------------------------------------------
 (let* ((pr (pipe))

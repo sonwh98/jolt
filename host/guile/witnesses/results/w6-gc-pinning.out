@@ -6,11 +6,11 @@ CHECK-OK   NC1 control: the collections were real (heap-size samples vary)
 CHECK-OK   P2 malloc'd foreign memory stable across GC (writes persist)
 P3 gc-stats keys: (gc-time-taken gc-times heap-allocated-since-gc heap-free-size heap-size heap-total-allocated protected-objects)
 P3 heap-size: before=1785856 after-gc=1785856
-P3 heap-allocated-since-gc: before=25232 after-gc=4624
-P3 heap-total-allocated: before=2642416 after-gc=2654944
+P3 heap-allocated-since-gc: before=26368 after-gc=3008
+P3 heap-total-allocated: before=2646576 after-gc=2656976
 P3 heap-free-size: before=172032 after-gc=196608
 P3 gc-times: before=19 after-gc=20
-P3 gc-time-taken: before=60687000 after-gc=63664000
+P3 gc-time-taken: before=48228000 after-gc=50903000
 P3 protected-objects: before=0 after-gc=0
 CHECK-OK   P3a gc-stats carries heap-size (sa-total-memory-bytes candidate)
 CHECK-OK   P3b gc-stats carries allocation counters (sa-bytes-allocated candidates: heap-allocated-since-gc / heap-total-allocated)

@@ -10,16 +10,22 @@ CHECK-OK   E4b post-return invocation RAISES (frame gone)
 CHECK-OK   E5 escape value delivered from inside nested dynamic-wind
 CHECK-OK   E5b finally bodies ran on the way out, inner first
 E6 cross-thread invocation => #f
-CHECK-OK   E6 cross-thread invocation RAISES (ownership policy)
+CHECK-OK   E6 cross-thread invocation RAISES in the invoking thread (platform-enforced; ownership POLICY itself is the host layer's)
 CHECK-OK   P1 prompt-based normal return
 CHECK-OK   P2 prompt-based escape
 P3 sequential (k 1)(k 2) => 1 (second call unreachable — the first escape exits)
 CHECK-OK   P3a prompt-based escape delivers the first value
 CHECK-OK   P3b prompt wrapper returns normally after capture
-P3c prompt-based post-return invocation => #f
-CHECK-OK   P3c prompt-based post-return invocation RAISES (one-shot)
+P3c prompt-based post-return invocation => (misc-error (#f "~A ~S" (escape-continuation "one-shot escape used twice") #f))
+CHECK-OK   P3c prompt-based post-return invocation RAISES via the SPENT flag (not via 'unknown prompt')
 CHECK-OK   P4 prompt-based escape unwinds dynamic-wind
 CHECK-OK   P4b finally ran
+P5 nested outer-escape delivery => escaped
+CHECK-OK   P5 a fresh tag per call delivers the OUTER escape to the OUTER handler (shared-tag bug would answer (outer-continued escaped))
+P6 leaked-k invocation inside an active prompt-ec => (inner-completed (raised misc-error escape-continuation))
+CHECK-OK   P6 a spent k RAISES via spent flag inside a later active prompt-ec instead of hijacking it
+P7 escape value=pfirst second-use-during-unwind=#f
+CHECK-OK   P7 prompt-based second invocation DURING the unwind RAISES
 NC1 raw call/cc observations: (one two)
 CHECK-OK   NC1 control: RAW call/cc re-enters the finished frame (two passes logged: one two) — the spent flag is load-bearing
 NC2 broken-wrapper observations: (one two)

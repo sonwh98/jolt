@@ -56,9 +56,12 @@
 (check "F0 pkg-config guile-3.0 available to build the fixture"
        (and flags #t))
 
+(define fixture-bin (string-append here "/build/w7-fixture"))
+
 (define (build-fixture)
+  (false-if-exception (mkdir (string-append here "/build")))
   (let ((cmd (append '("cc" "-O2")
-                     (list "-o" (string-append here "/w7-fixture")
+                     (list "-o" fixture-bin
                            (string-append here "/w7-fixture.c"))
                      flags)))
     (format #t "W7: build: ~s~%" cmd)
@@ -69,7 +72,7 @@
     (check "F0b fixture compiled" (zero? rc))
     (when (zero? rc)
       ;; good mode
-      (let* ((r (run-capture (string-append here "/w7-fixture") '()))
+      (let* ((r (run-capture fixture-bin '()))
              (out (car r))
              (st (cdr r)))
         (format #t "W7 good-mode output:~a" out)
@@ -92,14 +95,29 @@
 (the check cannot pass vacuously)"
                (string-contains out "VERDICT")))
       ;; bad mode — recorded evidence only
-      (let* ((r (run-capture (string-append here "/w7-fixture") '("bad")))
+      (let* ((r (run-capture fixture-bin '("bad")))
              (out (car r))
              (st (cdr r)))
-        (format #t "W7 bad-mode (raw unattached entry) output:~a exit-status=~s~%"
-                out st)
+        (format #t "W7 bad-mode (raw unattached entry) output:~a exit-val=~s \
+term-sig=~s~%" out (status:exit-val st) (status:term-sig st))
         (format #t "W7: raw-entry outcome recorded (survival is NOT \
 qualification; a crash is the expected refusal shape on a target without \
-an entry protocol — Guile documents one, so either outcome is evidence)~%")))))
+an entry protocol — Guile documents one, so either outcome is evidence)~%"))
+      ;; callback mode (r3, review P1): a procedure->pointer trampoline
+      ;; invoked DIRECTLY as a pthread start routine (foreign thread, no
+      ;; scm_with_guile) — the refusal mode for sa-foreign-callable-
+      ;; collect-safe via plain procedure->pointer.
+      (let* ((r (run-capture fixture-bin '("callback")))
+             (out (car r))
+             (st (cdr r)))
+        (format #t "W7 callback-mode (procedure->pointer run on a foreign \
+pthread) output:~a exit-val=~s term-sig=~s~%" out (status:exit-val st)
+                (status:term-sig st))
+        (check "CB1 a procedure->pointer trampoline invoked on an \
+UNATTACHED foreign pthread refuses (SIGSEGV) — collect-safe foreign-thread \
+callables need a compiled C libffi-closure helper whose handler enters \
+scm_with_guile; plain procedure->pointer is same-thread (Guile-mode) only"
+               (eqv? (status:term-sig st) 11))))))
 
 (if (zero? fails)
     (format #t "W7-VERDICT: PASS (documented entry protocol works)~%")

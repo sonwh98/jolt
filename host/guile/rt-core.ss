@@ -409,9 +409,10 @@
 (define jolt-class-arms '())
 (define jolt-class-name-last (sa-site-cell-make (cons #f #f)))
 (define (register-class-arm! pred handler)
-  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
+  (set! jolt-class-arms (cons (cons pred handler) jolt-class-arms))
+  (memory-order-release)
   (sa-site-cell-set! jolt-class-name-last (cons #f #f))
-  (set! jolt-class-arms (cons (cons pred handler) jolt-class-arms)))
+  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch))
 
 (define (jolt-class-base x)
   (cond

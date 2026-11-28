@@ -108,7 +108,7 @@
 ;; multimethod reflectively reaches for, and it must produce the same value.
 (define (make-multifn name dispatch default hierarchy)
   (make-jolt-multifn name dispatch (new-mm-table) default hierarchy
-                     (new-mm-table) (new-mm-table) -1 #f))
+                     (new-mm-table) (sa-mm-cache-make key-hash jolt=) -1 #f))
 
 ;; (defmulti-setup 'name dispatch & opts) — opts is a flat :default/:hierarchy plist.
 (define (parse-mm-opts opts)

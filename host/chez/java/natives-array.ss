@@ -1544,8 +1544,6 @@
   (lazy-shims-class! (jclass-name cls))
   (let* ((nm (jclass-name cls))
          (fqn (jch-fqn-of-simple nm))
-         (ti (or (hashtable-ref type-registry nm #f)
-                 (hashtable-ref type-registry fqn #f)))
          (acc '()))
     (define (add! owner name f static?)
       (set! acc (cons (make-jhost "reflect-method" (vector owner name f static?)) acc)))
@@ -1555,18 +1553,26 @@
     ;; protocol's method table and leaves the class alone, so reflection over a
     ;; type that was merely extended reports nothing new (and never either of
     ;; the bookkeeping marks jolt files beside those methods).
-    (when ti
-      (let-values (((protos impls) (hashtable-entries ti)))
-        (vector-for-each
-         (lambda (proto pi)
-           (unless (extend-impl-table? pi)
-             (let-values (((names fns) (hashtable-entries pi)))
-               (vector-for-each
-                (lambda (n f)
-                  (unless (or (string=? n extend-mark) (string=? n inline-mark))
-                    (add! nm n f #f)))
-                names fns))))
-         protos impls)))
+    (let ((declared
+            (sa-shared-read rec-tbl-mu
+              (let ((ti (or (hashtable-ref type-registry nm #f)
+                            (hashtable-ref type-registry fqn #f))))
+                (if (not ti)
+                    '()
+                    (let ((out '()))
+                      (let-values (((protos impls) (hashtable-entries ti)))
+                        (vector-for-each
+                         (lambda (proto pi)
+                           (unless (extend-impl-table? pi)
+                             (let-values (((names fns) (hashtable-entries pi)))
+                               (vector-for-each
+                                (lambda (n f)
+                                  (unless (or (string=? n extend-mark) (string=? n inline-mark))
+                                    (set! out (cons (cons n f) out))))
+                                names fns))))
+                         protos impls))
+                      (reverse out)))))))
+      (for-each (lambda (e) (add! nm (car e) (cdr e) #f)) declared))
     ;; the shim's instance methods, for a class a jhost tag models. Two tags can
     ;; name one class, so both are walked; a name registered under both surfaces
     ;; twice, as an interface method inherited twice does on the JVM. A tag's

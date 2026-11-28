@@ -21,9 +21,10 @@
 ;; may change an answer, so it clears
 (define jolt-class-name-last (sa-site-cell-make (cons #f #f)))
 (define (register-class-arm! pred handler)
-  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
+  (set! jolt-class-arms (cons (cons pred handler) jolt-class-arms))
+  (when jolt-mt? (memory-order-release))
   (sa-site-cell-set! jolt-class-name-last (cons #f #f))
-  (set! jolt-class-arms (cons (cons pred handler) jolt-class-arms)))
+  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch))
 ;; A LIBRARY's arm (__register-class!) is probed as it registers: it arrives at
 ;; runtime, after the whole runtime has loaded, so its predicate can be run
 ;; against the probes there and then. The runtime's own arms cannot be probed at

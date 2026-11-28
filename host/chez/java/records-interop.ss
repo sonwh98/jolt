@@ -29,8 +29,9 @@
 ;; instance-check-base is the JVM taxonomy fallback when no arm decides.
 (define instance-check-registry '())
 (define (register-instance-check-arm! f)   ; f: (type-sym val) -> #t | #f | 'pass
-  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
-  (set! instance-check-registry (cons f instance-check-registry)))
+  (set! instance-check-registry (cons f instance-check-registry))
+  (when jolt-mt? (memory-order-release))
+  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch))
 ;; Bumped by every instance-check AND class arm registration (host-class.ss): what
 ;; the arms answer for a value kind can only change when one is added, the class
 ;; graph moves, or the protocol registry does — instance-kind-epoch below sums the
@@ -42,8 +43,8 @@
 ;; its position.
 (define instance-check-user-arm #f)
 (define (register-instance-check-user-arm! f)
-  (register-instance-check-arm! f)
-  (set! instance-check-user-arm f))
+  (set! instance-check-user-arm f)
+  (register-instance-check-arm! f))
 ;; The fns that arm asks, in registration order. Defined here, beside the memo
 ;; that reads it, not in the host file that registers the arm: Gambit includes
 ;; that file (host-vars.ss) after the seed prelude, and an instance? miss while

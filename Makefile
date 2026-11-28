@@ -1517,9 +1517,9 @@ census:
 adaptercheck:
 	@$(CHEZ) --script host/scheme-adapter/chez.ss
 	@if [ -x "$(GUILE_GUILE)" ]; then \
-	  $(GUILE-CHECK-INTERP) && \
-	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
-	  mkdir -p build/guile/cache && \
+	  $(GUILE-CHECK-INTERP); \
+	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) || exit $$?; \
+	  mkdir -p build/guile/cache || exit $$?; \
 	  log="build/guile/adaptercheck.log"; \
 	  rm -f "$$log"; \
 	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 60 $(GUILE_GUILE) --no-auto-compile -s host/scheme-adapter/guile.ss > "$$log"; then \
@@ -1535,13 +1535,13 @@ adaptercheck:
 	fi
 
 # Phase 3a Guile host verification suite: contract checks, reader, eval, hasheq,
-# threads/atomics, escape continuations, GC/mtime FFI, JIT fence lowering, and
+# threads/atomics, escape continuations, GC/mtime FFI, VM fence lowering, and
 # arm64 concurrency stress tests.
 guilecheck:
 	@if [ -x "$(GUILE_GUILE)" ]; then \
-	  $(GUILE-CHECK-INTERP) && \
-	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
-	  mkdir -p build/guile/cache && \
+	  $(GUILE-CHECK-INTERP); \
+	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) || exit $$?; \
+	  mkdir -p build/guile/cache || exit $$?; \
 	  log="build/guile/guilecheck.log"; \
 	  rm -f "$$log"; \
 	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 120 $(GUILE_GUILE) --no-auto-compile -s host/guile/guilecheck.ss > "$$log"; then \

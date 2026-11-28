@@ -1954,7 +1954,10 @@ grenadinecheck:
 
 gambitgencheck:
 	@out=$$(mktemp -d)/records-gambit.ss; \
-	  GEN_RECORDS_OUT="$$out" $(CHEZ) --script host/gambit/gen-records.ss >/dev/null; \
+	  if ! GEN_RECORDS_OUT="$$out" $(CHEZ) --script host/gambit/gen-records.ss >/dev/null; then \
+	    echo "gambitgencheck: the records generator failed — see 'make gambitgen'" >&2; \
+	    exit 1; \
+	  fi; \
 	  if diff -q "$$out" host/gambit/records-gambit.ss >/dev/null; then \
 	    echo "gambitgencheck: records-gambit.ss is current with the records files"; \
 	  else \

@@ -8,7 +8,7 @@
 ;;   "Starting from Guile 2.0, blocked threads no longer hinder garbage
 ;;    collection."
 ;; This witness decides it executably: thread A parks inside a compiled C
-;; shim (w5_blocking_sleep, calling libc sleep(3) and setting a C-side
+;; shim (w5_blocking_sleep, retrying nanosleep on EINTR and setting a C-side
 ;; atomic handshake flag w5_in_c=1 strictly while inside the C call), while
 ;; thread B checks w5_is_in_c(), allocates/GCs, and records gc-times.
 ;;
@@ -43,14 +43,18 @@
   (string-append tmpdir "/libw5shim." (if darwin? "dylib" "so")))
 (call-with-output-file shim-src
   (lambda (p)
-    (display "#include <unistd.h>\n" p)
+    (display "#include <errno.h>\n" p)
+    (display "#include <time.h>\n" p)
     (display "#include <stdatomic.h>\n" p)
     (display "static atomic_int w5_in_c = 0;\n" p)
     (display "int w5_blocking_sleep(unsigned int secs) {\n" p)
     (display "  atomic_store_explicit(&w5_in_c, 1, memory_order_release);\n" p)
-    (display "  unsigned int rem = sleep(secs);\n" p)
+    (display "  struct timespec delay = { .tv_sec = secs, .tv_nsec = 0 };\n" p)
+    (display "  int rc;\n" p)
+    ;; Signals can interrupt sleep while the collector is active.
+    (display "  do { rc = nanosleep(&delay, &delay); } while (rc == -1 && errno == EINTR);\n" p)
     (display "  atomic_store_explicit(&w5_in_c, 0, memory_order_release);\n" p)
-    (display "  return (int)rem;\n" p)
+    (display "  return rc;\n" p)
     (display "}\n" p)
     (display "int w5_is_in_c(void) {\n" p)
     (display "  return atomic_load_explicit(&w5_in_c, memory_order_acquire);\n" p)
@@ -125,7 +129,7 @@
 (define (now-ms)
   (/ (get-internal-real-time) (/ internal-time-units-per-second 1000.0)))
 (define t0 (now-ms))
-(define rem (w5-blocking-sleep 3))
+(define sleep-rc (w5-blocking-sleep 3))
 (define elapsed-ms (- (now-ms) t0))
 ;; Drain any in-flight worker round that started while w5_in_c was set before
 ;; taking the final snapshot or sampling the negative control.
@@ -140,15 +144,15 @@
   (if (and gc-times-first-in-c gc-times-last-in-c)
       (- gc-times-last-in-c gc-times-first-in-c)
       0))
-(format #t "A: w5_blocking_sleep(3) returned rem=~a elapsed-ms=~a~%"
-        rem elapsed-ms)
+(format #t "A: w5_blocking_sleep(3) returned rc=~a elapsed-ms=~a~%"
+        sleep-rc elapsed-ms)
 (format #t "observed state (C-handshake delimited): rounds-before=~a \
 rounds-after=~a rounds-during-block=~a gc-times-first-in-c=~a \
 gc-times-last-in-c=~a gc-times-during=~a~%"
         rounds-before-block rounds-after in-c-rounds
         gc-times-first-in-c gc-times-last-in-c gc-times-during)
 (check "A's C call returned 0 and really blocked ~3s wall-clock (>=2500ms)"
-       (and (= rem 0) (>= elapsed-ms 2500) (>= rounds-after 1)))
+       (and (= sleep-rc 0) (>= elapsed-ms 2500) (>= rounds-after 1)))
 (check "DECISIVE: B completed rounds AND real GC collections \
 (gc-times incremented strictly inside the C-side handshake) WHILE A sat in C \
 (blocking collapses to plain: the collector does not stop)"

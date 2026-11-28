@@ -130,6 +130,7 @@ JOLT-TARGETS-NEEDING-DEPS := \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
+        guilecheck \
         fibersbench dynbench \
         fibersresidue
 
@@ -1510,10 +1511,30 @@ census:
 	@sh host/chez/portability-check.sh --census
 
 # PSL R2 adapter contract gate: assert every CONTRACT.txt name is bound in
-# (chezscheme). The chez adapter defines nothing — this only fails when the
-# contract file lists a name Chez does not provide.
+# (chezscheme) and in Guile's (jolt runtime) boot module (expanding all syntax
+# forms). When Guile is not installed, the Guile leg skips unless
+# JOLT_REQUIRE_GUILE is set.
 adaptercheck:
 	@$(CHEZ) --script host/scheme-adapter/chez.ss
+	@if [ -x "$(GUILE_GUILE)" ]; then \
+	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
+	  mkdir -p build/guile/cache && \
+	  XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" $(GUILE_GUILE) --no-auto-compile -s host/scheme-adapter/guile.ss; \
+	else \
+	  $(GUILE-SKIP); \
+	fi
+
+# Phase 3a Guile host verification suite: contract checks, reader, eval, hasheq,
+# threads/atomics, escape continuations, GC/mtime FFI, JIT fence lowering, and
+# arm64 concurrency stress tests.
+guilecheck:
+	@if [ -x "$(GUILE_GUILE)" ]; then \
+	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
+	  mkdir -p build/guile/cache && \
+	  XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" $(GUILE_GUILE) --no-auto-compile -s host/guile/guilecheck.ss; \
+	else \
+	  $(GUILE-SKIP); \
+	fi
 
 # The three derived host properties (sa-os-family / sa-arch / sa-endian) are all
 # host logic may ask about the platform, so one wrong row is a wrong SIGCHLD,
@@ -1867,6 +1888,43 @@ GAMBIT-SKIP = if [ -n "$$JOLT_REQUIRE_GAMBIT" ]; then \
 	else \
 	  echo "$@: gambit-scheme not installed (GAMBIT_PREFIX=$(GAMBIT_PREFIX)) — skipped"; \
 	fi
+
+# Guile toolchain defaults (override GUILE_PREFIX=/path/to/guile or GUILE_GUILE=/path/to/bin/guile;
+# CI sets JOLT_REQUIRE_GUILE=1 so a missing Guile fails instead of skipping).
+GUILE_PREFIX ?= $(shell \
+  if command -v mise >/dev/null 2>&1 && mise where guile@3.0.11 >/dev/null 2>&1; then \
+    mise where guile@3.0.11; \
+  elif [ -x /opt/homebrew/opt/guile/bin/guile ]; then \
+    echo /opt/homebrew/opt/guile; \
+  elif [ -x /usr/local/opt/guile/bin/guile ]; then \
+    echo /usr/local/opt/guile; \
+  elif command -v guile >/dev/null 2>&1; then \
+    dirname "$$(dirname "$$(command -v guile)")"; \
+  else \
+    echo /usr/local; \
+  fi)
+GUILE_GUILE ?= $(GUILE_PREFIX)/bin/guile
+GUILE_UNAME := $(shell uname -s)
+ifeq ($(GUILE_UNAME),Darwin)
+  GUILE_PLATFORM_LIB := build/guile/libjolt-guile-platform.dylib
+else
+  GUILE_PLATFORM_LIB := build/guile/libjolt-guile-platform.so
+endif
+GUILE_CC_FLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -fPIC
+ifeq ($(GUILE_UNAME),Darwin)
+  GUILE_LD_FLAGS := -dynamiclib
+else
+  GUILE_LD_FLAGS := -shared
+endif
+GUILE-SKIP = if [ -n "$$JOLT_REQUIRE_GUILE" ]; then \
+	  echo "$@: no guile at $(GUILE_GUILE) and JOLT_REQUIRE_GUILE is set" >&2; exit 1; \
+	else \
+	  echo "$@: guile not installed (GUILE_PREFIX=$(GUILE_PREFIX)) — skipped"; \
+	fi
+
+$(GUILE_PLATFORM_LIB): host/guile/ffi/platform.c
+	@mkdir -p build/guile
+	$(CC) $(GUILE_CC_FLAGS) $(GUILE_LD_FLAGS) $< -o $@
 
 # Gambit adapter gate (G1, jolt-mj95.2): loads host/gambit/{prelude-shims,
 # scheme-adapter-runtime,hasheq}.ss under native gsi and asserts the

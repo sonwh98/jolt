@@ -177,33 +177,60 @@
     (() (srfi19:current-time))
     ((type) (srfi19:current-time type))))
 
+(define (%set-cloexec! port)
+  (fcntl port F_SETFD (logior (fcntl port F_GETFD) FD_CLOEXEC))
+  port)
+
+(define (%configure-process-port! port transcoder)
+  (if (not transcoder)
+      (set-port-encoding! port "ISO-8859-1")
+      (let ((enc (cond
+                   ((string? transcoder) transcoder)
+                   (else (r6io:transcoder-codec transcoder)))))
+        (set-port-encoding! port enc)
+        (unless (string? transcoder)
+          (set-port-conversion-strategy!
+            port
+            (case (r6io:transcoder-error-handling-mode transcoder)
+              ((raise) 'error)
+              ((replace) 'substitute)
+              (else 'substitute)))))))
+
 ;; (sa-run-process cmd transcoder) -> (values stdin-out stdout-in stderr-in pid)
 (define (sa-run-process cmd transcoder)
-  (let* ((in-pipe (pipe))
-         (out-pipe (pipe))
-         (err-pipe (pipe))
-         (in-r (car in-pipe)) (in-w (cdr in-pipe))
-         (out-r (car out-pipe)) (out-w (cdr out-pipe))
-         (err-r (car err-pipe)) (err-w (cdr err-pipe))
-         (pid #f))
+  (let ((opened '()))
+    (define (close-opened!)
+      (for-each (lambda (p) (catch #t (lambda () (close-port p)) (lambda _ #f)))
+                opened)
+      (set! opened '()))
+    (define (cloexec-pipe!)
+      (let* ((p (pipe))
+             (r (car p))
+             (w (cdr p)))
+        (set! opened (cons r (cons w opened)))
+        (%set-cloexec! r)
+        (%set-cloexec! w)
+        p))
     (catch #t
       (lambda ()
-        (set! pid
-          (spawn "/bin/sh" (list "/bin/sh" "-c" cmd)
-                 #:input in-r #:output out-w #:error err-w
-                 #:search-path? #f)))
+        (let* ((in-pipe (cloexec-pipe!))
+               (out-pipe (cloexec-pipe!))
+               (err-pipe (cloexec-pipe!))
+               (in-r (car in-pipe)) (in-w (cdr in-pipe))
+               (out-r (car out-pipe)) (out-w (cdr out-pipe))
+               (err-r (car err-pipe)) (err-w (cdr err-pipe))
+               (pid (spawn "/bin/sh" (list "/bin/sh" "-c" cmd)
+                           #:input in-r #:output out-w #:error err-w
+                           #:search-path? #f)))
+          (set! opened (list in-r out-w err-w))
+          (close-opened!)
+          (%configure-process-port! in-w transcoder)
+          (%configure-process-port! out-r transcoder)
+          (%configure-process-port! err-r transcoder)
+          (values in-w out-r err-r pid)))
       (lambda args
-        (for-each (lambda (p) (catch #t (lambda () (close-port p)) (lambda _ #f)))
-                  (list in-r in-w out-r out-w err-r err-w))
-        (apply throw args)))
-    (close-port in-r)
-    (close-port out-w)
-    (close-port err-w)
-    (unless transcoder
-      (set-port-encoding! in-w "ISO-8859-1")
-      (set-port-encoding! out-r "ISO-8859-1")
-      (set-port-encoding! err-r "ISO-8859-1"))
-    (values in-w out-r err-r pid)))
+        (close-opened!)
+        (apply throw args)))))
 
 (define (sa-environment-pairs)
   (let loop ((es (environ)) (acc '()))
@@ -304,35 +331,14 @@
 (define (sa-pin-for-owner! _owner _obj) (void))
 (define (sa-unpin-for-owner! _owner) (void))
 
-(define %jolt-after-gc-proc #f)
-(define (sa-gc-install-after-collect! maintain observe)
-  (when %jolt-after-gc-proc
-    (remove-hook! after-gc-hook %jolt-after-gc-proc)
-    (set! %jolt-after-gc-proc #f))
-  (let ((last-end (%guile-monotonic-ns))
-        (mu (%guile-make-mutex))
-        (collect-full! (case-lambda (() (gc)) ((_room) (gc)))))
-    (let ((handler
-            (lambda ()
-              (unless (fluid-ref %jolt-after-collect-running?)
-                (with-fluids ((%jolt-after-collect-running? #t))
-                  (when (try-mutex mu)
-                    (dynamic-wind
-                      void
-                      (lambda ()
-                        (let ((t0 (%guile-monotonic-ns)))
-                          (maintain collect-full!)
-                          (let ((t1 (%guile-monotonic-ns)))
-                            (observe (- t1 t0) (- t1 last-end))
-                            (set! last-end t1))))
-                      (lambda () (unlock-mutex mu)))))))))
-      (set! %jolt-after-gc-proc handler)
-      (add-hook! after-gc-hook handler))
-    #t))
+;; Qualify callback context, timing, and reentrancy through the actual ceiling
+;; policy (rt.ss) before advertising a heap ceiling; until then return #f so
+;; JOLT_MAX_HEAP stays honestly unbounded (DESIGN.md).
+(define (sa-gc-install-after-collect! _maintain _observe) #f)
 
 (define (sa-gc-install-stall-watch! _seconds _on-stall) #f)
 (define (sa-gc-install-after-rendezvous! _thunk) #f)
-(define (sa-current-stack-bytes) 0)
+(define (sa-current-stack-bytes) #f)
 
 (define (sa-make-output-port name put! put-some! flush! clear! close!)
   (make-soft-port
@@ -468,6 +474,7 @@
                     (when spent
                       (error 'sa-call-with-escape-continuation
                              "jolt.guile: escape continuation has expired"))
+                    (set! spent #t)
                     (apply abort-to-prompt tag vals))))
           (lambda (_k . vals)
             (apply values vals))))
@@ -495,9 +502,7 @@
   (error 'sa-fasl-read
          "jolt.guile: fasl serialization is unsupported on the guile target"))
 
-(define (sa-block-profile-dump! _path _tag)
-  (error 'sa-block-profile-dump!
-         "jolt.guile: block profiling is unsupported on the guile target"))
+(define (sa-block-profile-dump! _path _tag) 0)
 (define (sa-block-profile-tag _path)
   (error 'sa-block-profile-tag
          "jolt.guile: block profiling is unsupported on the guile target"))

@@ -295,13 +295,16 @@ from <fcntl.h>; variadic-direct calls EFAULT — recorded)"
   (bytevector-s64-native-set! ts 24 250000000)
   (receive (rc err)
       (c-utimensat AT-FDCWD (string->pointer mt-pre) (bytevector->pointer ts) 0)
-    (let ((pre-ms (ffi-mtime-ms mt-pre)))
+    (let ((pre-ms (ffi-mtime-ms mt-pre))
+          (core-pre-mtime (stat:mtime (stat mt-pre))))
       (format #t "IO5c pre-epoch utimensat(-10s, 250ms) rc=~a err=~a => \
 ffi-mtime-ms=~a (core stat:mtime=~a)~%"
-              rc err pre-ms (stat:mtime (stat mt-pre)))
-      (check "IO5c FFI stat reads signed time_t for pre-epoch mtime \
-(-9750 ms)"
-             (and (zero? rc) (eqv? pre-ms -9750))))))
+              rc err pre-ms core-pre-mtime)
+      (check "IO5c signed FFI stat reads pre-epoch time_t (-9750 ms) while \
+core stat:mtime wraps unsigned (scm_from_ulong)"
+             (and (zero? rc)
+                  (eqv? pre-ms -9750)
+                  (>= core-pre-mtime 0))))))
 
 ;; ---- IO6 subprocess ----------------------------------------------------------------
 (let* ((pr (pipe))

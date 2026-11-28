@@ -78,24 +78,27 @@
 (define heaps-during-block '())
 
 (define (b-round!)
-  ;; one real collection round over live data (explicit (gc) + churn)
+  ;; one real collection round over live data (explicit (gc) + churn);
+  ;; bracket any accepted GC sample with two active-flag reads (before and
+  ;; after (gc)) so a round overlapping w5_blocking_sleep's exit is excluded.
   (let* ((_ (do ((i 0 (+ i 1)))
                 ((= i 20000))
               (vector-set! witness-vector i (+ i 1))))
          (garbage (make-vector 5000 'churn))
-         (in-c? (= (w5-is-in-c) 1)))
+         (in-c-before? (= (w5-is-in-c) 1)))
     (set! garbage #f)
     (when (zero? (modulo (atomic-box-ref rounds-total) 10))
       (gc))
-    (when in-c?
-      (let ((gt (assq-ref (gc-stats) 'gc-times)))
-        (unless gc-times-first-in-c
-          (set! gc-times-first-in-c gt))
-        (set! gc-times-last-in-c gt))
-      (atomic-box-set! rounds-during-block
-                       (+ (atomic-box-ref rounds-during-block) 1))
-      (set! heaps-during-block
-            (cons (assq-ref (gc-stats) 'heap-size) heaps-during-block)))
+    (let ((in-c-after? (= (w5-is-in-c) 1)))
+      (when (and in-c-before? in-c-after?)
+        (let ((gt (assq-ref (gc-stats) 'gc-times)))
+          (unless gc-times-first-in-c
+            (set! gc-times-first-in-c gt))
+          (set! gc-times-last-in-c gt))
+        (atomic-box-set! rounds-during-block
+                         (+ (atomic-box-ref rounds-during-block) 1))
+        (set! heaps-during-block
+              (cons (assq-ref (gc-stats) 'heap-size) heaps-during-block))))
     (atomic-box-set! rounds-total (+ (atomic-box-ref rounds-total) 1))))
 
 (define b-thread
@@ -123,6 +126,13 @@
 (define t0 (now-ms))
 (define rem (w5-blocking-sleep 3))
 (define elapsed-ms (- (now-ms) t0))
+;; Drain any in-flight worker round that started while w5_in_c was set before
+;; taking the final snapshot or sampling the negative control.
+(let ((post-c-total (atomic-box-ref rounds-total)))
+  (let drain ()
+    (when (< (atomic-box-ref rounds-total) (+ post-c-total 2))
+      (yield)
+      (drain))))
 (define rounds-after (- (atomic-box-ref rounds-total) rounds-before-block))
 (define in-c-rounds (atomic-box-ref rounds-during-block))
 (define gc-times-during
@@ -152,14 +162,8 @@ gc-times-last-in-c=~a gc-times-during=~a~%"
 (check "live vector mutations intact after concurrent collections"
        (= (vector-ref witness-vector 19999) 20000))
 
-;; NC: drain any in-flight worker round that started before w5_in_c cleared,
-;; then observe a 1s window outside C: rounds-during-block MUST NOT advance
-;; while rounds-total continues advancing.
-(let ((post-c-total (atomic-box-ref rounds-total)))
-  (let drain ()
-    (when (< (atomic-box-ref rounds-total) (+ post-c-total 2))
-      (yield)
-      (drain))))
+;; NC: worker was drained after w5_in_c cleared; observe a 1s window outside
+;; C where rounds-during-block MUST NOT advance while rounds-total advances.
 (define during-nc0 (atomic-box-ref rounds-during-block))
 (define total-nc0 (atomic-box-ref rounds-total))
 (sleep 1)

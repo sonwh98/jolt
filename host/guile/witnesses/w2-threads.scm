@@ -290,11 +290,12 @@ a lost wakeup would hang and the watchdog would record it"
 ;; no-ops.  CONTRACT.txt:113-118 defines standalone zero-arg fences
 ;; (memory-order-release) / (memory-order-acquire) around ordinary record/
 ;; vector publication (seq.ss, cow-publish!).  Because (ice-9 atomic)
-;; provides C11 sequential consistency (§6.22.4), we model the standalone
-;; fences over a shared atomic word (%fence-word) and test:
-;;   T6a: the standalone fence publication pattern on plain Scheme vectors
-;;        across two concurrent threads (1000 rounds);
-;;   T6b: direct atomic-box release/acquire message passing (1000 rounds).
+;; provides C11 sequential consistency on atomic boxes (§6.22.4) rather
+;; than an explicit standalone atomic_thread_fence primitive, T6a exercises
+;; a smoke test of the fence/publication pattern using a shared atomic box
+;; (%fence-word) — validating the API shape and concurrent smoke behavior,
+;; not formally proving standalone C11 acquire/release ordering — while T6b
+;; checks direct atomic-box release/acquire message passing (1000 rounds).
 (define %fence-word (make-atomic-box 0))
 (define (memory-order-release) (atomic-box-set! %fence-word 0))
 (define (memory-order-acquire) (atomic-box-ref %fence-word))
@@ -339,10 +340,10 @@ a lost wakeup would hang and the watchdog would record it"
          (loop (+ i 1)))))))
 (join-thread pub-producer)
 (join-thread pub-consumer)
-(format #t "T6a standalone fence publication: pub=~a ack=~a mismatches=~a~%"
+(format #t "T6a smoke test (fence/publication pattern): pub=~a ack=~a mismatches=~a~%"
         (vector-ref pub-cell 0) (vector-ref pub-ack 0) pub-mismatches)
-(check "T6a standalone memory-order-release/acquire around plain vector \
-publication: 1000 rounds with zero payload mismatches"
+(check "T6a smoke test: standalone memory-order-release/acquire publication \
+pattern completes 1000 rounds with zero payload mismatches"
        (and (= (vector-ref pub-cell 0) fence-rounds)
             (= (vector-ref pub-ack 0) fence-rounds)
             (zero? pub-mismatches)))

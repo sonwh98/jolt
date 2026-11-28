@@ -2,18 +2,15 @@
 
 - Auditor: glm-5.3 (VM & Host Adapter Engineer), Phase 2a slice, branch
   `guile/audit`.
-- Date: 2026-11-28 (+07). Revision r4 (same lane): resolved every finding
-  from the `codex` (`gpt-6.2-sol`) cross-family review
-  (`build/review-findings-r3.md`, 1 P1, 7 P2, 3 P3) against the executed
-  runtime and re-ran all 13 witnesses under the external watchdog
-  (`RUN-ALL: PASS`). Dropped `call/cc` as a Phase 2b escape option in
-  favor of `call-with-prompt` with a `dynamic-wind` out-guard invalidating
-  `k` on every exit, recorded `sa-compile-file` / `sa-make-boot-file` as
-  degraded under `CONTRACT.txt:312-319`, validated occupied-heap
-  `sa-bytes-allocated`, tested standalone fences, added C-handshake +
-  wall-clock checks to w5, ABI-safe C `struct flock` + pre-epoch signed
-  `time_t` to w8, pre-absent `ccache` check to w10, and child exit-status
-  enforcement to w12.
+- Date: 2026-11-28 (+07). Revision r5 (same lane): closed the 4 remaining
+  findings from `codex` (`gpt-6.2-sol`) r4 consensus on `e4eb8c3b` and
+  re-ran all 13 witnesses under the external watchdog (`RUN-ALL: PASS`):
+  bracketed `w5` GC samples with active-flag reads before and after `(gc)`
+  and drained the worker before snapshotting; qualified `w2 T6a` as a
+  smoke test of the fence/publication pattern; guarded `w12 PERF-SUMMARY`
+  boot-median computation behind child `exit=0` validation; and
+  recommended signed FFI `stat` (`bytevector-s64-native-ref`) on Linux
+  too (asserting Guile core `stat:mtime` unsigned wrap in `w8 IO5c`).
 - Ruling followed: DOC-FIRST (the p1a method, `origin/gambit-ffi-p1:p1a/AUDIT.md`)
   — manual first, execution decides. All 13 witnesses end in their
   `Wn-VERDICT: PASS` marker under the external watchdog; every witness
@@ -143,14 +140,15 @@ The 3.0.11 default option set (recorded live: `read-options-default:
   `#f` through the `(thread-exited?)` gate [w2 T5b].
 - **Fences.** `CONTRACT.txt:113-118` specifies standalone zero-arg fences
   `(memory-order-release)` / `(memory-order-acquire)` around ordinary
-  record/vector publication (`seq.ss`). Mapped onto `(ice-9 atomic)`
-  (C11 sequential consistency, SC ⊇ acq+rel, `[man §6.22.4]`) over a
-  shared `%fence-word`, a two-thread producer/consumer pair passing 1000
-  messages through plain Scheme vectors completes with zero payload
-  visibility mismatches (`pub=1000 ack=1000 mismatches=0`) [w2 T6a], and
-  direct `atomic-box` release/acquire message passing likewise completes
-  1000 rounds with zero mismatches (`seq=1000 ack=1000 mismatches=0`)
-  [w2 T6b]. Not a no-op: Guile threads are real pthreads.
+  record/vector publication (`seq.ss`). Because `(ice-9 atomic)` exposes
+  C11 sequential consistency on atomic boxes (`[man §6.22.4]`) rather
+  than an explicit standalone `atomic_thread_fence` primitive, `[w2 T6a]`
+  is a **smoke test** of the fence/publication pattern using a shared
+  atomic box `%fence-word` (`pub=1000 ack=1000 mismatches=0`, validating
+  the API shape and concurrent smoke behavior rather than formally
+  proving standalone C11 acquire/release ordering), and `[w2 T6b]` checks
+  direct `atomic-box` release/acquire message passing (`seq=1000 ack=1000
+  mismatches=0`). Not a no-op: Guile threads are real pthreads.
 - **`sleep`/`current-time` shapes.** Core `(sleep 1)` sleeps [w2 T7a];
   SRFI-19 `current-time` zero-arg answers `time-utc` [w2 T7b]; SRFI-18
   `current-time`/`thread-sleep!` take TIME OBJECTS — the contract's
@@ -223,16 +221,16 @@ Phase 2b).** `[w3]` (results/w3-escape.out), all rows + NC1–NC3 PASS.
   A parks inside a compiled C shim (`w5_blocking_sleep(3)`), which sets
   a C-side atomic flag `w5_in_c=1` strictly across `sleep(3)` and clears
   it before returning, asserting both C return `rem=0` and real wall
-  clock `elapsed-ms=3007.8` (`>= 2500 ms`). Thread B polls `w5_is_in_c()`
-  from C, executing `rounds-during-block=1041` rounds (with periodic
-  `(gc)`) and `gc-times-during=208` real collections (`gc-times` `72` →
-  `280` strictly inside the C-side handshake; live vector mutations
-  intact) [w5]. After draining in-flight worker rounds post-return, the
-  negative control proves `rounds-during-block` stays unchanged
-  (`1041->1041`) while `rounds-total` advances (`1390->1739`) when
-  `w5_in_c=0` [w5 NC]. Blocking collapses to plain, exactly as
-  `[man §6.22.6]` documents ("blocked threads no longer hinder garbage
-  collection", since 2.0).
+  clock `elapsed-ms=3002.4` (`>= 2500 ms`). Thread B brackets every
+  accepted `(gc)` sample with two `w5_is_in_c()` reads (before and after
+  `(gc)`), and the main thread drains the worker before taking the final
+  snapshot: `rounds-during-block=1034` and `gc-times-during=207` real
+  collections (`gc-times` `71` → `278` strictly inside the C-side
+  handshake; live vector mutations intact) [w5]. Post-drain, the negative
+  control proves `rounds-during-block` stays unchanged (`1034->1034`)
+  while `rounds-total` advances (`1381->1728`) when `w5_in_c=0` [w5 NC].
+  Blocking collapses to plain, exactly as `[man §6.22.6]` documents
+  ("blocked threads no longer hinder garbage collection", since 2.0).
 - **Foreign pthread entry — the Gambit p1a W3 killer, PASS here.** A
   compiled fixture enters Scheme from two concurrent foreign pthreads
   through `scm_with_guile`; each evaluates a Scheme lambda on its own
@@ -326,19 +324,20 @@ Phase 2b).** `[w3]` (results/w3-escape.out), all rows + NC1–NC3 PASS.
   on an O_RDONLY fd is refused (open RDWR on both sides).
 - **Directory sync**: `fsync` on an O_RDONLY directory fd succeeds [w8
   IO4] (core `fsync` returns unspecified — reachability is the row).
-- **`sa-file-mtime-ms` — second-resolution floor on darwin, FFI repair
-  proven.** Executed finding: `(utime mt-file 1700000000 1700000000 0
+- **`sa-file-mtime-ms` — signed FFI `stat` required on BOTH darwin and
+  linux.** Executed finding: `(utime mt-file 1700000000 1700000000 0
   456000000)`'s ns argument DOES apply to the inode (`456000000` ns is
   preserved on disk), whereas Guile's core `stat:mtimensec` answers `0`
-  for EVERY file on this darwin build (`1700000000000` ms) [w8 IO5a]; an
-  FFI `stat(2)` reading signed `time_t` (`s64`) + `tv_nsec`
+  for EVERY file on this darwin build (`1700000000000` ms) [w8 IO5a]; and
+  Guile 3.0.11's `filesys.c` converts `st_mtime` via `scm_from_ulong`,
+  wrapping pre-epoch timestamps unsigned (`utimensat(-10s, 250ms)` gave
+  `core stat:mtime=18446744073709551606`) [w8 IO5c]. An FFI `stat(2)`
+  reading signed `time_t` (`bytevector-s64-native-ref`) + `tv_nsec`
   (`st_mtimespec` offsets `48/56` on darwin-arm64, `st_mtim` offsets
   `88/96` on linux-x86_64) recovers the exact sub-second mtime
   (`1700000000456` ms) [w8 IO5b] and handles pre-epoch signed timestamps
-  (`utimensat(-10s, 250ms)` → `-9750` ms, whereas core `stat:mtime` on
-  darwin returned `18446744073709551606`) [w8 IO5c]. The adapter uses
-  core `stat` where `stat:mtimensec` works (Linux, signed) and FFI
-  `stat` (`s64`) on darwin.
+  (`-9750` ms) [w8 IO5c]. The adapter therefore uses the signed FFI
+  `stat` path on **both** darwin and Linux.
 - **Subprocess**: `spawn` + pipe + `waitpid`, output captured, exit 0
   [w8 IO6]; `opendir/readdir/closedir` [w8 IO7]. `[man §7.2.7]`.
 - **Sockets / poller / suspendable ports — DHT and WebSocket parity
@@ -377,7 +376,7 @@ under `CONTRACT.txt:312-319`).** `[w10]` (results/w10-compile.out) PASS.
   under `$XDG_CACHE_HOME/guile/ccache/3.0-LE-8-4.7/...`, verified absent
   before `compile-file` and present afterward [w10 C3/NC2b]; a broken
   source RAISES [w10 NC1]; and Guile's JIT accelerates in-memory
-  compiled code by 76.0× (`w12`). `[man §6.16.6]`. If jolt later
+  compiled code by 77.7× (`w12`). `[man §6.16.6]`. If jolt later
   permits a bytecode-tier `sa-compile-file`, save/restore
   `current-module` around `load-compiled` (loading a `define-module`
   file switches it [w10 C2]) and note `%load-should-auto-compile` (no
@@ -411,17 +410,18 @@ under `CONTRACT.txt:312-319`).** `[w10]` (results/w10-compile.out) PASS.
 **GO (measured).** `[w12]` (results/w12-perf.out), PERF-SUMMARY line:
 
 - child-process boot (`guile --no-auto-compile -c 0`, all 3 children
-  verified `exit=0`), median of 3: **153.3 ms**
-- interpreter `eval` of `(+ 1 2)`: **3.05 µs/eval** (20000 evals)
-- 1M-iteration tail loop (plain closure): **90.3 ms** (~11.1M simple
+  verified `exit=0` before computing/publishing median), median of 3:
+  **155.2 ms**
+- interpreter `eval` of `(+ 1 2)`: **3.13 µs/eval** (20000 evals)
+- 1M-iteration tail loop (plain closure): **89.2 ms** (~11.2M simple
   calls/s)
-- 1M-iteration closure: interpreted-eval'd **93.1 ms** vs in-memory
-  `compile`d **1.225 ms** — **76.0× speedup** (Guile JIT capability on
+- 1M-iteration closure: interpreted-eval'd **93.3 ms** vs in-memory
+  `compile`d **1.201 ms** — **77.7× speedup** (Guile JIT capability on
   in-memory compiled code; `w12` does not load `.go` cache artifacts);
-  `NC1` confirms 1 iteration takes `0.02 ms` << `93.1 ms`.
+  `NC1` confirms 1 iteration takes `0.02 ms` << `93.3 ms`.
 
 Context: suspendable-ports I/O costs "a factor of 3 or 4" vs C port ops
-(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~153 ms
+(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~155 ms
 is heavy for short-lived CLI processes (the Chez comparison number is a
 Phase 2b measurement on the same corpus, not part of 2a).
 
@@ -443,15 +443,17 @@ Phase 2b measurement on the same corpus, not part of 2a).
   foreign-library extension order (`.bundle/.so/.dylib` darwin).
 - Executed darwin facts a Linux run will differ on: variadic-FFI EFAULT
   (linux libffi may or may not pass variads — the w8 shim is the
-  portable answer either way); `stat:mtimensec` dead at 0 (Linux Guile
-  populates it — `w8 IO5a` branches on `darwin?` and expects
-  `1700000000456` ms from core `stat` on Linux).
+  portable answer either way); `stat:mtimensec` dead at 0 on darwin (Linux
+  Guile populates `stat:mtimensec`, so `w8 IO5a` branches on `darwin?`,
+  while Guile 3.0.11 `filesys.c` uses `scm_from_ulong` for `st_mtime`
+  on both platforms — so `sa-file-mtime-ms` should still use the signed
+  FFI `stat` `s64` path on Linux too [w8 IO5c]).
 - `getaffinity/setaffinity` are GNU-only (`[man §7.2.7]`) — not contract
   rows; recorded as surface.
 
 ---
 
-## Surprises (r2–r4, executed)
+## Surprises (r2–r5, executed)
 
 1. **`#vu8(...)` reads NATIVELY** — r1's doc-derived claim that the
    default reader fails on it (needing `read-hash-extend!`) was wrong
@@ -476,15 +478,16 @@ Phase 2b measurement on the same corpus, not part of 2a).
    (fcntl `rc=-1 errno=14` [w8 IO3a1]) — the compiled-shim technique
    (constructing `struct flock` in C via `<fcntl.h>`) is now a recorded
    adapter requirement for record locks (and any other variad) [w8 IO3].
-6. **`stat:mtimensec` is dead on this darwin build, while `utime` ns
-   args DO apply** — `utime(..., 456000000 ns)` sets the inode's
-   nanoseconds (`1700000000456` ms via FFI `stat`), while darwin core
-   `stat:mtimensec` drops it to `0` (`1700000000000` ms); reading signed
-   `time_t` (`s64`) also handles pre-epoch timestamps (`-9750` ms) where
-   darwin core `stat:mtime` returned `18446744073709551606` [w8
-   IO5a–IO5c].
+6. **`stat:mtimensec` is dead on darwin and `stat:mtime` wraps unsigned
+   on Guile 3.0.11 (`filesys.c` `scm_from_ulong`), while `utime` ns args
+   DO apply** — `utime(..., 456000000 ns)` sets the inode's nanoseconds
+   (`1700000000456` ms via FFI `stat`), while darwin core
+   `stat:mtimensec` drops it to `0` (`1700000000000` ms), and core
+   `stat:mtime` returned `18446744073709551606` for `-10s` (`-9750` ms
+   via signed FFI `stat`) [w8 IO5a–IO5c]. Use signed FFI `stat` on both
+   darwin and Linux.
 7. **Both Gambit p1a NO-GO rows are recorded PASSes** — GC completes
-   during a blocked C call (`1041` rounds, `gc-times-during=208` inside
+   during a blocked C call (`1034` rounds, `gc-times-during=207` inside
    C-side handshake [w5]) and foreign pthreads enter cleanly through
    `scm_with_guile` (41/42 [w7]) while raw entry segfaults (`term-sig=11`
    [w7]).
@@ -503,9 +506,11 @@ Phase 2b measurement on the same corpus, not part of 2a).
    for `#vu8`.
 2. `fork-thread` over `call-with-new-thread`; `make-thread-parameter`
    over `make-parameter`; numeric id registry + `(thread-exited?)` gate;
-   mutexes from `(make-mutex 'allow-external-unlock)`; standalone
-   `(memory-order-acquire)` / `(memory-order-release)` fences via
-   `(ice-9 atomic)` ops on a shared atomic box.
+   mutexes from `(make-mutex 'allow-external-unlock)`; smoke-tested
+   standalone `(memory-order-acquire)` / `(memory-order-release)` via
+   `(ice-9 atomic)` ops on a shared atomic box (or compiled C
+   `atomic_thread_fence` helper if strict standalone C11 fences are
+   desired).
 3. `sa-call-with-escape-continuation` on **`call-with-prompt`** ONLY
    (`call/cc` dropped for Phase 2b): fresh `(make-prompt-tag "escape")`
    per call, `spent` flag set on escape **and** in a `dynamic-wind`
@@ -526,10 +531,11 @@ Phase 2b measurement on the same corpus, not part of 2a).
 5. GC: lock/unlock no-ops; `(gc)`; `sa-total-memory-bytes` ← `heap-size`,
    `sa-bytes-allocated` ← `(- heap-size heap-free-size)` (live occupied
    heap from one `(gc-stats)` snapshot); real `after-gc-hook` install.
-6. I/O per w8/w9: FFI stat (signed `s64` `time_t`) for ms mtime on
-   darwin (core `stat` where `stat:mtimensec` works); canonicalize-path;
-   O_EXCL; C-struct shim-based locks; spawn/waitpid; suspendable-ports
-   event loop for DHT/WebSocket.
+6. I/O per w8/w9: signed FFI `stat` (`bytevector-s64-native-ref` for
+   `time_t`) for ms mtime on **both** darwin and Linux (avoiding
+   `filesys.c`'s unsigned `scm_from_ulong` wrap on `st_mtime`);
+   canonicalize-path; O_EXCL; C-struct shim-based locks; spawn/waitpid;
+   suspendable-ports event loop for DHT/WebSocket.
 7. Compile tier: degrade both `sa-compile-file` and `sa-make-boot-file`
    with message-carrying raises under `CONTRACT.txt:312-319` (`.go` is
    VM bytecode, not native objects); crypto per w11 (libcrypto EVP +

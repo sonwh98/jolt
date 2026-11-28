@@ -1,6 +1,6 @@
 ### cmd: ./watchdog.sh 90 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w9-net.scm
 === W9 sockets / non-blocking / poller witness ===
-S1 bound to #(2 2130706433 53779)
+S1 bound to #(2 2130706433 53183)
 S1 received 1 byte(s): 90
 CHECK-OK   S1 UDP datagram round-trip on loopback
 CHECK-OK   S2a F_SETFL O_NONBLOCK applied (fcntl => 0)

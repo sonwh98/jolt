@@ -42,12 +42,13 @@
            (and (eqv? (status:exit-val st) 0)
                 (not (status:term-sig st))))
          boot-statuses))
-(define boot-median (second (sort boots <)))
+(define boot-median
+  (and all-boots-ok (second (sort boots <))))
 (format #t "B1 child boot times (ms): ~a statuses=~s median=~a~%"
-        boots (map status:exit-val boot-statuses) boot-median)
+        boots (map status:exit-val boot-statuses) (or boot-median 'invalid))
 (check "B1 boot measurements completed with exit=0 for all 3 children \
 (nonzero median)"
-       (and all-boots-ok (> boot-median 0)))
+       (and all-boots-ok boot-median (> boot-median 0)))
 
 ;; ---- E1 interpreted eval -------------------------------------------------------
 (define n-eval 20000)
@@ -99,9 +100,10 @@
        (> i-ms one-ms))
 
 ;; ---- record for AUDIT ---------------------------------------------------------------
-(format #t "PERF-SUMMARY: boot-median-ms=~a eval-us=~a loop-ms=~a \
+(when all-boots-ok
+  (format #t "PERF-SUMMARY: boot-median-ms=~a eval-us=~a loop-ms=~a \
 compiled-ms=~a~%"
-        boot-median (/ e1-ms n-eval 0.001) e2-ms c-ms)
+          boot-median (/ e1-ms n-eval 0.001) e2-ms c-ms))
 
 (if (zero? fails)
     (format #t "W12-VERDICT: PASS (measurements recorded)~%")

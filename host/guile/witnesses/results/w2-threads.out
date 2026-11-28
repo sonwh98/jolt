@@ -26,8 +26,8 @@ T5 ids recorded from outside: (1 2 3 4 5); children's own: (1 2 3 4 5)
 CHECK-OK   T5a numeric ids recorded per thread from OUTSIDE the thread (sa-thread-id-of shape) while live
 CHECK-OK   N3 control: all ids are distinct numbers
 CHECK-OK   T5b exited threads answer #f (thread-exited? gates the mapping)
-T6a standalone fence publication: pub=1000 ack=1000 mismatches=0
-CHECK-OK   T6a standalone memory-order-release/acquire around plain vector publication: 1000 rounds with zero payload mismatches
+T6a smoke test (fence/publication pattern): pub=1000 ack=1000 mismatches=0
+CHECK-OK   T6a smoke test: standalone memory-order-release/acquire publication pattern completes 1000 rounds with zero payload mismatches
 T6b atomic-box message passing: seq=1000 ack=1000 mismatches=0
 CHECK-OK   T6b atomic-box release/acquire message passing: 1000 rounds with zero payload visibility mismatches
 CHECK-OK   T7a (sleep 1) really sleeps ~1s

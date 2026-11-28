@@ -1,7 +1,7 @@
 ### cmd: ./watchdog.sh 60 /opt/homebrew/opt/guile/bin/guile --no-auto-compile /Users/sto/workspace/jolt-guile-audit/host/guile/witnesses/w8-files.scm
 === W8 file I/O witness ===
 platform: Darwin darwin?=#t F-SETLK=8 F-WRLCK=3
-IO1 canonicalize-path through two symlinks => "/private/tmp/w8-89680/real.txt"
+IO1 canonicalize-path through two symlinks => "/private/tmp/w8-91006/real.txt"
 CHECK-OK   IO1 canonicalize-path resolves the symlink chain to the real file (and /tmp itself)
 NC2 canonicalize-path on missing component => #f
 CHECK-OK   NC2 control: canonicalize-path RAISES on a missing component (dangling links are not fabricated)

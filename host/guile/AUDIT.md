@@ -2,15 +2,14 @@
 
 - Auditor: glm-5.3 (VM & Host Adapter Engineer), Phase 2a slice, branch
   `guile/audit`.
-- Date: 2026-11-28 (+07). Revision r5 (same lane): closed the 4 remaining
-  findings from `codex` (`gpt-6.2-sol`) r4 consensus on `e4eb8c3b` and
+- Date: 2026-11-28 (+07). Revision r6 (same lane): closed the final 2 P2
+  items from `codex` (`gpt-6.2-sol`) r5 consensus on `f3bace2b` and
   re-ran all 13 witnesses under the external watchdog (`RUN-ALL: PASS`):
-  bracketed `w5` GC samples with active-flag reads before and after `(gc)`
-  and drained the worker before snapshotting; qualified `w2 T6a` as a
-  smoke test of the fence/publication pattern; guarded `w12 PERF-SUMMARY`
-  boot-median computation behind child `exit=0` validation; and
-  recommended signed FFI `stat` (`bytevector-s64-native-ref`) on Linux
-  too (asserting Guile core `stat:mtime` unsigned wrap in `w8 IO5c`).
+  took `w5`'s `gc-stats` snapshot strictly between the two active-flag
+  reads (before and after `(gc)`/`(gc-stats)`), and marked standalone
+  `memory-order-acquire`/`memory-order-release` fence compliance
+  unverified (requiring a Phase 2b implementation that establishes
+  ordering in the host's publication pattern).
 - Ruling followed: DOC-FIRST (the p1a method, `origin/gambit-ffi-p1:p1a/AUDIT.md`)
   — manual first, execution decides. All 13 witnesses end in their
   `Wn-VERDICT: PASS` marker under the external watchdog; every witness
@@ -55,7 +54,7 @@ Recorded refusals that serve as decisive evidence (not failures):
 | # | capability | verdict | decisive evidence |
 |---|---|---|---|
 | 1 | Reader/emit parity | **GO** | [w1] all rows + 3 controls |
-| 2 | Threads (`threads` tier) | **GO** | [w2] T1–T7 + N1a/N1b/N2/N3 |
+| 2 | Threads (`threads` tier) | **GO** (standalone `memory-order-acquire`/`memory-order-release` fence compliance **unverified** — Phase 2b required) | [w2] T1–T7 + N1a/N1b/N2/N3 |
 | 3 | One-shot escape continuations | **GO** | [w3] E1–E8, P1–P7 + NC1–NC3 |
 | 4 | FFI (errno, blocking, foreign threads, dlopen, callbacks) | **GO** (`sa-foreign-callable-collect-safe` on foreign pthreads needs C libffi+`scm_with_guile` helper; callable registry required) | [w4] [w5] [w7] |
 | 5 | GC + pinning | **GO** | [w6] P1–P4 + P3e + controls |
@@ -138,17 +137,19 @@ The 3.0.11 default option set (recorded live: `read-options-default:
   thread while live, children agree on the same numbers (`(1 2 3 4 5)`
   both directions) [w2 T5a], distinct [w2 N3], and exited threads answer
   `#f` through the `(thread-exited?)` gate [w2 T5b].
-- **Fences.** `CONTRACT.txt:113-118` specifies standalone zero-arg fences
+- **Fences — standalone fence compliance UNVERIFIED (Phase 2b required).**
+  `CONTRACT.txt:113-118` requires standalone zero-arg fences
   `(memory-order-release)` / `(memory-order-acquire)` around ordinary
-  record/vector publication (`seq.ss`). Because `(ice-9 atomic)` exposes
-  C11 sequential consistency on atomic boxes (`[man §6.22.4]`) rather
-  than an explicit standalone `atomic_thread_fence` primitive, `[w2 T6a]`
-  is a **smoke test** of the fence/publication pattern using a shared
-  atomic box `%fence-word` (`pub=1000 ack=1000 mismatches=0`, validating
-  the API shape and concurrent smoke behavior rather than formally
-  proving standalone C11 acquire/release ordering), and `[w2 T6b]` checks
-  direct `atomic-box` release/acquire message passing (`seq=1000 ack=1000
-  mismatches=0`). Not a no-op: Guile threads are real pthreads.
+  record/vector publication (`seq.ss`). Guile `(ice-9 atomic)` exposes
+  C11 sequential consistency on atomic boxes (`[man §6.22.4]`), not an
+  explicit standalone `atomic_thread_fence` primitive; `[w2 T6a]` is
+  only a smoke test of the `%fence-word` pattern (`pub=1000 ack=1000
+  mismatches=0`) and does **not** prove standalone acquire/release fence
+  ordering, while `[w2 T6b]` checks direct `atomic-box` message passing
+  (`seq=1000 ack=1000 mismatches=0`). Not a no-op: Guile threads are
+  real pthreads, so Phase 2b **must** provide a standalone fence
+  implementation that establishes acquire/release ordering in the host's
+  publication pattern.
 - **`sleep`/`current-time` shapes.** Core `(sleep 1)` sleeps [w2 T7a];
   SRFI-19 `current-time` zero-arg answers `time-utc` [w2 T7b]; SRFI-18
   `current-time`/`thread-sleep!` take TIME OBJECTS — the contract's
@@ -221,14 +222,15 @@ Phase 2b).** `[w3]` (results/w3-escape.out), all rows + NC1–NC3 PASS.
   A parks inside a compiled C shim (`w5_blocking_sleep(3)`), which sets
   a C-side atomic flag `w5_in_c=1` strictly across `sleep(3)` and clears
   it before returning, asserting both C return `rem=0` and real wall
-  clock `elapsed-ms=3002.4` (`>= 2500 ms`). Thread B brackets every
-  accepted `(gc)` sample with two `w5_is_in_c()` reads (before and after
-  `(gc)`), and the main thread drains the worker before taking the final
-  snapshot: `rounds-during-block=1034` and `gc-times-during=207` real
-  collections (`gc-times` `71` → `278` strictly inside the C-side
+  clock `elapsed-ms=3002.1` (`>= 2500 ms`). Thread B takes the
+  `(gc-stats)` snapshot strictly between two `w5_is_in_c()` reads
+  (bracketing `(gc)` and `(gc-stats)`), accepting the sample only when
+  both are `1`, and the main thread drains the worker before taking the
+  final snapshot: `rounds-during-block=1020` and `gc-times-during=204`
+  real collections (`gc-times` `72` → `276` strictly inside the C-side
   handshake; live vector mutations intact) [w5]. Post-drain, the negative
-  control proves `rounds-during-block` stays unchanged (`1034->1034`)
-  while `rounds-total` advances (`1381->1728`) when `w5_in_c=0` [w5 NC].
+  control proves `rounds-during-block` stays unchanged (`1020->1020`)
+  while `rounds-total` advances (`1370->1718`) when `w5_in_c=0` [w5 NC].
   Blocking collapses to plain, exactly as `[man §6.22.6]` documents
   ("blocked threads no longer hinder garbage collection", since 2.0).
 - **Foreign pthread entry — the Gambit p1a W3 killer, PASS here.** A
@@ -290,9 +292,9 @@ Phase 2b).** `[w3]` (results/w3-escape.out), all rows + NC1–NC3 PASS.
   heap from a single `(gc-stats)` snapshot, so `(- sa-total-memory-bytes
   sa-bytes-allocated)` equals `heap-free-size` and never goes negative,
   unlike cumulative `heap-total-allocated` which already exceeds
-  `heap-size`). Validated in [w6 P3e]: base `1593344` → `3821568`
+  `heap-size`). Validated in [w6 P3e]: base `1605632` → `3829760`
   (`<= heap-size 5242880`) when retaining 2 MiB of bytevectors across
-  `(gc)`, dropping back to `1589248` after release + `(gc)`.
+  `(gc)`, dropping back to `1601536` after release + `(gc)`.
   `sa-gc-max-generation` ← fixed sentinel (no generation counters exist
   [w6 P3c]); heap ceiling from FFI `getrlimit(RLIMIT_AS)` — rlim_cur
   records RLIM_INFINITY here [w6 P3d].
@@ -376,7 +378,7 @@ under `CONTRACT.txt:312-319`).** `[w10]` (results/w10-compile.out) PASS.
   under `$XDG_CACHE_HOME/guile/ccache/3.0-LE-8-4.7/...`, verified absent
   before `compile-file` and present afterward [w10 C3/NC2b]; a broken
   source RAISES [w10 NC1]; and Guile's JIT accelerates in-memory
-  compiled code by 77.7× (`w12`). `[man §6.16.6]`. If jolt later
+  compiled code by 75.1× (`w12`). `[man §6.16.6]`. If jolt later
   permits a bytecode-tier `sa-compile-file`, save/restore
   `current-module` around `load-compiled` (loading a `define-module`
   file switches it [w10 C2]) and note `%load-should-auto-compile` (no
@@ -411,17 +413,17 @@ under `CONTRACT.txt:312-319`).** `[w10]` (results/w10-compile.out) PASS.
 
 - child-process boot (`guile --no-auto-compile -c 0`, all 3 children
   verified `exit=0` before computing/publishing median), median of 3:
-  **155.2 ms**
-- interpreter `eval` of `(+ 1 2)`: **3.13 µs/eval** (20000 evals)
-- 1M-iteration tail loop (plain closure): **89.2 ms** (~11.2M simple
+  **156.2 ms**
+- interpreter `eval` of `(+ 1 2)`: **3.12 µs/eval** (20000 evals)
+- 1M-iteration tail loop (plain closure): **103.7 ms** (~9.6M simple
   calls/s)
-- 1M-iteration closure: interpreted-eval'd **93.3 ms** vs in-memory
-  `compile`d **1.201 ms** — **77.7× speedup** (Guile JIT capability on
+- 1M-iteration closure: interpreted-eval'd **92.5 ms** vs in-memory
+  `compile`d **1.231 ms** — **75.1× speedup** (Guile JIT capability on
   in-memory compiled code; `w12` does not load `.go` cache artifacts);
-  `NC1` confirms 1 iteration takes `0.02 ms` << `93.3 ms`.
+  `NC1` confirms 1 iteration takes `0.04 ms` << `92.5 ms`.
 
 Context: suspendable-ports I/O costs "a factor of 3 or 4" vs C port ops
-(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~155 ms
+(`[man §6.12.13]`) — relevant to the fibers-tier choice; boot ~156 ms
 is heavy for short-lived CLI processes (the Chez comparison number is a
 Phase 2b measurement on the same corpus, not part of 2a).
 
@@ -453,7 +455,7 @@ Phase 2b measurement on the same corpus, not part of 2a).
 
 ---
 
-## Surprises (r2–r5, executed)
+## Surprises (r2–r6, executed)
 
 1. **`#vu8(...)` reads NATIVELY** — r1's doc-derived claim that the
    default reader fails on it (needing `read-hash-extend!`) was wrong
@@ -487,7 +489,7 @@ Phase 2b measurement on the same corpus, not part of 2a).
    via signed FFI `stat`) [w8 IO5a–IO5c]. Use signed FFI `stat` on both
    darwin and Linux.
 7. **Both Gambit p1a NO-GO rows are recorded PASSes** — GC completes
-   during a blocked C call (`1034` rounds, `gc-times-during=207` inside
+   during a blocked C call (`1020` rounds, `gc-times-during=204` inside
    C-side handshake [w5]) and foreign pthreads enter cleanly through
    `scm_with_guile` (41/42 [w7]) while raw entry segfaults (`term-sig=11`
    [w7]).
@@ -506,11 +508,12 @@ Phase 2b measurement on the same corpus, not part of 2a).
    for `#vu8`.
 2. `fork-thread` over `call-with-new-thread`; `make-thread-parameter`
    over `make-parameter`; numeric id registry + `(thread-exited?)` gate;
-   mutexes from `(make-mutex 'allow-external-unlock)`; smoke-tested
-   standalone `(memory-order-acquire)` / `(memory-order-release)` via
-   `(ice-9 atomic)` ops on a shared atomic box (or compiled C
-   `atomic_thread_fence` helper if strict standalone C11 fences are
-   desired).
+   mutexes from `(make-mutex 'allow-external-unlock)`; standalone
+   `(memory-order-acquire)` / `(memory-order-release)` fence compliance
+   is **unverified** (Phase 2b **must** provide an implementation — e.g.
+   a compiled C `atomic_thread_fence` helper or verified fence lowering
+   — that establishes acquire/release ordering in the host's `seq.ss`
+   publication pattern).
 3. `sa-call-with-escape-continuation` on **`call-with-prompt`** ONLY
    (`call/cc` dropped for Phase 2b): fresh `(make-prompt-tag "escape")`
    per call, `spent` flag set on escape **and** in a `dynamic-wind`

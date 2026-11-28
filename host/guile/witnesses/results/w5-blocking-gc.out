@@ -2,14 +2,14 @@
 === W5 blocking-C-call vs GC witness ===
 CHECK-OK   compiled C-side handshake shim (w5_blocking_sleep / w5_is_in_c)
 CHECK-OK   B is provably executing (>=1 round before A enters C)
-A: w5_blocking_sleep(3) returned rem=0 elapsed-ms=3002.3810000000003
-observed state (C-handshake delimited): rounds-before=345 rounds-after=1036 rounds-during-block=1034 gc-times-first-in-c=71 gc-times-last-in-c=278 gc-times-during=207
+A: w5_blocking_sleep(3) returned rem=0 elapsed-ms=3002.0860000000002
+observed state (C-handshake delimited): rounds-before=348 rounds-after=1022 rounds-during-block=1020 gc-times-first-in-c=72 gc-times-last-in-c=276 gc-times-during=204
 CHECK-OK   A's C call returned 0 and really blocked ~3s wall-clock (>=2500ms)
 CHECK-OK   DECISIVE: B completed rounds AND real GC collections (gc-times incremented strictly inside the C-side handshake) WHILE A sat in C (blocking collapses to plain: the collector does not stop)
 heap-size samples during block: 1
 CHECK-OK   collections were real during block (gc-times delta > 0)
 CHECK-OK   live vector mutations intact after concurrent collections
-NC control (w5_in_c=0, post-drain 1s window): during 1034->1034, total 1381->1728
+NC control (w5_in_c=0, post-drain 1s window): during 1020->1020, total 1370->1718
 CHECK-OK   NC control: rounds-during-block stays unchanged when w5_in_c=0 while rounds-total advances
 W5-VERDICT: PASS (GC completes during a blocked C call)
 ### exit=0

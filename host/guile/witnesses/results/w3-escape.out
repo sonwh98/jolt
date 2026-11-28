@@ -9,7 +9,7 @@ E4b post-return invocation => #f
 CHECK-OK   E4b post-return invocation RAISES (frame gone)
 CHECK-OK   E5 escape value delivered from inside nested dynamic-wind
 CHECK-OK   E5b finally bodies ran on the way out, inner first
-E6a live cross-thread raw call/cc => (misc-error ("%continuation-call" "invoking continuation would cross continuation barrier: ~A" (#<continuation 226 @ 102d2b800>) #f))
+E6a live cross-thread raw call/cc => (misc-error ("%continuation-call" "invoking continuation would cross continuation barrier: ~A" (#<continuation 226 @ 106038800>) #f))
 CHECK-OK   E6a live raw continuation cross-thread invocation hits Guile's continuation barrier
 E6b live cross-thread prompt escape => (misc-error ("abort" "Abort to unknown prompt" (("escape")) #f))
 CHECK-OK   E6b live prompt escape cross-thread invocation refuses (Abort to unknown prompt; ownership policy itself stays in the host layer)

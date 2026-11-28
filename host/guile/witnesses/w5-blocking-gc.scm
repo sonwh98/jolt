@@ -79,26 +79,27 @@
 
 (define (b-round!)
   ;; one real collection round over live data (explicit (gc) + churn);
-  ;; bracket any accepted GC sample with two active-flag reads (before and
-  ;; after (gc)) so a round overlapping w5_blocking_sleep's exit is excluded.
-  (let* ((_ (do ((i 0 (+ i 1)))
-                ((= i 20000))
-              (vector-set! witness-vector i (+ i 1))))
-         (garbage (make-vector 5000 'churn))
-         (in-c-before? (= (w5-is-in-c) 1)))
+  ;; take the gc-stats snapshot BETWEEN two active-flag reads (bracketing
+  ;; (gc) and (gc-stats)) and accept the sample only if both are active.
+  (let ((_ (do ((i 0 (+ i 1)))
+               ((= i 20000))
+             (vector-set! witness-vector i (+ i 1))))
+        (garbage (make-vector 5000 'churn)))
     (set! garbage #f)
-    (when (zero? (modulo (atomic-box-ref rounds-total) 10))
-      (gc))
-    (let ((in-c-after? (= (w5-is-in-c) 1)))
-      (when (and in-c-before? in-c-after?)
-        (let ((gt (assq-ref (gc-stats) 'gc-times)))
+    (let* ((a1 (= (w5-is-in-c) 1))
+           (_ (when (zero? (modulo (atomic-box-ref rounds-total) 10))
+                (gc)))
+           (s (gc-stats))
+           (a2 (= (w5-is-in-c) 1)))
+      (when (and a1 a2)
+        (let ((gt (assq-ref s 'gc-times)))
           (unless gc-times-first-in-c
             (set! gc-times-first-in-c gt))
           (set! gc-times-last-in-c gt))
         (atomic-box-set! rounds-during-block
                          (+ (atomic-box-ref rounds-during-block) 1))
         (set! heaps-during-block
-              (cons (assq-ref (gc-stats) 'heap-size) heaps-during-block))))
+              (cons (assq-ref s 'heap-size) heaps-during-block))))
     (atomic-box-set! rounds-total (+ (atomic-box-ref rounds-total) 1))))
 
 (define b-thread

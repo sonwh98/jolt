@@ -11,7 +11,7 @@ CHECK-OK   NC1 control: a different input gives a different digest
 K4 EVP_PKEY_new_raw_private_key present in libcrypto: #t
 CHECK-OK   K4 Ed25519 reachable via libcrypto EVP raw-key API (OpenSSL 1.1+/3.x: sn "ED25519")
 CHECK-OK   K3a getentropy(2) reachable via the global namespace
-K3b getentropy rc=0 nonzero-bytes=31/32
+K3b getentropy rc=0 nonzero-bytes=32/32
 CHECK-OK   K3b getentropy fills 32 bytes, not all zero (NC2 control)
 K5 system libblake3 loadable: #f
 K5 BLAKE3: not in OpenSSL and not a stock system library — the row decision is VENDORED C (blake3 reference implementation compiled as a loadable extension), or a jolt-level degradation

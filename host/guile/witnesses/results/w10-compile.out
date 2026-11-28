@@ -4,7 +4,7 @@ CHECK-OK   NC2 control: the explicit .go does not exist yet
 CHECK-OK   C1 compile-file produced a nonempty .go
 CHECK-OK   C4 optimization-level 0 and 2 both accepted (profile mapping)
 CHECK-OK   C2 load-compiled evaluates the compiled module (w10-val = 4242) with the current module restored
-C3 compiled-file-name => "/Users/sto/.cache/guile/ccache/3.0-LE-8-4.7/private/tmp/w10-89699/testmod.scm.go"
+C3 compiled-file-name => "/Users/sto/.cache/guile/ccache/3.0-LE-8-4.7/private/tmp/w10-91024/testmod.scm.go"
 CHECK-OK   C3 compiled-file-name maps under the guile ccache dir
 CHECK-OK   NC2b control: ccache entry absent before compile-file and created by compile-file
 C5 make-boot-file bound in (system base compile): #f

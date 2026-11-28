@@ -6,6 +6,10 @@ description: >-
   Gambit come from the actions cache when the key matches, so a warm run spends
   seconds here. Every shard of the gate job runs this, which is why it is one
   action and not steps copied per job.
+inputs:
+  guile:
+    description: Build pinned Guile with its development headers for the Phase 3 gates
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -97,6 +101,26 @@ runs:
       # ever runs $(GAMBIT_PREFIX)/bin/gsi and gsc.
       shell: bash
       run: /opt/gambit/bin/gsi -v
+
+    - name: Install Guile build dependencies
+      if: inputs.guile == 'true'
+      shell: bash
+      run: |
+        sudo apt-get install -y libgc-dev libgmp-dev libunistring-dev libltdl-dev libffi-dev libssl-dev pkg-config
+        sudo install -d -o "$USER" /opt/guile
+
+    - name: Cache Guile
+      if: inputs.guile == 'true'
+      id: cache-guile
+      uses: actions/cache@v5
+      with:
+        path: /opt/guile
+        key: guile-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.os }}-3.0.11-${{ hashFiles('ci/build-guile.sh') }}
+
+    - name: Build Guile from source
+      if: inputs.guile == 'true' && steps.cache-guile.outputs.cache-hit != 'true'
+      shell: bash
+      run: timeout 20m sh ci/build-guile.sh /opt/guile "$(nproc)"
 
     # The oracle Clojure (test/conformance/profile.edn :clojure-version) and
     # its spec deps, from the actions cache: every shard of every run used to

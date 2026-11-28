@@ -187,6 +187,10 @@ CI-GATES := submodules values recordinline corpus nsaudit unit documented grenad
   gatebootsmoke aotcachesmoke aotcachepathsmoke aotcachesourcepathsmoke aotcachestarfilesmoke aotfingerprint vfaslceiling vfaslstrings buildscaling buildnatives buildsegments compilepathsmoke makefilesmoke versionsmoke attributioncheck noticecheck \
   systemstreams closedstdout stderrsplit userdirpaths mimetypes utf8decode \
   certify gambitcheck gambitkernel gambitgencheck gambitseedcheck gambitboot gambiteval gambitunbound gambitvars gambitstatics gambittwins gambitprofile grenadinecheck fibers fiberspoll gosm asynctimer ticks interruptnest monitorescape windescape threadsafety maskedacquire ioerrno cas flow
+# The Android shard pool has no provisioned Guile.
+ifeq ($(JOLT-BIONIC),)
+CI-GATES += guilegencheck guileseedcheck guilecheck guilekernel guileeval guileboot guilevars guilestatics guiletwins guileprofile guileunbound
+endif
 TEST-GATES := submodules selfhost ci
 
 GATE-RECEIPT := target/gate-receipt
@@ -1910,7 +1914,9 @@ GUILE-SKIP = if [ -n "$$JOLT_REQUIRE_GUILE" ]; then \
 
 $(GUILE_PLATFORM_LIB): host/guile/ffi/platform.c
 	@mkdir -p build/guile
-	$(CC) $(GUILE_CC_FLAGS) $(GUILE_LD_FLAGS) $< -o $@
+	@set -eu; out=$$(mktemp "$@.XXXXXX"); trap 'rm -f "$$out"' EXIT; \
+	  set -x; $(CC) $(GUILE_CC_FLAGS) $(GUILE_LD_FLAGS) $< -o "$$out"; \
+	  mv -f "$$out" "$@"
 
 # Gambit adapter gate (G1, jolt-mj95.2): loads host/gambit/{prelude-shims,
 # scheme-adapter-runtime,hasheq}.ss under native gsi and asserts the

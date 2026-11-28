@@ -45,6 +45,20 @@ linux-x86_64 with `GUILE=$(command -v guile) ./run-all.sh`; platform rows
 (fcntl constant spellings, EAGAIN value, flock layout) are derived from
 `uname` inside the witnesses.
 
+## W4 on hosted Linux
+
+Run 46176603071 recorded that the CL2b child with only a raw callback
+address exited zero and sorted correctly after three collections. The
+Darwin audit recorded SIGSEGV for the same probe. Conservative GC can
+retain objects through incidental roots, so survival does not establish
+that the raw address keeps the callback alive. The adapter must still
+root the returned pointer for as long as C can call it.
+
+The Linux job sets `GUILE_W4_ALLOW_RAW_CALLBACK_SURVIVAL=1`. The probe
+still runs and prints its result. Only an exit-zero child with the exact
+sorted output can skip the crash assertion, and the skip prints both
+platform outcomes. The rooted callback check remains required.
+
 ## W8 on hosted Darwin arm64
 
 The macos-15 qualification job sets `GUILE_W8_SKIP_DIRECT_FCNTL=1`.

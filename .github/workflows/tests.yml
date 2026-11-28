@@ -85,6 +85,7 @@ jobs:
         env:
           JOLT_REQUIRE_GUILE: "1"
           GUILE_PREFIX: /opt/guile
+          GUILE_W4_ALLOW_RAW_CALLBACK_SURVIVAL: "1"
         run: timeout 20m sh ci/guile-witnesses.sh build/guile/witnesses
 
       - name: Archive Guile qualification

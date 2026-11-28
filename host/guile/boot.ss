@@ -1,15 +1,18 @@
 #!no-fold-case
 ;; host/guile/boot.ss — Guile 3.0.11 reader setup, (jolt runtime) module, and
-;; Phase 3a minimal kernel boot manifest.
+;; profile selection. The default kernel profile is used by adapter probes.
 
 (read-enable 'r6rs-hex-escapes)
 (read-enable 'r7rs-symbols)
 
 (define-module (jolt runtime)
+  #:declarative? #f
   #:duplicates (replace)
   #:use-module (ice-9 atomic)
   #:use-module (ice-9 control)
   #:use-module (ice-9 pretty-print)
+  #:use-module (ice-9 rdelim)
+  #:use-module (ice-9 textual-ports)
   #:use-module (ice-9 soft-ports)
   #:use-module (ice-9 threads)
   #:use-module (srfi srfi-4)
@@ -42,18 +45,33 @@
 (define (%jolt-chez-path rel)
   (string-append %jolt-guile-dir "/../chez/" rel))
 
+(define %jolt-loaded-files '())
+
 (define (%jolt-load-file path)
   (catch #t
-    (lambda () (primitive-load path))
+    (lambda ()
+      (primitive-load path)
+      (set! %jolt-loaded-files (cons path %jolt-loaded-files)))
     (lambda (key . args)
       (format (current-error-port) "boot.ss: failed loading ~a\n" path)
       (apply throw key args))))
+
+;; The shared runtime uses repo-relative names for its embedded loads.
+(define (load path)
+  (%jolt-load-file (if (absolute-file-name? path) path
+                       (string-append %jolt-guile-dir "/../../" path))))
 
 (define (%jolt-load-guile rel)
   (%jolt-load-file (%jolt-guile-path rel)))
 
 (define (%jolt-load-chez rel)
   (%jolt-load-file (%jolt-chez-path rel)))
+
+(define raise (@ (rnrs exceptions) raise))
+
+(define (most-negative-fixnum) (@ (guile) most-negative-fixnum))
+(define (most-positive-fixnum) (@ (guile) most-positive-fixnum))
+(define (flonum->fixnum x) (inexact->exact (truncate x)))
 
 ;; Stage 1: Compatibility shims and Guile CONTRACT runtime adapter
 (%jolt-load-guile "prelude-shims.ss")
@@ -65,15 +83,13 @@
 (%jolt-load-chez "collections.ss")
 (%jolt-load-chez "seq.ss")
 
-;; Stage 3: Minimal kernel subset (vars, dispatch, printing, exceptions, hierarchy/records/meta/lazy-bridge)
 (%jolt-load-guile "rt-core.ss")
-(%jolt-load-chez "multimethods.ss")
-(%jolt-load-chez "java/jdk-interfaces.ss")
-(%jolt-load-chez "java/class-hierarchy.ss")
-(%jolt-load-chez "records.ss")
-(%jolt-load-chez "records-coll.ss")
-(%jolt-load-chez "protocols.ss")
-(%jolt-load-chez "records-dispatch.ss")
-(%jolt-load-chez "java/records-interop.ss")
-(%jolt-load-chez "natives-meta.ss")
-(%jolt-load-chez "lazy-bridge.ss")
+(define %jolt-profile (or (getenv "JOLT_GUILE_PROFILE") "kernel"))
+(unless (member %jolt-profile '("kernel" "repl" "full"))
+  (error 'boot "unknown Guile profile" %jolt-profile))
+(define (lazy-shims-method! name) #f)
+
+(if (string=? %jolt-profile "kernel")
+    (for-each %jolt-load-chez
+              '("multimethods.ss" "java/jdk-interfaces.ss" "java/class-hierarchy.ss")))
+(%jolt-load-guile "profiles.ss")

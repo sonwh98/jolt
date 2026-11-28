@@ -128,7 +128,8 @@
                   ;; restore still tests pair?.
                   "pair?" "box?" "virtual-register" "set-virtual-register!"
                   "fxand" "fxior" "fxxor" "fxnot"
-                  "jolt-register-source!" "jolt-proto-epoch"
+                  "jolt-register-source!" "jolt-proto-epoch" "jolt-proto-epoch-ref"
+                  "jolt-pic-site-make" "jolt-pic-site-ref" "jolt-pic-site-set!" "jrec-tag-desc-ref"
                   ;; --- bare heads emitted at sites the registry doesn't cover ---
                   ;; INVARIANT: any new bare Scheme head an emit* clause outputs
                   ;; (a head a user local could shadow) MUST be added here. Literal

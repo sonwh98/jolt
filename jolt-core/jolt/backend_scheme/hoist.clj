@@ -6,7 +6,7 @@
   a scope at all."
   (:require [clojure.string :as str]
             [jolt.backend-scheme.names :refer [chez-str-lit]]
-            [jolt.backend-scheme.session :refer [fresh-label var-cache?]]))
+            [jolt.backend-scheme.session :refer [target fresh-label var-cache?]]))
 
 ;; Per-site cache cells collected while emitting one top-level def. A site that
 ;; resolves a STABLE value — a devirtualized impl (constant tag/proto/method) or a
@@ -387,13 +387,15 @@
 ;; once into a per-site cell (a later read is one variable load); at top level,
 ;; the table lookup itself. #f while the type is not yet defined.
 (defn cached-tag-desc [tag]
-  (let [lookup (str "(hashtable-ref chez-tag-desc " (chez-str-lit tag) " #f)")
-        cells *cache-cells*]
-    (if cells
-      (let [c (fresh-label "_cdesc$")]
-        (swap! cells conj c)
-        (str "(or " c " (let ((_d " lookup ")) (set! " c " _d) _d))"))
-      lookup)))
+  (if (= :guile (target))
+    (str "(jrec-tag-desc-ref " (chez-str-lit tag) ")")
+    (let [lookup (str "(hashtable-ref chez-tag-desc " (chez-str-lit tag) " #f)")
+          cells *cache-cells*]
+      (if cells
+        (let [c (fresh-label "_cdesc$")]
+          (swap! cells conj c)
+          (str "(or " c " (let ((_d " lookup ")) (set! " c " _d) _d))"))
+        lookup))))
 ;; load-time-value: an expression evaluated ONCE, when the top-level form that
 ;; contains it is loaded, whose value every evaluation of the site then reads —
 ;; Common Lisp's load-time-value, and what a JVM class's static initializer is to

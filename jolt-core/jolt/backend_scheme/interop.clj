@@ -211,7 +211,7 @@
 ;; already bound (the back end's own emit: this namespace sits below it).
 (defn host-call-emit [emit node]
   (let [m (:method node)
-        chez? (not= :gambit (target))
+        chez? (= :chez (target))
         t (or (:sited-target node) (emit (:target node)))
         args (or (:sited-args node) (map emit (:args node)))
         direct (when chez? (proven-receiver-emit node m t args))]

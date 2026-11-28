@@ -3,7 +3,7 @@
 # (host/chez/reader.ss), the analyzer/IR/backend (jolt-core/jolt/*.clj), or the
 # clojure.core overlay (jolt-core/clojure/core/*.clj). Iterates bootstrap.ss from the
 # current seed to a byte-fixpoint and overwrites host/chez/seed/, then cross-mints
-# host/gambit/seed/ from it.
+# host/gambit/seed/ and host/guile/seed/ from it.
 set -e
 root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 cd "$root"
@@ -50,12 +50,8 @@ while [ "$i" -lt 8 ]; do
     cp "$tmp/new-p.ss" host/chez/seed/prelude.ss
     cp "$tmp/new-i.ss" host/chez/seed/image.ss
     echo "re-minted seed (converged after $i pass(es))"
-    # The gambit seed is cross-minted FROM this one (host/gambit/gen-seed.ss
-    # re-emits it with the :gambit target), and gambitseedcheck in CI holds the
-    # two to the same sources. Re-minting only the chez half left it stale, which
-    # is how a contributor who did exactly what CONTRIBUTING said arrived with a
-    # red gate (#1057). set -e: a gen-seed failure fails the remint.
-    "$CHEZ" --script host/gambit/gen-seed.ss
+    sh host/chez/gen-seed.sh gambit "$CHEZ"
+    sh host/chez/gen-seed.sh guile "$CHEZ"
     exit 0
   fi
   cp "$tmp/new-p.ss" "$tmp/cur-p.ss"

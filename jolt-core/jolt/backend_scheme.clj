@@ -862,7 +862,7 @@
        ;; in-range element is read inline, anything else makes the call it
        ;; would have made. Chez only: the read is the runtime's
        ;; pvec-nth-in-range macro, which code Gambit evaluates cannot see.
-       (and (:vec-idx node) (:nop c) (not= :gambit (session/target)))
+       (and (:vec-idx node) (:nop c) (= :chez (session/target)))
        (emit-vec-idx-read (:nop c) tail? tl ich order-args)
        (:v-aset node) (order-args (fn [as] (emit-call tail? "jolt-vaset" as tl ich)))
        ;; (alength a) on a hinted array: the backing's own length, a fixnum.

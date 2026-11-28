@@ -79,7 +79,8 @@
    ;; has no unsafe variants, so the prefix is "" and every derived spelling
    ;; degrades to the checked op — this table now DECIDES that instead of the
    ;; (str nil) accident the pre-stage1 lookup degraded through.
-   :gambit {:unsafe-prefix ""}})
+   :gambit {:unsafe-prefix ""}
+   :guile {:unsafe-prefix ""}})
 (defn unsafe-prefix [] (get-in target-prims [(target) :unsafe-prefix]))
 
 ;; contagion clone sites (jolt devirt-gated fl* contagion for :num fields): a set of

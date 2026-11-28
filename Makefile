@@ -130,7 +130,6 @@ JOLT-TARGETS-NEEDING-DEPS := \
         gambitgen gambitgencheck gambitseedcheck gambitunbound gambitunbound-regen \
         gambitffi gambitffi-abi gambitffi-errno-check gambitffi-load-failure-smoke gambitffi-bridge \
         gambitvars gambitvars-regen gambitstatics gambitstatics-regen gambittwins grenadinecheck \
-        guilecheck \
         fibersbench dynbench \
         fibersresidue
 
@@ -1515,46 +1514,8 @@ census:
 # forms). When Guile is not installed, the Guile leg skips unless
 # JOLT_REQUIRE_GUILE is set.
 adaptercheck:
-	@$(CHEZ) --script host/scheme-adapter/chez.ss
-	@if [ -x "$(GUILE_GUILE)" ]; then \
-	  $(GUILE-CHECK-INTERP); \
-	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) || exit $$?; \
-	  mkdir -p build/guile/cache || exit $$?; \
-	  log="build/guile/adaptercheck.log"; \
-	  rm -f "$$log"; \
-	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 60 $(GUILE_GUILE) --no-auto-compile -s host/scheme-adapter/guile.ss > "$$log"; then \
-	    cat "$$log"; rm -f "$$log"; exit 1; \
-	  fi; \
-	  cat "$$log"; \
-	  if ! grep -q '^adaptercheck (guile): guile adapter contract satisfied$$' "$$log"; then \
-	    echo "$@: positive Guile adaptercheck marker missing" >&2; rm -f "$$log"; exit 1; \
-	  fi; \
-	  rm -f "$$log"; \
-	else \
-	  $(GUILE-SKIP); \
-	fi
-
-# Phase 3a Guile host verification suite: contract checks, reader, eval, hasheq,
-# threads/atomics, escape continuations, GC/mtime FFI, VM fence lowering, and
-# arm64 concurrency stress tests.
-guilecheck:
-	@if [ -x "$(GUILE_GUILE)" ]; then \
-	  $(GUILE-CHECK-INTERP); \
-	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) || exit $$?; \
-	  mkdir -p build/guile/cache || exit $$?; \
-	  log="build/guile/guilecheck.log"; \
-	  rm -f "$$log"; \
-	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 120 $(GUILE_GUILE) --no-auto-compile -s host/guile/guilecheck.ss > "$$log"; then \
-	    cat "$$log"; rm -f "$$log"; exit 1; \
-	  fi; \
-	  cat "$$log"; \
-	  if ! grep -Eq '^guilecheck summary: [0-9]+ passed, 0 failed$$' "$$log"; then \
-	    echo "$@: positive guilecheck summary marker missing" >&2; rm -f "$$log"; exit 1; \
-	  fi; \
-	  rm -f "$$log"; \
-	else \
-	  $(GUILE-SKIP); \
-	fi
+	@sh host/guile/witnesses/watchdog.sh 60 "$(CHEZ)" --script host/scheme-adapter/chez.ss
+	$(GUILE-RUN-GATE)
 
 # The three derived host properties (sa-os-family / sa-arch / sa-endian) are all
 # host logic may ask about the platform, so one wrong row is a wrong SIGCHLD,
@@ -1918,8 +1879,6 @@ GUILE_PREFIX ?= $(shell \
     echo /opt/homebrew/opt/guile; \
   elif [ -x /usr/local/opt/guile/bin/guile ]; then \
     echo /usr/local/opt/guile; \
-  elif command -v guile >/dev/null 2>&1; then \
-    dirname "$$(dirname "$$(command -v guile)")"; \
   else \
     echo /usr/local; \
   fi)
@@ -1937,7 +1896,8 @@ else
   GUILE_LD_FLAGS := -shared
 endif
 GUILE-CHECK-INTERP = \
-	ver="$$(sh host/guile/witnesses/watchdog.sh 10 $(GUILE_GUILE) --no-auto-compile -c '(display (string-append "guile-interp:" (version)))' 2>/dev/null)"; \
+	case "$(GUILE_GUILE)" in /*) ;; *) echo "$@: GUILE_GUILE must be absolute" >&2; exit 1;; esac; \
+	ver="$$(sh host/guile/witnesses/watchdog.sh 10 "$(GUILE_GUILE)" --no-auto-compile -c '(display (string-append "guile-interp:" (version)))' 2>/dev/null)"; \
 	if [ "$$ver" != "guile-interp:3.0.11" ]; then \
 	  echo "$@: $(GUILE_GUILE) is not GNU Guile 3.0.11 (got '$$ver')" >&2; \
 	  exit 1; \
@@ -2011,7 +1971,7 @@ gambitgencheck:
 # gates in CI whether or not gambit is installed.
 gambitseedcheck:
 	@out=$$(mktemp -d); \
-	  if ! GEN_SEED_OUT_DIR="$$out" $(CHEZ) --script host/gambit/gen-seed.ss > "$$out/mint.log" 2>&1; then \
+	  if ! GEN_SEED_OUT_DIR="$$out" sh host/chez/gen-seed.sh gambit "$(CHEZ)" > "$$out/mint.log" 2>&1; then \
 	    tail -20 "$$out/mint.log" >&2; \
 	    echo "gambitseedcheck: gen-seed.ss FAILED — the gambit seed cannot be minted from current sources" >&2; \
 	    rm -rf "$$out"; exit 1; \
@@ -2339,7 +2299,7 @@ gambitweb:
 # emission contains no chez-only spelling before writing host/gambit/seed/.
 # Runs on CHEZ (gambitseed), not gsi.
 gambitseed:
-	$(CHEZ) --script host/gambit/gen-seed.ss
+	sh host/chez/gen-seed.sh gambit "$(CHEZ)"
 
 # Re-mint the seed after changing a seed source (reader/analyzer/backend/core).
 remint:
@@ -2474,3 +2434,39 @@ sbperf:
 # of the same elements, measured as a ratio in one process. Manual, like sbperf.
 doseqperf:
 	@$(CHEZ) --script test/chez/doseq-perf.ss
+
+.PHONY: guilegen guilegencheck guileseed guileseedcheck
+
+guilegen:
+	sh host/guile/witnesses/watchdog.sh 60 "$(CHEZ)" --script host/chez/gen-records.ss guile
+
+guilegencheck:
+	@set -eu; out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
+	  GEN_RECORDS_OUT="$$out/records-guile.ss" $(MAKE) guilegen; \
+	  cmp "$$out/records-guile.ss" host/guile/records-guile.ss; \
+	  echo "$@: records-guile.ss is current"
+
+guileseed:
+	sh host/chez/gen-seed.sh guile "$(CHEZ)"
+
+guileseedcheck:
+	@set -eu; out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
+	  GEN_SEED_OUT_DIR="$$out" $(MAKE) guileseed; \
+	  cmp "$$out/prelude.ss" host/guile/seed/prelude.ss; \
+	  cmp "$$out/image.ss" host/guile/seed/image.ss; \
+	  echo "$@: both Guile seed files are current"
+
+GUILE-RUNTIME-GATES := guilecheck guilekernel guileeval guileboot guilevars guilestatics guiletwins guileprofile guileunbound
+.PHONY: $(GUILE-RUNTIME-GATES)
+$(GUILE-RUNTIME-GATES):
+	$(GUILE-RUN-GATE)
+
+define GUILE-RUN-GATE
+	@if [ -x "$(GUILE_GUILE)" ]; then \
+	  $(GUILE-CHECK-INTERP); \
+	  $(MAKE) "$(GUILE_PLATFORM_LIB)" || exit $$?; \
+	  sh host/guile/run-gate.sh "$@" "$(GUILE_GUILE)"; \
+	else \
+	  $(GUILE-SKIP); \
+	fi
+endef

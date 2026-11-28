@@ -37,11 +37,13 @@
 ;; add generated files, which their own generator gate already covers.
 (define mirror-pairs
   '(("host/chez/rt.ss" . "host/gambit/rt-core.ss")
-    ("host/chez/hasheq.ss" . "host/gambit/hasheq.ss")))
+    ("host/chez/hasheq.ss" . "host/gambit/hasheq.ss")
+    ("host/chez/rt.ss" . "host/guile/rt-core.ss")
+    ("host/chez/hasheq.ss" . "host/guile/hasheq.ss")))
 
-;; "chez-file::name" — one allowlist key, so the same procedure name in two
+;; "target-file::name" — one allowlist key, so the same procedure name in two
 ;; different pairs is two separate decisions.
-(define (key-for chez-path name) (string-append chez-path "::" name))
+(define (key-for target-path name) (string-append target-path "::" name))
 
 (define (diverged-keys)
   (let loop ((ps mirror-pairs) (acc '()) (shared 0) (same 0))
@@ -58,7 +60,7 @@
                       (set! n-shared (+ n-shared 1))
                       (if (equal? v other)
                           (set! n-same (+ n-same 1))
-                          (set! found (cons (key-for a k) found))))))
+                          (set! found (cons (key-for b k) found))))))
                 ks vs)
               (loop (cdr ps) (append found acc)
                     (+ shared n-shared) (+ same n-same))))))))
@@ -79,7 +81,7 @@
     (lambda (p)
       (display "# mirror-drift-allowlist.txt — procedures DELIBERATELY per-host.\n" p)
       (display "#\n" p)
-      (display "# One <chez-file>::<procedure> per line: defined in both halves of a\n" p)
+      (display "# One <target-file>::<procedure> per line: defined in both halves of a\n" p)
       (display "# mirrored pair and different on purpose (Chez mutexes and hash-fx\n" p)
       (display "# arithmetic against Gambit's plain operators, capabilities one host\n" p)
       (display "# does not have). Everything else defined in both must stay identical.\n" p)

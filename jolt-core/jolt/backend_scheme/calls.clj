@@ -491,7 +491,7 @@
                       ;; re-resolves on mismatch, so an extend-type after warmup
                       ;; (a register-protocol-method epoch bump) invalidates this
                       ;; site like every other dispatch path, mirroring the PIC.
-                      resolver (if cells
+                      resolver (if (and cells (not= :guile (target)))
                                   (let [c (fresh-label "_dvc$")]
                                     (swap! cells conj c)
                                     (str "(if (and (pair? " c ") (fx= (car " c ") jolt-proto-epoch))"
@@ -514,25 +514,35 @@
                       method (chez-str-lit (:method node))
                       apply-args (str/join " " (cons r (rest as)))]
                   (if cells
-                    (let [c (fresh-label "_picv$")
+                    (let [guile? (= :guile (target))
+                          c (if guile?
+                              (hoist-const-per-site "(jolt-pic-site-make)")
+                              (fresh-label "_picv$"))
+                          read-cache (if guile?
+                                       (str "(jolt-pic-site-ref " c ")")
+                                       (str "(or " c " jolt-pic-empty)"))
+                          publish (if guile?
+                                    (str "(jolt-pic-site-set! " c " _nv)")
+                                    (str "(set! " c " _nv)"))
+                          epoch (if guile? "(jolt-proto-epoch-ref)" "jolt-proto-epoch")
                           scan (pic-scan-clauses v d)]
-                      (swap! cells conj c)
+                      (when-not guile? (swap! cells conj c))
                       ;; hot path inlined: bind the receiver, the site's cache
                       ;; vector and the receiver's desc; then, if the epoch still
                       ;; matches, eq?-scan the cached descs and apply the hit impl
                       ;; directly — no helper call after warmup. A miss (no cached
                       ;; desc / stale epoch) has jolt-pic-add build the next cache
-                      ;; and the cell is set! to it: a cache vector is shared by
+                      ;; and publishes it through the target’s site cell. The vector is shared by
                       ;; every thread calling here, so none is written in place.
                       ;; A full cache gets the impl back instead (megamorphic).
                       ;; A receiver with no desc resolves without caching.
                       (let [miss (str "(let ((_nv (jolt-pic-add " v " " d " " proto " " method " " r ")))"
                                       " (if (procedure? _nv) _nv"
-                                      " (begin (set! " c " _nv) (" (unsafe-prefix) "vector-ref _nv 1))))")]
+                                      " (begin " publish " (" (unsafe-prefix) "vector-ref _nv 1))))")]
                         (str "(let* ((" r " " (first as) ")"
-                             " (" v " (or " c " jolt-pic-empty))"
+                             " (" v " " read-cache ")"
                              " (" d " (jrec-pic-desc " r ")))"
-                             " ((if (and " d " (" (unsafe-prefix) "fx= (" (unsafe-prefix) "vector-ref " v " " pic-epoch-idx ") jolt-proto-epoch))"
+                             " ((if (and " d " (" (unsafe-prefix) "fx= (" (unsafe-prefix) "vector-ref " v " " pic-epoch-idx ") " epoch "))"
                              " (or " scan " " miss ")"
                              " (if " d " " miss " (protocol-resolve " proto " " method " " r ")))"
                              " " apply-args "))")))

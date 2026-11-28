@@ -19,6 +19,9 @@
 ;; registry) and java-parse.ss (the NumberFormatException family); the shared
 ;; class-model.ss and string-builder.ss follow it.
 
+(define (portable-statics-target)
+  (if (string-prefix? "guile-" (sa-host-tag)) "the guile target" "the gambit target"))
+
 ;; ---- host object --------------------------------------------------------------
 ;; The generic carrier for a host value: a tag naming its method table, and
 ;; mutable state. A Class object is a jhost tagged "class" (class-model.ss), a
@@ -122,8 +125,7 @@
               (jolt-host-throwable
                 "java.lang.UnsupportedOperationException"
                 (string-append class "/" member
-                               " is unsupported on the gambit target: no shim registers it"
-                               " (host/gambit/host-statics.ss)"))))
+                               " is unsupported on " (portable-statics-target) ": no shim registers it"))))
         v)))
 (define (host-static-call class member . args)
   ;; a procedure is a method to call, anything else a field value — which
@@ -190,8 +192,8 @@
              (jolt-throw
                (jolt-host-throwable
                  "java.lang.UnsupportedOperationException"
-                 (string-append "(new " class ") is unsupported on the gambit target: "
-                                "no shim registers the class (host/gambit/host-statics.ss)")))))))))
+                 (string-append "(new " class ") is unsupported on " (portable-statics-target) ": "
+                                "no shim registers the class")))))))))
 (def-var! "clojure.core" "host-new" (lambda (c . a) (apply host-new c a)))
 
 ;; Constructing a File only wraps the path. Store preflight filesystem

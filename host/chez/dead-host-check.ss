@@ -35,14 +35,17 @@
 (define (definition-file? path)
   (and (gs-string-suffix? ".ss" path)
        (or (gs-string-prefix? "host/chez/" path)
-           (gs-string-prefix? "host/gambit/" path))
+           (gs-string-prefix? "host/gambit/" path)
+           (gs-string-prefix? "host/guile/" path))
        (not (gs-string-contains? path "/seed/"))
        (not (gs-string-contains? path "/stub/"))
        ;; generated halves: what lives in them is gen-records.ss's / gen-boot.ss's
        ;; decision, taken from the Chez originals. The GENERATORS themselves are
        ;; handwritten and are scanned.
-       (not (gs-string-contains? path "records-gambit.ss"))
-       (not (gs-string-contains? path "prelude-shims.ss"))
+       (not (member path '("host/gambit/records-gambit.ss" "host/guile/records-guile.ss"
+                           "host/guile/boot.ss" "host/guile/guilecheck.ss"
+                           "host/guile/gates.ss" "host/guile/unbound.ss")))
+       (not (string=? path "host/gambit/prelude-shims.ss"))
        (not (gs-string-prefix? "host/gambit/boot" path))
        ;; gate runners and one-shot scripts define helpers for their own use
        (not (gs-string-contains? path "-test.ss"))

@@ -6,6 +6,33 @@
 ;; Capture Guile's native eval and the dedicated (jolt runtime) module at load time
 ;; so 1-arg eval and (interaction-environment) always target the Jolt runtime module
 ;; regardless of any module switch in callers or worker threads.
+;; The evaluator reports only the first clause of an interpreted case-lambda.
+;; Attach the exact positional arity mask when expanding in the Jolt module.
+(define-syntax case-lambda
+  (lambda (stx)
+    (define (clause-mask formals)
+      (let loop ((tail formals) (count 0))
+        (cond ((pair? tail) (loop (cdr tail) (+ count 1)))
+              ((null? tail) (ash 1 count))
+              (else (- (ash 1 count))))))
+    (syntax-case stx ()
+      ((_ (formals body ...) ...)
+       (with-syntax ((mask
+                       (datum->syntax stx
+                         (apply logior (map clause-mask (syntax->datum #'(formals ...)))))))
+         #'(let ((proc ((@ (guile) case-lambda) (formals body ...) ...)))
+             (set-procedure-property! proc 'jolt-arity-mask mask)
+             proc))))))
+
+(define (procedure-arity-mask proc)
+  (or (procedure-property proc 'jolt-arity-mask)
+      (apply
+        (lambda (required optional rest?)
+          (let ((first (ash 1 required))
+                (limit (ash 1 (+ required optional 1))))
+            (if rest? (- first) (- limit first))))
+        (procedure-minimum-arity proc))))
+
 (define %jolt-native-eval eval)
 (define %jolt-boot-module (current-module))
 
@@ -45,7 +72,6 @@
 
 (define (virtual-register i) (vector-ref (%jolt-vreg-vec) i))
 (define (set-virtual-register! i v) (vector-set! (%jolt-vreg-vec) i v))
-(define (virtual-register-count) 32)
 
 ;; ---- Arithmetic / fixnum / flonum / bitwise shims --------------------------
 (define (add1 n) (+ n 1))
@@ -76,7 +102,7 @@
 (define fxlogor fxior)
 (define fxlogxor fxxor)
 (define fxlognot fxnot)
-(define fxlogbit? fxbit-set?)
+(define (fxlogbit? index value) (logbit? index value))
 (define (fxabs n) (if (fx<? n 0) (fx- n) n))
 
 (define (fl= a b . rest) (apply fl=? a b rest))
@@ -94,15 +120,6 @@
 (define flvector-length f64vector-length)
 (define flvector-ref f64vector-ref)
 (define flvector-set! f64vector-set!)
-(define (flvector-copy v)
-  (let* ((n (f64vector-length v))
-         (out (make-f64vector n 0.0)))
-    (let loop ((i 0))
-      (when (fx<? i n)
-        (f64vector-set! out i (f64vector-ref v i))
-        (loop (fx+ i 1))))
-    out))
-
 (define (fxvector? x) (vector? x))
 (define make-fxvector
   (case-lambda
@@ -333,7 +350,7 @@
 (define (hashtable-size ht)
   (cond
     ((r6ht:hashtable? ht) (r6ht:hashtable-size ht))
-    ((weak-key-hash-table? ht) (hash-count (const #t) ht))
+    ((weak-key-hash-table? ht) (hash-fold (lambda (key value count) (+ count 1)) 0 ht))
     (else (error 'hashtable-size "expected hashtable" ht))))
 
 (define (hashtable-clear! ht . rest)
@@ -520,20 +537,6 @@
               (lambda (r v) (atomic-box-set! (raw r) v)))
             (error 'record-mutator "record field is immutable" rtd idx))
         (r6p:record-mutator rtd idx))))
-
-(define (make-record-type-descriptor name parent uid sealed? opaque? fields)
-  (let* ((rtd (r6p:make-record-type-descriptor name parent uid sealed? opaque? fields))
-         (n (vector-length fields))
-         (mut-vec (make-vector n #f)))
-    (let loop ((i 0))
-      (when (fx<? i n)
-        (let ((spec (vector-ref fields i)))
-          (vector-set! mut-vec i (and (pair? spec) (eq? (car spec) 'mutable))))
-        (loop (fx+ i 1))))
-    (%rtd-build-meta rtd mut-vec
-                     (r6p:make-record-constructor-descriptor rtd #f #f)
-                     #f)
-    rtd))
 
 (define (make-record-constructor-descriptor rtd parent-rcd proto)
   (r6p:make-record-constructor-descriptor rtd parent-rcd proto))
@@ -773,3 +776,52 @@
          (lambda () (jolt-lock! m))
          (lambda () b0 b ...)
          (lambda () (jolt-unlock! m)))))))
+
+;; The portable collection registry uses identity keys.
+(define (make-ephemeron-eq-hashtable) (make-weak-eq-hashtable))
+
+(define-syntax jolt-site-kept
+  (syntax-rules ()
+    ((_ expression)
+     (let* ((site (virtual-register 2))
+            (result expression))
+       (set-virtual-register! 2 site)
+       result))))
+
+(define-syntax jolt-wind*
+  (syntax-rules ()
+    ((_ before setup body after)
+     (let ((lv (jolt-locks-held)))
+       (jolt-locks-enter!)
+       setup
+       (dynamic-wind before (jolt-masked-body body) (jolt-masked-cleanup lv after))))))
+
+
+(define exact inexact->exact)
+(define inexact exact->inexact)
+(define infinite? inf?)
+(define (bignum? value) (and (exact-integer? value) (not (fixnum? value))))
+(define (flush-output-port port) (force-output port))
+(define (display-condition condition port)
+  (if (message-condition? condition)
+      (display (condition-message condition) port)
+      (write condition port)))
+(define (flsingle value)
+  (let ((bytes (make-bytevector 4)))
+    (bytevector-ieee-single-native-set! bytes 0 value)
+    (bytevector-ieee-single-native-ref bytes 0)))
+(define jolt-s64-add-wrap #f)
+(define jolt-s64-sub-wrap #f)
+(define jolt-s64-mul-wrap #f)
+
+
+;; Guile attaches locations while reading from a named port.
+(define (make-source-file-descriptor name bytes)
+  (close-port bytes)
+  name)
+(define (get-datum/annotations port source offset)
+  (call-with-port port
+    (lambda (input)
+      (set-port-filename! input source)
+      ;; The transcoded port provides syntax locations, but is not seekable.
+      (values (read-syntax input) #f))))

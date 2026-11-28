@@ -113,6 +113,10 @@
   (if (string=? repo-root "") p (string-append repo-root "/" p)))
 
 (define scope-root (rooted "host/chez"))
+(define guile-sources
+  '("host/guile/prelude-shims.ss" "host/guile/scheme-adapter-runtime.ss"
+    "host/guile/hasheq.ss" "host/guile/rt-core.ss" "host/guile/host-statics.ss"
+    "host/guile/pre-seed.ss" "host/guile/host-vars.ss" "host/guile/host-ffi.ss"))
 (define blocklist-file (rooted "host/chez/portability-blocklist.txt"))
 (define allowlist-file (rooted "host/chez/portability-allowlist.txt"))
 (define census-file (rooted ".dirge/psl-census.md"))
@@ -125,7 +129,11 @@
   ;; in any other file is a signal to route through the adapter, never to
   ;; allowlist.
   '("host/chez/scheme-adapter-runtime.ss"
-    "host/chez/hasheq.ss"))
+    "host/chez/hasheq.ss"
+    "host/guile/scheme-adapter-runtime.ss"
+    "host/guile/prelude-shims.ss"
+    "host/guile/hasheq.ss"
+    "host/guile/rt-core.ss"))
 
 ;; ---------------------------------------------------------------------------
 ;; blocklist: identifier symbol -> tier name (tier headers are "# tier: NAME")
@@ -265,7 +273,7 @@
   acc)
 
 (define (find-files)
-  (sort-list (scan-dir scope-root '()) string<?))
+  (sort-list (append (scan-dir scope-root '()) (map rooted guile-sources)) string<?))
 
 ;; Chez's sort takes (sort predicate list); this wrapper keeps the call sites'
 ;; (sort-list lst predicate) shape while passing the comparator first to sort.

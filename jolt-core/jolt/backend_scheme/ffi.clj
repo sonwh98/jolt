@@ -478,6 +478,7 @@
         capture-conv (cond blocking "__collect_safe"
                            vi (str "(__varargs_after " vi ")") :else "")
         gambit? (= :gambit (target))
+        guile? (= :guile (target))
         by-name (if gambit?
                   (gambit-procedure-expr node vi csym)
                   (if capture
@@ -489,8 +490,11 @@
                       (gambit-procedure-expr node vi "a")
                       (if capture
                         (str "(jolt-ffi-native-error-procedure (" capture-conv ") a" signature ")")
-                        (str "(foreign-procedure" (when blocking " __collect_safe")
-                             (when vi conv) " a" signature ")")))
+                        (if guile?
+                          (str "(" (if blocking "sa-foreign-procedure-blocking" "sa-foreign-procedure")
+                               " a" signature ")")
+                          (str "(foreign-procedure" (when blocking " __collect_safe")
+                               (when vi conv) " a" signature ")"))))
                     "))")]
     (str "(or p (begin (set! p (or " scoped " " by-name ")) p))")))
 
@@ -621,6 +625,10 @@
         vi (ffi-varargs-index at)]
     (check-ffi-signature! node vi)
     (cond
+      (and (= :guile (target))
+           (or vi (some ffi-by-value? at) (ffi-by-value? (:rettype node))))
+      "(throw-jvm 'UnsupportedOperationException \"jolt.ffi/foreign-fn: variadic and by-value signatures are unsupported on the guile target\")"
+
       ;; gambit has no ffi tier, and its eval sees none of the sa-foreign-*
       ;; syntaxes, so a pointer call there would die on an unbound global. The
       ;; binding still defines; calling it raises in words that say why.
@@ -779,14 +787,17 @@
     ;; gap G-1 (inventory Q1): on :gambit a :ffi-layout emitted Chez
     ;; define-ftype/make-ftype-pointer text that died as an unbound identifier
     ;; at namespace load; refuse in words, at the form, instead.
-    :ffi-layout (if (= :gambit (target))
+    :ffi-layout (if (= :chez (target))
+                  (emit-ffi-layout node)
                   (str "(throw-jvm 'UnsupportedOperationException "
-                       (chez-str-lit "jolt.ffi/layout: ffi-layout aggregates using ftype are unsupported on the gambit target")
-                       ")")
-                  (emit-ffi-layout node))
+                       (chez-str-lit (str "jolt.ffi/layout: ffi-layout aggregates using ftype are unsupported on the " (name (target)) " target"))
+                       ")"))
     :ffi-fn (emit-ffi-fn node)
     :ffi-callable
-    (if (= :gambit (target))
+    (cond
+      (= :guile (target))
+      "(throw-jvm 'UnsupportedOperationException \"jolt.ffi/foreign-callable: user FFI is unsupported on the guile target\")"
+      (= :gambit (target))
       ;; gambit has no ffi tier, and its eval knows no define-ftype, so a
       ;; by-value callable there would die on an unbound name rather than on
       ;; the target's own "unsupported" error. Raise when it is made, in words
@@ -794,4 +805,4 @@
       (str "(throw-jvm 'UnsupportedOperationException "
            (chez-str-lit "jolt.ffi/foreign-callable: ffi is unsupported on the gambit target")
            ")")
-      (emit-ffi-callable emit node))))
+      :else (emit-ffi-callable emit node))))

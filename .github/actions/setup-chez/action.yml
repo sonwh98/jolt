@@ -120,7 +120,8 @@ runs:
     - name: Build Guile from source
       if: inputs.guile == 'true' && steps.cache-guile.outputs.cache-hit != 'true'
       shell: bash
-      run: timeout 20m sh ci/build-guile.sh /opt/guile "$(nproc)"
+      # A cold hosted build was still bootstrapping Scheme at 20 minutes.
+      run: timeout 40m sh ci/build-guile.sh /opt/guile "$(nproc)"
 
     # The oracle Clojure (test/conformance/profile.edn :clojure-version) and
     # its spec deps, from the actions cache: every shard of every run used to

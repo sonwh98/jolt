@@ -218,16 +218,18 @@
                (err-pipe (cloexec-pipe!))
                (in-r (car in-pipe)) (in-w (cdr in-pipe))
                (out-r (car out-pipe)) (out-w (cdr out-pipe))
-               (err-r (car err-pipe)) (err-w (cdr err-pipe))
-               (pid (spawn "/bin/sh" (list "/bin/sh" "-c" cmd)
-                           #:input in-r #:output out-w #:error err-w
-                           #:search-path? #f)))
-          (set! opened (list in-r out-w err-w))
-          (close-opened!)
+               (err-r (car err-pipe)) (err-w (cdr err-pipe)))
+          ;; Finish fallible port setup before creating a child. All six
+          ;; endpoints are still owned by the failure handler here.
           (%configure-process-port! in-w transcoder)
           (%configure-process-port! out-r transcoder)
           (%configure-process-port! err-r transcoder)
-          (values in-w out-r err-r pid)))
+          (let ((pid (spawn "/bin/sh" (list "/bin/sh" "-c" cmd)
+                            #:input in-r #:output out-w #:error err-w
+                            #:search-path? #f)))
+            (set! opened (list in-r out-w err-w))
+            (close-opened!)
+            (values in-w out-r err-r pid))))
       (lambda args
         (close-opened!)
         (apply throw args)))))

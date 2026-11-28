@@ -251,6 +251,8 @@ jobs:
           exit "$status"
       - name: Guile ABI and runtime witnesses
         if: ${{ !cancelled() }}
+        env:
+          GUILE_W8_SKIP_DIRECT_FCNTL: "1"
         run: sh ci/guile-witnesses.sh build/guile/witnesses
       - name: Archive Guile qualification
         if: ${{ always() }}

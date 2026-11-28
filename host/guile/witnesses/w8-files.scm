@@ -177,7 +177,7 @@ file (and /tmp itself)"
     (display "}\n" p)))
 (let ((rc (system* "cc" "-shared" "-fPIC" "-o" shim-lib shim-src)))
   (check "IO3a0 compiled the non-variadic fcntl shim (constructs struct flock \
-from <fcntl.h>; variadic-direct calls EFAULT — recorded)"
+from <fcntl.h>)"
          (zero? rc)))
 (define shim-setlk
   (foreign-library-function (load-foreign-library shim-lib)
@@ -187,18 +187,23 @@ from <fcntl.h>; variadic-direct calls EFAULT — recorded)"
                             #:return-errno? #t))
 (define lock-file (string-append tmpdir "/locked"))
 (call-with-output-file lock-file (lambda (p) (display "L" p)))
-;; record the direct-variadic failure for the audit trail (O_RDWR so EBADF
-;; cannot mask EFAULT; boundary-captured errno proves EFAULT = 14 on darwin-arm64)
-(let ((fl (make-flock F-WRLCK))
-      (fd (open-fdes lock-file O_RDWR)))
-  (receive (direct-rc direct-err)
-      (c-fcntl fd F-SETLK (bytevector->pointer fl))
-    (close-fdes fd)
-    (format #t "IO3a1 direct variadic fcntl F_SETLK (O_RDWR) => rc=~a errno=~a~%"
-            direct-rc direct-err)
-    (when darwin?
-      (check "IO3a1 direct variadic fcntl F_SETLK fails EFAULT(14) on darwin-arm64"
-             (and (= direct-rc -1) (= direct-err 14))))))
+;; The Darwin arm64 calling conventions disagree about where the third
+;; argument lives. The baseline got EFAULT; macos-15 CI returned success.
+;; Only the unsupported raw call can be opted out of. The shim and its
+;; cross-process negative control below always run.
+(if (and darwin? (string=? (utsname:machine (uname)) "arm64")
+         (equal? (getenv "GUILE_W8_SKIP_DIRECT_FCNTL") "1"))
+    (format #t "CHECK-SKIP IO3a1 raw variadic fcntl: Darwin arm64 fixed/variadic ABI mismatch; macos-15 returned rc=0 errno=0, audit baseline returned EFAULT(14); qualifying locking via the C shim~%")
+    (let ((fl (make-flock F-WRLCK))
+          (fd (open-fdes lock-file O_RDWR)))
+      (receive (direct-rc direct-err)
+          (c-fcntl fd F-SETLK (bytevector->pointer fl))
+        (close-fdes fd)
+        (format #t "IO3a1 direct variadic fcntl F_SETLK (O_RDWR) => rc=~a errno=~a~%"
+                direct-rc direct-err)
+        (when darwin?
+          (check "IO3a1 direct variadic fcntl F_SETLK fails EFAULT(14) on darwin-arm64"
+                 (and (= direct-rc -1) (= direct-err 14)))))))
 (define parent-fd (open-fdes lock-file O_RDWR))
 (receive (locked lock-err) (shim-setlk parent-fd F-WRLCK 0 0)
   (format #t "IO3a parent F_SETLK via shim (whole-file write lock) => rc=~a errno=~a~%"

@@ -45,6 +45,21 @@ linux-x86_64 with `GUILE=$(command -v guile) ./run-all.sh`; platform rows
 (fcntl constant spellings, EAGAIN value, flock layout) are derived from
 `uname` inside the witnesses.
 
+## W8 on hosted Darwin arm64
+
+The macos-15 qualification job sets `GUILE_W8_SKIP_DIRECT_FCNTL=1`.
+IO3a1 prints a skip with the observed outcomes. The audit baseline
+returned `-1/EFAULT`, while hosted run 46172518881 returned `0/0` from
+the same fixed-arity Guile FFI call to variadic `fcntl`. Darwin arm64
+passes the unnamed pointer argument on the stack. A fixed-arity call
+passes it in a register, so the result depends on what the callee reads
+from the stack.
+
+The design leaves arbitrary variadics unsupported. W8 always qualifies
+the audit's compiled C shim, including parent lock and unlock, child
+exclusion, and child acquisition after release. The original direct-call
+probe remains enabled in standalone runs by default.
+
 ## RUN-STATE at commit time (honesty record)
 
 r1 staged these witnesses in a session whose permission mode denied

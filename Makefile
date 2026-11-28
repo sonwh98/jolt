@@ -1517,9 +1517,19 @@ census:
 adaptercheck:
 	@$(CHEZ) --script host/scheme-adapter/chez.ss
 	@if [ -x "$(GUILE_GUILE)" ]; then \
+	  $(GUILE-CHECK-INTERP) && \
 	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
 	  mkdir -p build/guile/cache && \
-	  XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" $(GUILE_GUILE) --no-auto-compile -s host/scheme-adapter/guile.ss; \
+	  log="build/guile/adaptercheck.log"; \
+	  rm -f "$$log"; \
+	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 60 $(GUILE_GUILE) --no-auto-compile -s host/scheme-adapter/guile.ss > "$$log"; then \
+	    cat "$$log"; rm -f "$$log"; exit 1; \
+	  fi; \
+	  cat "$$log"; \
+	  if ! grep -q '^adaptercheck (guile): guile adapter contract satisfied$$' "$$log"; then \
+	    echo "$@: positive Guile adaptercheck marker missing" >&2; rm -f "$$log"; exit 1; \
+	  fi; \
+	  rm -f "$$log"; \
 	else \
 	  $(GUILE-SKIP); \
 	fi
@@ -1529,9 +1539,19 @@ adaptercheck:
 # arm64 concurrency stress tests.
 guilecheck:
 	@if [ -x "$(GUILE_GUILE)" ]; then \
+	  $(GUILE-CHECK-INTERP) && \
 	  $(MAKE) --no-print-directory $(GUILE_PLATFORM_LIB) && \
 	  mkdir -p build/guile/cache && \
-	  XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" $(GUILE_GUILE) --no-auto-compile -s host/guile/guilecheck.ss; \
+	  log="build/guile/guilecheck.log"; \
+	  rm -f "$$log"; \
+	  if ! XDG_CACHE_HOME="$(CURDIR)/build/guile/cache" sh host/guile/witnesses/watchdog.sh 120 $(GUILE_GUILE) --no-auto-compile -s host/guile/guilecheck.ss > "$$log"; then \
+	    cat "$$log"; rm -f "$$log"; exit 1; \
+	  fi; \
+	  cat "$$log"; \
+	  if ! grep -Eq '^guilecheck summary: [0-9]+ passed, 0 failed$$' "$$log"; then \
+	    echo "$@: positive guilecheck summary marker missing" >&2; rm -f "$$log"; exit 1; \
+	  fi; \
+	  rm -f "$$log"; \
 	else \
 	  $(GUILE-SKIP); \
 	fi
@@ -1903,7 +1923,7 @@ GUILE_PREFIX ?= $(shell \
   else \
     echo /usr/local; \
   fi)
-GUILE_GUILE ?= $(GUILE_PREFIX)/bin/guile
+GUILE_GUILE ?= $(if $(JOLT_GUILE),$(JOLT_GUILE),$(GUILE_PREFIX)/bin/guile)
 GUILE_UNAME := $(shell uname -s)
 ifeq ($(GUILE_UNAME),Darwin)
   GUILE_PLATFORM_LIB := build/guile/libjolt-guile-platform.dylib
@@ -1916,6 +1936,12 @@ ifeq ($(GUILE_UNAME),Darwin)
 else
   GUILE_LD_FLAGS := -shared
 endif
+GUILE-CHECK-INTERP = \
+	ver="$$(sh host/guile/witnesses/watchdog.sh 10 $(GUILE_GUILE) --no-auto-compile -c '(display (string-append "guile-interp:" (version)))' 2>/dev/null)"; \
+	if [ "$$ver" != "guile-interp:3.0.11" ]; then \
+	  echo "$@: $(GUILE_GUILE) is not GNU Guile 3.0.11 (got '$$ver')" >&2; \
+	  exit 1; \
+	fi
 GUILE-SKIP = if [ -n "$$JOLT_REQUIRE_GUILE" ]; then \
 	  echo "$@: no guile at $(GUILE_GUILE) and JOLT_REQUIRE_GUILE is set" >&2; exit 1; \
 	else \

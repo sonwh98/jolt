@@ -249,15 +249,58 @@
         (check "thread parameter inherits and isolates mutation"
                (list seen child-val (tp))
                '(parent-set child-set parent-set))))
+    ;; Synchronized parent/child thread-id lifecycle check (live parent lookup + post-join #f)
     (let* ((main-id (get-thread-id))
+           (mu (make-mutex))
+           (cv (make-condition))
+           (ready? #f)
+           (go? #f)
            (child-id #f)
-           (t (fork-thread (lambda () (set! child-id (get-thread-id)) (sa-thread-id-of (current-thread)))))
-           (child-id-of (join-thread t)))
-      (check-true "thread IDs are distinct exact integers"
-                  (and (exact-integer? main-id)
-                       (exact-integer? child-id)
-                       (not (= main-id child-id))
-                       (= child-id child-id-of))))
+           (child (fork-thread
+                    (lambda ()
+                      (jolt-with-mutex mu
+                        (set! ready? #t)
+                        (condition-signal cv)
+                        (let wait () (unless go? (condition-wait cv mu) (wait))))
+                      (set! child-id (get-thread-id))
+                      child-id)))
+           (parent-live-id #f))
+      (jolt-with-mutex mu
+        (let wait () (unless ready? (condition-wait cv mu) (wait)))
+        (set! parent-live-id (sa-thread-id-of child))
+        (set! go? #t)
+        (condition-signal cv))
+      (let ((joined-id (join-thread child)))
+        (check-true "parent sa-thread-id-of live child matches child get-thread-id"
+                    (and (exact-integer? main-id)
+                         (exact-integer? parent-live-id)
+                         (not (= main-id parent-live-id))
+                         (= parent-live-id child-id)
+                         (= joined-id child-id)))
+        (check "sa-thread-id-of joined thread returns #f"
+               (sa-thread-id-of child)
+               #f)))
+    ;; Condition signal + multi-waiter broadcast + timed self-acquire
+    (let ((mu (make-mutex))
+          (cv (make-condition))
+          (done (make-atomic-box 0))
+          (go? #f))
+      (let ((waiters
+              (map (lambda (_)
+                     (fork-thread
+                       (lambda ()
+                         (jolt-with-mutex mu
+                           (let loop () (unless go? (condition-wait cv mu) (loop)))
+                           (let retry ()
+                             (let ((n (atomic-box-ref done)))
+                               (unless (sa-box-cas! done n (+ n 1)) (retry))))))))
+                   '(1 2 3 4))))
+        (sleep 0.01)
+        (jolt-with-mutex mu
+          (set! go? #t)
+          (condition-broadcast cv))
+        (for-each join-thread waiters)
+        (check "condition-broadcast wakes all 4 waiters" (atomic-box-ref done) 4)))
     (let ((mu (make-mutex)))
       (check-true "mutex-acquire #f succeeds when free" (mutex-acquire mu #f))
       (check "non-recursive mutex-acquire #f fails when held" (mutex-acquire mu #f) #f)
@@ -267,6 +310,9 @@
       (jolt-with-mutex mu
         (check "condition-wait times out on SRFI-19 duration"
                (condition-wait cv mu (srfi19:make-time 'time-duration 2000000 0))
+               #f)
+        (check "timed condition-wait re-acquires mutex before returning"
+               (mutex-acquire mu #f)
                #f)))
     (sleep (srfi19:make-time 'time-duration 2000000 0))
     (gc-pass! "subsecond SRFI-19 sleep")
@@ -278,6 +324,11 @@
     (call-with-values
       (lambda () (sa-run-process "printf out; printf err >&2; exit 7" (native-transcoder)))
       (lambda (p-in p-out p-err pid)
+        (check "sa-run-process pipe fds have FD_CLOEXEC"
+               (list (= (logand (fcntl p-in F_GETFD) FD_CLOEXEC) FD_CLOEXEC)
+                     (= (logand (fcntl p-out F_GETFD) FD_CLOEXEC) FD_CLOEXEC)
+                     (= (logand (fcntl p-err F_GETFD) FD_CLOEXEC) FD_CLOEXEC))
+               '(#t #t #t))
         (close-port p-in)
         (let ((so (get-string-all p-out))
               (se (get-string-all p-err)))
@@ -286,6 +337,23 @@
           (check "sa-run-process stdout/stderr/exit"
                  (list so se (status:exit-val (cdr (waitpid pid))))
                  '("out" "err" 7)))))
+    (call-with-values
+      (lambda () (sa-run-process "true" (r6io:make-transcoder (r6io:utf-16-codec))))
+      (lambda (p-in p-out p-err pid)
+        (check "sa-run-process honors explicit UTF-16 transcoder and sets FD_CLOEXEC"
+               (list (port-encoding p-in) (port-encoding p-out) (port-encoding p-err)
+                     (= (logand (fcntl p-in F_GETFD) FD_CLOEXEC) FD_CLOEXEC)
+                     (= (logand (fcntl p-out F_GETFD) FD_CLOEXEC) FD_CLOEXEC)
+                     (= (logand (fcntl p-err F_GETFD) FD_CLOEXEC) FD_CLOEXEC))
+               '("UTF-16" "UTF-16" "UTF-16" #t #t #t))
+        (close-port p-in) (close-port p-out) (close-port p-err) (waitpid pid)))
+    (call-with-values
+      (lambda () (sa-run-process "true" #f))
+      (lambda (p-in p-out p-err pid)
+        (check "sa-run-process binary mode uses ISO-8859-1"
+               (list (port-encoding p-in) (port-encoding p-out) (port-encoding p-err))
+               '("ISO-8859-1" "ISO-8859-1" "ISO-8859-1"))
+        (close-port p-in) (close-port p-out) (close-port p-err) (waitpid pid)))
     (check-true "sa-environment-pairs alist" (and (list? (sa-environment-pairs))
                                                   (pair? (car (sa-environment-pairs)))))
     (check-true "sa-stats 7-slot vector"
@@ -331,6 +399,41 @@
       (check-raise-message "calling escape continuation twice refuses"
                            (lambda () (saved-k 2))
                            "expired"))
+    ;; Escape invoked a second time from inside its own dynamic-wind cleanup MUST raise
+    ;; (escaped continuation was consumed before abort), keeping 'first as delivered value.
+    (let* ((cleanup-err #f)
+           (res (sa-call-with-escape-continuation
+                  (lambda (k)
+                    (dynamic-wind
+                      void
+                      (lambda () (k 'first))
+                      (lambda ()
+                        (guard (e ((message-condition? e) (set! cleanup-err (condition-message e))))
+                          (k 'second))))))))
+      (check "escape keeps first value when cleanup retries escape" res 'first)
+      (check-true "escape retry during own unwind raises expired"
+                  (and (string? cleanup-err) (string-contains cleanup-err "expired"))))
+    ;; Inner escape expires on exception unwind and on enclosing escape unwind, in inner-first order
+    (let ((log '()) (inner-k #f))
+      (sa-call-with-escape-continuation
+        (lambda (outer-k)
+          (dynamic-wind
+            void
+            (lambda ()
+              (sa-call-with-escape-continuation
+                (lambda (ik)
+                  (set! inner-k ik)
+                  (dynamic-wind
+                    void
+                    (lambda () (outer-k 'outer))
+                    (lambda () (set! log (cons 'inner log)))))))
+            (lambda () (set! log (cons 'outer log))))))
+      (check "nested escape unwinds inner-first" (reverse log) '(inner outer))
+      (check-raise-message "inner escape expired by enclosing escape" (lambda () (inner-k 1)) "expired"))
+    (let ((saved-k #f))
+      (guard (e ((message-condition? e) #t))
+        (sa-call-with-escape-continuation (lambda (k) (set! saved-k k) (error 'esc-ex "boom"))))
+      (check-raise-message "escape expired after exception unwind" (lambda () (saved-k 1)) "expired"))
     (let ((outer-k #f) (attempted? #f) (reenter-msg #f))
       (guard (e ((message-condition? e) (set! reenter-msg (condition-message e))))
         (sa-call-with-escape-continuation
@@ -344,7 +447,12 @@
                   (and (string? reenter-msg)
                        (string-contains reenter-msg "spent"))))
 
-    ;; Honest refusals on degraded capabilities
+    ;; Honest refusals & fallback values per DESIGN.md & CONTRACT.txt
+    (check "sa-current-stack-bytes unavailable returns #f" (sa-current-stack-bytes) #f)
+    (let ((bp "build/guile/no-such-block-profile.bp"))
+      (when (file-exists? bp) (delete-file bp))
+      (check "sa-block-profile-dump! returns 0" (sa-block-profile-dump! bp 'tag) 0)
+      (check "sa-block-profile-dump! writes no file" (file-exists? bp) #f))
     (check-raise-message "sa-compile-file refusal" (lambda () (sa-compile-file "a" "b" #f)) "unsupported")
     (check-raise-message "sa-make-boot-file refusal" (lambda () (sa-make-boot-file "a" '())) "unsupported")
     (check-raise-message "sa-fasl-write refusal" (lambda () (sa-fasl-write 1 (current-output-port))) "unsupported")
@@ -364,17 +472,29 @@
     (gc-pass! "sa-lock-object / sa-unlock-object no-op")
 
     (format #t "== 6. GC hook, sa-file-mtime-ms, and fence bytecode lowering ==\n")
-    (let ((obs-count 0))
-      (check "sa-gc-install-after-collect! returns #t"
-             (sa-gc-install-after-collect!
-               (lambda (collect-full!) (when (= obs-count 0) (collect-full!)))
-               (lambda (pause interval)
-                 (when (and (exact-integer? pause) (>= pause 0)
-                            (exact-integer? interval) (>= interval 0))
-                   (set! obs-count (+ obs-count 1)))))
-             #t)
-      (sa-gc-collect)
-      (check-true "after-gc-hook observed real collection cleanly" (>= obs-count 1)))
+    (check "sa-gc-install-after-collect! returns #f until ceiling policy is qualified"
+           (sa-gc-install-after-collect! (lambda (_) (void)) (lambda (_p _i) (void)))
+           #f)
+    (let* ((_ (sa-gc-collect))
+           (holder (box #f))
+           (before (sa-bytes-allocated))
+           (bv-bytes (* 16 1024 1024))
+           (_alloc (begin
+                     (set-box! holder (sa-make-large-bytevector bv-bytes))
+                     (bytevector-u8-set! (unbox holder) 0 42)
+                     (sa-gc-collect)))
+           (retained (sa-bytes-allocated))
+           (_drop (begin
+                    (set-box! holder #f)
+                    (sa-gc-collect)
+                    (sa-gc-collect)))
+           (released (sa-bytes-allocated)))
+      (check-true "large bytevector retained increases sa-bytes-allocated"
+                  (and (>= retained (+ before (* 8 1024 1024)))
+                       (>= (sa-total-memory-bytes) retained)
+                       (= (sa-gc-max-generation) 0)))
+      (check-true "dropping large bytevector releases heap across sa-gc-collect"
+                  (< released retained)))
 
     (let ((f "build/guile/mtime-test.tmp"))
       (call-with-output-file f (lambda (p) (display "mtime" p)))
@@ -391,56 +511,209 @@
                          (lambda () (sa-file-mtime-ms "build/guile/definitely-missing-file-12345"))
                          "stat failed")
 
-    (let* ((p (open-output-string))
-           (c-rel (compile '(lambda () (memory-order-release)) #:env (interaction-environment)))
-           (c-acq (compile '(lambda () (memory-order-acquire)) #:env (interaction-environment))))
-      (parameterize ((current-output-port p))
-        (disassemble-program c-rel)
-        (disassemble-program c-acq))
-      (let ((dasm (get-output-string p)))
-        (check-true "memory-order-release compiles to call (not eliminated)"
-                    (and (string-contains dasm "memory-order-release")
-                         (string-contains dasm "tail-call")))
-        (check-true "memory-order-acquire compiles to call (not eliminated)"
-                    (and (string-contains dasm "memory-order-acquire")
-                         (string-contains dasm "tail-call")))))
+    ;; Disassembly confirms Guile bytecode preserves opaque C11 fence calls strictly between
+    ;; payload initialization / publication and observation / payload read (hardware + JIT
+    ;; ordering across threads is verified directly in section 7a and w2).
+    (let* ((find-pos (lambda (haystack needle) (string-contains haystack needle)))
+           (p-prod (open-output-string))
+           (p-cons (open-output-string))
+           (c-prod (compile '(lambda (v bx)
+                               (vector-set! v 0 42)
+                               (memory-order-release)
+                               (atomic-box-set! bx v))
+                            #:env (interaction-environment)))
+           (c-cons (compile '(lambda (bx)
+                               (let ((v (atomic-box-ref bx)))
+                                 (memory-order-acquire)
+                                 (vector-ref v 0)))
+                            #:env (interaction-environment))))
+      (parameterize ((current-output-port p-prod)) (disassemble-program c-prod))
+      (parameterize ((current-output-port p-cons)) (disassemble-program c-cons))
+      (let* ((d-prod (get-output-string p-prod))
+             (d-cons (get-output-string p-cons))
+             (pos-vset (find-pos d-prod "(scm-set!/immediate"))
+             (pos-rel (find-pos d-prod "memory-order-release"))
+             (pos-rel-call (and pos-rel (string-contains d-prod "(call " pos-rel)))
+             (pos-bset (find-pos d-prod "(atomic-scm-set!/immediate"))
+             (pos-bref (find-pos d-cons "(atomic-scm-ref/immediate"))
+             (pos-acq (find-pos d-cons "memory-order-acquire"))
+             (pos-acq-call (and pos-acq (string-contains d-cons "(call " pos-acq)))
+             (pos-vec (and pos-acq-call (string-contains d-cons ";; vector?" pos-acq-call)))
+             (pos-vref (and pos-vec (string-contains d-cons "(scm-ref/immediate" pos-vec))))
+        (check-true "producer bytecode keeps (scm-set!/immediate) < memory-order-release call < (atomic-scm-set!/immediate)"
+                    (and pos-vset pos-rel pos-rel-call pos-bset
+                         (< pos-vset pos-rel)
+                         (< pos-rel pos-rel-call)
+                         (< pos-rel-call pos-bset)))
+        (check-true "consumer bytecode keeps (atomic-scm-ref/immediate) < memory-order-acquire call < vector (scm-ref/immediate)"
+                    (and pos-bref pos-acq pos-acq-call pos-vec pos-vref
+                         (< pos-bref pos-acq)
+                         (< pos-acq pos-acq-call)
+                         (< pos-acq-call pos-vec)
+                         (< pos-vec pos-vref)))))
 
     (format #t "== 7. arm64 multi-thread concurrency races ==\n")
-    ;; 7a: cseq tail forcing, claiming, exception rollback, fast reader
-    (let ((seq-n 250))
-      (let ((mk-seq
-              (lambda ()
-                (let ((attempts (make-atomic-box 0)))
-                  (letrec ((build
-                             (lambda (i)
-                               (if (= i seq-n)
-                                   jolt-nil
-                                   (cseq-lazy
-                                     i
-                                     (lambda ()
-                                       (let retry ()
-                                         (let ((a (atomic-box-ref attempts)))
-                                           (unless (sa-box-cas! attempts a (+ a 1)) (retry))))
-                                       (build (+ i 1))))))))
-                    (build 0))))))
-        (let ((s (mk-seq)))
-          (run-parallel! 8
-            (lambda (_tid)
-              (let loop ((cur s) (expected 0))
-                (unless (jolt-nil? cur)
-                  (unless (= (seq-first cur) expected)
-                    (error 'cseq-race "corrupt head element" expected (seq-first cur)))
-                  (loop (seq-more cur) (+ expected 1))))))
-          (gc-pass! "cseq concurrent tail publication across 8 threads"))
-        ;; Exception rollback check: failing tail must release claim so another caller observes recovery too
-        (let* ((toggle (make-atomic-box #t))
-               (s (cseq-lazy 0
-                    (lambda ()
-                      (if (sa-box-cas! toggle #t #f)
-                          (error 'cseq-tail "transient tail fault")
-                          (cseq-realized 1 jolt-nil))))))
-          (check-raise-message "cseq first tail fault raises" (lambda () (seq-more s)) "transient tail fault")
-          (check "cseq rolled back claim retries cleanly" (seq-first (seq-more s)) 1))))
+    ;; 7a: cseq tail forcing, claiming, plain-tail-set race, controls, exception rollback, fast reader
+    (let* ((mk-payload
+             (lambda (idx)
+               (let ((v (make-vector 16 #f)))
+                 (let loop ((k 0))
+                   (when (< k 16)
+                     (vector-set! v k (+ (* idx 100) k))
+                     (loop (+ k 1))))
+                 v)))
+           (payload-valid?
+             (lambda (v idx)
+               (and (vector? v)
+                    (= (vector-length v) 16)
+                    (let loop ((k 0))
+                      (if (= k 16)
+                          #t
+                          (and (eqv? (vector-ref v k) (+ (* idx 100) k))
+                               (loop (+ k 1)))))))))
+      ;; Controls: incomplete payload & failed CAS must be rejected
+      (let ((partial (make-vector 16 #f)))
+        (vector-set! partial 0 700)
+        (check "incomplete-payload control rejects half-initialized vector"
+               (payload-valid? partial 7)
+               #f))
+      (let* ((bx (box 'orig))
+             (c (cseq-realized 'h jolt-nil)))
+        (check "failed-CAS control on sa-box-cas! leaves original intact"
+               (list (sa-box-cas! bx 'wrong 'new) (unbox bx))
+               '(#f orig))
+        (check "failed-CAS control on sa-record-cas! leaves cseq tail intact"
+               (list (sa-record-cas! c cseq-tail-index 'wrong 'new) (jolt-nil? (cseq-tail c)))
+               '(#f #t)))
+
+      ;; 8-thread cseq chain walk with thunk invocation count and full vector payload validation
+      (let* ((seq-n 250)
+             (attempts (make-atomic-box 0))
+             (s (letrec ((build
+                           (lambda (i)
+                             (if (= i seq-n)
+                                 jolt-nil
+                                 (cseq-lazy
+                                   (mk-payload i)
+                                   (lambda ()
+                                     (let retry ()
+                                       (let ((a (atomic-box-ref attempts)))
+                                         (unless (sa-box-cas! attempts a (+ a 1)) (retry))))
+                                     (build (+ i 1))))))))
+                  (build 0))))
+        (run-parallel! 8
+          (lambda (_tid)
+            (let loop ((cur s) (expected 0))
+              (unless (jolt-nil? cur)
+                (unless (payload-valid? (seq-first cur) expected)
+                  (error 'cseq-race "corrupt payload element" expected (seq-first cur)))
+                (loop (seq-more cur) (+ expected 1))))))
+        (check "cseq-lazy thunk invoked once per cell under 8-thread race"
+               (atomic-box-ref attempts) seq-n))
+
+      ;; 2-OS-thread fresh-cell round race with NO barrier between publish/force and read
+      (let* ((rounds 120)
+             (cells (list->vector (map (lambda (_) #f) (iota rounds))))
+             (plain-cells (list->vector (map (lambda (_) #f) (iota rounds))))
+             (cvec-heads (list->vector (map (lambda (_) #f) (iota rounds))))
+             (cas-calls (make-atomic-box 0))
+             (mu (make-mutex))
+             (cv (make-condition))
+             (round-id (make-atomic-box -1))
+             (done-cnt (make-atomic-box 0))
+             (finish? #f))
+        (let ((w2
+                (fork-thread
+                  (lambda ()
+                    (let loop ((last -1))
+                      (let ((r (let wait ()
+                                 (let ((cur (atomic-box-ref round-id)))
+                                   (if (= cur last)
+                                       (begin
+                                         (jolt-with-mutex mu
+                                           (when (= (atomic-box-ref round-id) last)
+                                             (condition-wait cv mu)))
+                                         (wait))
+                                       cur)))))
+                        (when (>= r 0)
+                          (let ((c (vector-ref cells r))
+                                (pc (vector-ref plain-cells r))
+                                (vs (vector-ref cvec-heads r)))
+                            ;; Race CAS forcer on c
+                            (let ((tail (seq-more c)))
+                              (unless (and (cseq? tail)
+                                           (= (cseq-kind tail) 0)
+                                           (payload-valid? (seq-first tail) (+ r 1)))
+                                (error 'cseq-round "w2 bad CAS tail" r tail)))
+                            ;; Wait via spinning on plain-tail-set path + fast seq-more reader (no lock)
+                            (let spin ()
+                              (unless (cseq? (cseq-tail pc)) (spin)))
+                            (let ((ptail (seq-more pc)))
+                              (unless (and (cseq? ptail)
+                                           (payload-valid? (seq-first ptail) (+ r 2))
+                                           (payload-valid? (seq-first (seq-more ptail)) (+ r 3)))
+                                (error 'cseq-round "w2 bad plain-tail-set payload" r ptail)))
+                            ;; Race cvec (not t) plain tail-set path
+                            (let ((vt (seq-more vs)))
+                              (unless (and (cseq? vt) (payload-valid? (seq-first vt) (+ r 4)))
+                                (error 'cseq-round "w2 bad cvec plain-tail-set" r vt))))
+                          (let retry ()
+                            (let ((d (atomic-box-ref done-cnt)))
+                              (unless (sa-box-cas! done-cnt d (+ d 1)) (retry))))
+                          (jolt-with-mutex mu (condition-broadcast cv))
+                          (unless finish? (loop r)))))))))
+          (let loop ((r 0))
+            (when (< r rounds)
+              (vector-set! cells r
+                           (cseq-lazy (mk-payload r)
+                                      (lambda ()
+                                        (let retry ()
+                                          (let ((n (atomic-box-ref cas-calls)))
+                                            (unless (sa-box-cas! cas-calls n (+ n 1)) (retry))))
+                                        (cseq-realized (mk-payload (+ r 1)) jolt-nil))))
+              (vector-set! plain-cells r (cseq-lazy (mk-payload r) (lambda () jolt-nil)))
+              (vector-set! cvec-heads r (jolt-seq (jolt-vector (mk-payload r) (mk-payload (+ r 4)))))
+              (jolt-with-mutex mu
+                (atomic-box-set! done-cnt 0)
+                (atomic-box-set! round-id r)
+                (condition-broadcast cv))
+              ;; Producer / competitor forces cell r AND runs unbarriered cseq-publish-tail!
+              (let ((c (vector-ref cells r))
+                    (pc (vector-ref plain-cells r))
+                    (vs (vector-ref cvec-heads r)))
+                (let ((tail (seq-more c)))
+                  (unless (and (cseq? tail) (payload-valid? (seq-first tail) (+ r 1)))
+                    (error 'cseq-round "w1 bad CAS tail" r tail)))
+                ;; Plain tail-set publication path with unshared private vector init -> release -> set
+                (let ((t2 (cseq-realized (mk-payload (+ r 3)) jolt-nil)))
+                  (cseq-publish-tail! pc (cseq-realized (mk-payload (+ r 2)) t2)))
+                ;; Compete on cvec (not t) plain tail-set path
+                (let ((vt (seq-more vs)))
+                  (unless (and (cseq? vt) (payload-valid? (seq-first vt) (+ r 4)))
+                    (error 'cseq-round "w1 bad cvec plain-tail-set" r vt))))
+              (jolt-with-mutex mu
+                (let wait ()
+                  (unless (>= (atomic-box-ref done-cnt) 1)
+                    (condition-wait cv mu)
+                    (wait))))
+              (loop (+ r 1))))
+          (jolt-with-mutex mu
+            (set! finish? #t)
+            (atomic-box-set! round-id -2)
+            (condition-broadcast cv))
+          (join-thread w2))
+        (check "fresh-cell 2-thread race executed thunk once per round (CAS + plain-tail-set)"
+               (atomic-box-ref cas-calls) rounds))
+
+      ;; Exception rollback check: failing tail must release claim so another caller observes recovery too
+      (let* ((toggle (make-atomic-box #t))
+             (s (cseq-lazy 0
+                  (lambda ()
+                    (if (sa-box-cas! toggle #t #f)
+                        (error 'cseq-tail "transient tail fault")
+                        (cseq-realized 1 jolt-nil))))))
+        (check-raise-message "cseq first tail fault raises" (lambda () (seq-more s)) "transient tail fault")
+        (check "cseq rolled back claim retries cleanly" (seq-first (seq-more s)) 1)))
 
     ;; 7b: jolt-lazyseq multi-thread forcing race
     (let* ((forced (make-atomic-box 0))
@@ -508,6 +781,7 @@
                                               (vector-ref _nv 1))))
                                  (protocol-resolve proto-name method-name r)))))
                    (impl r)))))
+           (completed-gen (make-atomic-box 0))
            (stop (make-atomic-box #f)))
       (let ((writer
               (fork-thread
@@ -519,29 +793,41 @@
                           (register-protocol-method tag proto-name method-name
                             (lambda (_self) (+ (* gen 100) i))))
                         tags '(0 1 2 3 4 5))
+                      (atomic-box-set! completed-gen gen)
                       (loop (+ gen 1))))
                   (atomic-box-set! stop #t)))))
         (run-parallel! 6
           (lambda (tid)
-            (let loop ((n 0))
-              (unless (and (atomic-box-ref stop) (>= n 400))
-                (let* ((idx (modulo (+ n tid) 6))
-                       (r (vector-ref recs idx))
-                       (got (call-pic r))
-                       (base (modulo got 100)))
-                  (unless (= base idx)
-                    (error 'pic-race "wrong type dispatch" idx got)))
-                (loop (+ n 1))))))
+            (let ((prev-gens (make-vector 6 0)))
+              (let loop ((n 0))
+                (unless (and (atomic-box-ref stop) (>= n 400))
+                  (let* ((idx (modulo (+ n tid) 6))
+                         (r (vector-ref recs idx))
+                         (min-gen (atomic-box-ref completed-gen))
+                         (got (call-pic r))
+                         (got-gen (quotient got 100))
+                         (base (modulo got 100))
+                         (prev-gen (vector-ref prev-gens idx)))
+                    (unless (= base idx)
+                      (error 'pic-race "wrong type dispatch" idx got))
+                    (when (< got-gen min-gen)
+                      (error 'pic-race "served pre-update stale generation" idx got-gen min-gen))
+                    (when (< got-gen prev-gen)
+                      (error 'pic-race "generation regressed for tag" idx got-gen prev-gen))
+                    (vector-set! prev-gens idx got-gen))
+                  (loop (+ n 1)))))))
         (join-thread writer))
-      ;; Final agreement against uncached protocol-resolve
+      ;; Final agreement against uncached protocol-resolve & final generation 40
       (for-each
         (lambda (r)
-          (unless (= (call-pic r) ((protocol-resolve proto-name method-name r) r))
-            (error 'pic-race "post-update PIC disagrees with uncached resolve")))
+          (let ((got (call-pic r)))
+            (unless (and (= (quotient got 100) 40)
+                         (= got ((protocol-resolve proto-name method-name r) r)))
+              (error 'pic-race "post-update PIC disagrees with uncached resolve or gen 40" got))))
         (vector->list recs))
-      (gc-pass! "PIC hot-site race & uncached equivalence"))
+      (gc-pass! "PIC hot-site generation monotonicity & uncached equivalence"))
 
-    ;; 7d: jolt-instance-site race against class arm / protocol / hierarchy changes
+    ;; 7d: jolt-instance-site race against class arm, instance-check arm, & hierarchy changes
     (let ((site (jolt-instance-site-make))
           (t-map (jolt-symbol #f "clojure.lang.IPersistentMap"))
           (samples (list (jolt-hash-map (keyword #f "a") 1)
@@ -571,7 +857,40 @@
                     (error 'instance-site-race "mismatch" v ans uncached)))
                 (loop (+ n 1))))))
         (join-thread writer))
-      (gc-pass! "jolt-instance-site race & uncached equivalence"))
+      ;; Active verdict flip via register-instance-check-arm! under racing readers
+      (let* ((arm-site (jolt-instance-site-make))
+             (tok-arm (jolt-symbol #f "guile.check.DynamicArm"))
+             (val-arm 12345)
+             (flipped? (make-atomic-box #f))
+             (done? (make-atomic-box #f)))
+        (check "pre-arm jolt-instance-site is #f"
+               (jolt-instance-site arm-site tok-arm val-arm)
+               #f)
+        (let ((arm-writer
+                (fork-thread
+                  (lambda ()
+                    (register-instance-check-arm!
+                      (lambda (ts v)
+                        (if (and (string=? (symbol-t-name ts) "guile.check.DynamicArm")
+                                 (eqv? v val-arm))
+                            #t
+                            'pass)))
+                    (atomic-box-set! flipped? #t)
+                    (atomic-box-set! done? #t)))))
+          (run-parallel! 6
+            (lambda (_tid)
+              (let loop ((n 0))
+                (unless (and (atomic-box-ref done?) (>= n 200))
+                  (let* ((post? (atomic-box-ref flipped?))
+                         (ans (jolt-instance-site arm-site tok-arm val-arm)))
+                    (when (and post? (not ans))
+                      (error 'instance-arm-race "stale #f verdict survived register-instance-check-arm!" ans)))
+                  (loop (+ n 1))))))
+          (join-thread arm-writer))
+        (check "post-arm jolt-instance-site reflects newly registered arm"
+               (jolt-instance-site arm-site tok-arm val-arm)
+               #t))
+      (gc-pass! "jolt-instance-site race, active arm flip & uncached equivalence"))
 
     ;; 7e: keyword, symbol-string-pool, and weak meta-table growth / GC / deletion race
     (run-parallel! 8
@@ -609,17 +928,17 @@
              (jolt-get (meta-table-get retained) kw-kept jolt-nil)
              999))
 
-    ;; 7f: multimethods callback-keyed re-entrancy & concurrent dispatch vs defmethod
-    (let ((mf (make-jolt-multifn "race-mm" (lambda (x) x) (new-mm-table)
-                                 (keyword #f "default") #f (new-mm-table)
-                                 (sa-mm-cache-make key-hash jolt=) -1 #f))
-          (mf-inner (make-jolt-multifn "inner-mm" (lambda (x) x) (new-mm-table)
-                                       (keyword #f "default") #f (new-mm-table)
-                                       (sa-mm-cache-make key-hash jolt=) -1 #f))
-          (sym-race (jolt-symbol "user" "race-mm"))
-          (sym-inner (jolt-symbol "user" "inner-mm")))
-      (def-var! "user" "race-mm" mf)
-      (def-var! "user" "inner-mm" mf-inner)
+    ;; 7f: real jolt-defmulti-setup constructor, non-exact dispatch, & callback-keyed re-entrancy
+    (let ((sym-fresh (jolt-symbol "user" "fresh-contract-mm")))
+      (let ((fresh (jolt-defmulti-setup sym-fresh (lambda (x) x))))
+        (jolt-defmethod-setup sym-fresh (keyword #f "default") (lambda (x) (list 'fresh-def x)) "user")
+        (check "real jolt-defmulti-setup dispatches non-exact value cleanly"
+               (multifn-dispatch1 fresh 'unregistered-key)
+               '(fresh-def unregistered-key))))
+    (let* ((sym-race (jolt-symbol "user" "race-mm"))
+           (sym-inner (jolt-symbol "user" "inner-mm"))
+           (mf (jolt-defmulti-setup sym-race (lambda (x) x)))
+           (mf-inner (jolt-defmulti-setup sym-inner (lambda (x) x))))
       (jolt-defmethod-setup sym-inner (keyword #f "default") (lambda (x) x) "user")
       (jolt-defmethod-setup sym-race (keyword #f "default") (lambda (x) (list 'def x)) "user")
       (jolt-defmethod-setup sym-race 'alpha (lambda (x) (list 'alpha x)) "user")

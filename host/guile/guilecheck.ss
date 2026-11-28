@@ -126,8 +126,8 @@
     (check "case sensitivity default + post-boot eval"
            (let ((s1 (read (open-input-string "Foo")))
                  (s2 (read (open-input-string "foo")))
-                 (s3 (eval '(quote Bar)))
-                 (s4 (eval '(quote bar))))
+                 (s3 (eval ''Bar))
+                 (s4 (eval ''bar)))
              (and (not (eq? s1 s2)) (not (eq? s3 s4))))
            #t)
     (check-true "interaction-environment is jolt boot module"
@@ -280,30 +280,41 @@
         (check "sa-thread-id-of joined thread returns #f"
                (sa-thread-id-of child)
                #f)))
-    ;; Condition signal + multi-waiter broadcast + timed self-acquire
+    ;; The broadcaster can take mu after the last readiness signal only
+    ;; after that waiter releases it inside condition-wait.
     (let ((mu (make-mutex))
           (cv (make-condition))
-          (done (make-atomic-box 0))
+          (ready-cv (make-condition))
+          (ready 0)
+          (done 0)
           (go? #f))
       (let ((waiters
               (map (lambda (_)
                      (fork-thread
                        (lambda ()
                          (jolt-with-mutex mu
+                           (set! ready (+ ready 1))
+                           (condition-signal ready-cv)
                            (let loop () (unless go? (condition-wait cv mu) (loop)))
-                           (let retry ()
-                             (let ((n (atomic-box-ref done)))
-                               (unless (sa-box-cas! done n (+ n 1)) (retry))))))))
+                           (set! done (+ done 1))))))
                    '(1 2 3 4))))
-        (sleep 0.01)
         (jolt-with-mutex mu
+          (let wait () (unless (= ready 4) (condition-wait ready-cv mu) (wait)))
           (set! go? #t)
           (condition-broadcast cv))
         (for-each join-thread waiters)
-        (check "condition-broadcast wakes all 4 waiters" (atomic-box-ref done) 4)))
+        (check "condition-broadcast wakes all 4 parked waiters" done 4)))
     (let ((mu (make-mutex)))
       (check-true "mutex-acquire #f succeeds when free" (mutex-acquire mu #f))
       (check "non-recursive mutex-acquire #f fails when held" (mutex-acquire mu #f) #f)
+      (let* ((start (get-internal-real-time))
+             (deadline (%deadline-from-timeout
+                         (srfi19:make-time 'time-duration 20000000 0)))
+             (acquired? (lock-mutex mu deadline))
+             (elapsed (- (get-internal-real-time) start)))
+        (check "native timed self-acquire on adapter mutex returns #f" acquired? #f)
+        (check-true "timed self-acquire waits for its deadline"
+                    (>= elapsed (/ internal-time-units-per-second 100))))
       (mutex-release mu))
     (let ((cv (make-condition))
           (mu (make-mutex)))
@@ -354,6 +365,32 @@
                (list (port-encoding p-in) (port-encoding p-out) (port-encoding p-err))
                '("ISO-8859-1" "ISO-8859-1" "ISO-8859-1"))
         (close-port p-in) (close-port p-out) (close-port p-err) (waitpid pid)))
+    (let* ((config (module-variable (current-module) '%configure-process-port!))
+           (original (variable-ref config))
+           (fd-count (lambda () (length ((@ (ice-9 ftw) scandir) "/dev/fd"))))
+           (before (fd-count))
+           (configured 0))
+      (dynamic-wind
+        (lambda ()
+          (variable-set! config
+            (lambda (port transcoder)
+              (set! configured (+ configured 1))
+              (if (= configured 3)
+                  (throw 'port-setup-fault)
+                  (original port transcoder)))))
+        (lambda ()
+          (check "third process port configuration failure propagates"
+                 (catch 'port-setup-fault
+                   (lambda () (sa-run-process "true" (native-transcoder)) #f)
+                   (lambda _ #t))
+                 #t))
+        (lambda () (variable-set! config original)))
+      (check "failed process setup closes every pipe fd" (fd-count) before)
+      (check "failed process setup leaves no child"
+             (catch 'system-error
+               (lambda () (waitpid -1 WNOHANG))
+               (lambda args (system-error-errno args)))
+             ECHILD))
     (check-true "sa-environment-pairs alist" (and (list? (sa-environment-pairs))
                                                   (pair? (car (sa-environment-pairs)))))
     (check-true "sa-stats 7-slot vector"
@@ -511,9 +548,9 @@
                          (lambda () (sa-file-mtime-ms "build/guile/definitely-missing-file-12345"))
                          "stat failed")
 
-    ;; Disassembly confirms Guile bytecode preserves opaque C11 fence calls strictly between
-    ;; payload initialization / publication and observation / payload read (hardware + JIT
-    ;; ordering across threads is verified directly in section 7a and w2).
+    ;; Gate the VM ordering here. The native witness disassembles the same
+    ;; forms on arm64. Section 7a exercises the actual seq publication paths.
+    (format #t "Fence ordering: VM checks and publication races here, arm64 native disassembly in witnesses/w2-fence-jit.scm~%")
     (let* ((find-pos (lambda (haystack needle) (string-contains haystack needle)))
            (p-prod (open-output-string))
            (p-cons (open-output-string))
@@ -756,12 +793,34 @@
            (recs (list->vector (map (lambda (d) (make-jrec0 d jolt-nil 0)) descs)))
            (_picv$ (jolt-pic-site-make))
            (top (* jolt-pic-n 2))
+           (validate-pic
+             (lambda (v)
+               (unless (and (vector? v) (= (vector-length v) (+ top 1))
+                            (fixnum? (vector-ref v top)) (>= (vector-ref v top) -1))
+                 (error 'pic-race "invalid cache header" v))
+               (let loop ((slot 0) (seen '()) (empty? #f))
+                 (when (< slot top)
+                   (let ((d (vector-ref v slot))
+                         (impl (vector-ref v (+ slot 1))))
+                     (if d
+                         (let ((idx ((@ (srfi srfi-1) list-index) (lambda (known) (eq? known d)) descs)))
+                           (unless (and idx (not (memq d seen)) (not empty?)
+                                        (>= (vector-ref v top) 0) (procedure? impl)
+                                        (let ((answer (impl (vector-ref recs idx))))
+                                          (and (exact-integer? answer) (<= 0 answer 4005)
+                                               (= (modulo answer 100) idx))))
+                             (error 'pic-race "invalid descriptor/method pair" slot v))
+                           (loop (+ slot 2) (cons d seen) #f))
+                         (begin
+                           (when (or impl (and (= slot 0) (not (= (vector-ref v top) -1))))
+                             (error 'pic-race "invalid empty pair" slot v))
+                           (loop (+ slot 2) seen #t))))))))
            (call-pic
              (lambda (r)
                (let* ((_v (jolt-pic-site-ref _picv$))
                       (_d (jrec-pic-desc r))
                       (ep (jolt-proto-epoch-ref)))
-                 (unless (vector? _v) (error 'pic-race "incomplete vector ref" _v))
+                 (validate-pic _v)
                  (let ((impl
                          (if (and _d (fx=? (vector-ref _v top) ep))
                              (or (and (eq? (vector-ref _v 0) _d) (vector-ref _v 1))
@@ -771,39 +830,54 @@
                                  (let ((_nv (jolt-pic-add _v _d proto-name method-name r)))
                                    (if (procedure? _nv)
                                        _nv
-                                       (begin (jolt-pic-site-set! _picv$ _nv)
+                                       (begin (validate-pic _nv)
+                                              (jolt-pic-site-set! _picv$ _nv)
                                               (vector-ref _nv 1)))))
                              (if _d
                                  (let ((_nv (jolt-pic-add _v _d proto-name method-name r)))
                                    (if (procedure? _nv)
                                        _nv
-                                       (begin (jolt-pic-site-set! _picv$ _nv)
+                                       (begin (validate-pic _nv)
+                                              (jolt-pic-site-set! _picv$ _nv)
                                               (vector-ref _nv 1))))
                                  (protocol-resolve proto-name method-name r)))))
                    (impl r)))))
-           (completed-gen (make-atomic-box 0))
+           (completed-gens (list->vector (map (lambda (_) (make-atomic-box 0)) tags)))
+           (check-registrations
+             (lambda ()
+               (for-each
+                 (lambda (r)
+                   (let ((got (call-pic r))
+                         (expected ((protocol-resolve proto-name method-name r) r)))
+                     (unless (= got expected)
+                       (error 'pic-race "PIC disagrees with uncached walk" r got expected))))
+                 (vector->list recs))))
+           (started (make-atomic-box #f))
            (stop (make-atomic-box #f)))
       (let ((writer
               (fork-thread
                 (lambda ()
+                  (let wait () (unless (atomic-box-ref started) (yield) (wait)))
                   (let loop ((gen 1))
                     (when (<= gen 40)
                       (for-each
                         (lambda (tag i)
                           (register-protocol-method tag proto-name method-name
-                            (lambda (_self) (+ (* gen 100) i))))
+                            (lambda (_self) (+ (* gen 100) i)))
+                          (atomic-box-set! (vector-ref completed-gens i) gen)
+                          (check-registrations))
                         tags '(0 1 2 3 4 5))
-                      (atomic-box-set! completed-gen gen)
                       (loop (+ gen 1))))
                   (atomic-box-set! stop #t)))))
         (run-parallel! 6
           (lambda (tid)
+            (atomic-box-set! started #t)
             (let ((prev-gens (make-vector 6 0)))
               (let loop ((n 0))
                 (unless (and (atomic-box-ref stop) (>= n 400))
                   (let* ((idx (modulo (+ n tid) 6))
                          (r (vector-ref recs idx))
-                         (min-gen (atomic-box-ref completed-gen))
+                         (min-gen (atomic-box-ref (vector-ref completed-gens idx)))
                          (got (call-pic r))
                          (got-gen (quotient got 100))
                          (base (modulo got 100))
@@ -827,70 +901,93 @@
         (vector->list recs))
       (gc-pass! "PIC hot-site generation monotonicity & uncached equivalence"))
 
-    ;; 7d: jolt-instance-site race against class arm, instance-check arm, & hierarchy changes
-    (let ((site (jolt-instance-site-make))
-          (t-map (jolt-symbol #f "clojure.lang.IPersistentMap"))
-          (samples (list (jolt-hash-map (keyword #f "a") 1)
-                         (jolt-vector 1 2)
-                         "str"
-                         42
-                         (jolt-hash-set (keyword #f "k"))))
-          (stop (make-atomic-box #f)))
+    ;; 7d: race instance-site replacement against hierarchy and arm updates.
+    (let* ((site (jolt-instance-site-make))
+           (t-map (jolt-symbol #f "clojure.lang.IPersistentMap"))
+           (samples (list (jolt-hash-map (keyword #f "a") 1)
+                          (jolt-vector 1 2) "str" 42
+                          (jolt-hash-set (keyword #f "k"))))
+           (started (make-atomic-box #f))
+           (stop (make-atomic-box #f)))
+      (define (validate-state site token valid-verdict?)
+        (let ((state (sa-site-cell-ref site)))
+          (when state
+            (unless (and (vector? state) (= (vector-length state) 6)
+                         (eq? (vector-ref state 0) token)
+                         (eq? (vector-ref state 1) token)
+                         (eq? (vector-ref state 2) (symbol-t-name token))
+                         (fixnum? (vector-ref state 5))
+                         (>= (vector-ref state 5) 0)
+                         (valid-verdict? (vector-ref state 3) (vector-ref state 4)))
+              (error 'instance-site-race "invalid site state" state)))))
+      (define (check-map v)
+        (let ((ans (jolt-instance-site site t-map v))
+              (expected (instance-check-walk t-map v)))
+          (unless (eq? ans expected)
+            (error 'instance-site-race "site disagrees with plain walk" v ans expected)))
+        (validate-state site t-map
+          (lambda (kind ans)
+            (exists (lambda (sample)
+                   (and (eq? kind (instance-kind-key sample))
+                        (eq? ans (instance-check-walk t-map sample))))
+                 samples))))
       (let ((writer
               (fork-thread
                 (lambda ()
-                  (let loop ((k 0))
-                    (when (< k 30)
-                      (jch-register-leaf! (format #f "guile.inst.Leaf~a" k)
-                                          '("java.lang.Object"))
-                      (register-class-arm! (lambda (_x) #f) (lambda (_x) #f))
-                      (loop (+ k 1))))
+                  (let wait () (unless (atomic-box-ref started) (yield) (wait)))
+                  (do ((k 0 (+ k 1))) ((= k 30))
+                    (jch-register-leaf! (format #f "guile.inst.Leaf~a" k)
+                                        '("java.lang.Object"))
+                    (for-each check-map samples)
+                    (register-class-arm! (lambda (_x) #f) (lambda (_x) #f))
+                    (for-each check-map samples))
                   (atomic-box-set! stop #t)))))
         (run-parallel! 6
           (lambda (tid)
+            (atomic-box-set! started #t)
             (let loop ((n 0))
               (unless (and (atomic-box-ref stop) (>= n 300))
-                (let* ((v (list-ref samples (modulo (+ n tid) (length samples))))
-                       (ans (jolt-instance-site site t-map v))
-                       (uncached (if (instance-check t-map v) #t #f)))
-                  (unless (eq? ans uncached)
-                    (error 'instance-site-race "mismatch" v ans uncached)))
+                (check-map (list-ref samples (modulo (+ n tid) (length samples))))
                 (loop (+ n 1))))))
         (join-thread writer))
-      ;; Active verdict flip via register-instance-check-arm! under racing readers
+      ;; The dynamic arm changes a cached verdict for the same kind and token.
       (let* ((arm-site (jolt-instance-site-make))
              (tok-arm (jolt-symbol #f "guile.check.DynamicArm"))
              (val-arm 12345)
-             (flipped? (make-atomic-box #f))
-             (done? (make-atomic-box #f)))
-        (check "pre-arm jolt-instance-site is #f"
-               (jolt-instance-site arm-site tok-arm val-arm)
-               #f)
+             (kind (instance-kind-key val-arm))
+             (reading? (make-atomic-box #f))
+             (flipped? (make-atomic-box #f)))
+        (define (read-arm)
+          (let ((ans (jolt-instance-site arm-site tok-arm val-arm)))
+            (validate-state arm-site tok-arm
+              (lambda (k verdict) (and (eq? k kind) (boolean? verdict))))
+            ans))
+        (check "pre-arm jolt-instance-site is #f" (read-arm) #f)
         (let ((arm-writer
                 (fork-thread
                   (lambda ()
+                    (let wait () (unless (atomic-box-ref reading?) (yield) (wait)))
                     (register-instance-check-arm!
                       (lambda (ts v)
                         (if (and (string=? (symbol-t-name ts) "guile.check.DynamicArm")
                                  (eqv? v val-arm))
                             #t
                             'pass)))
-                    (atomic-box-set! flipped? #t)
-                    (atomic-box-set! done? #t)))))
+                    (atomic-box-set! flipped? #t)))))
           (run-parallel! 6
             (lambda (_tid)
+              (atomic-box-set! reading? #t)
               (let loop ((n 0))
-                (unless (and (atomic-box-ref done?) (>= n 200))
-                  (let* ((post? (atomic-box-ref flipped?))
-                         (ans (jolt-instance-site arm-site tok-arm val-arm)))
-                    (when (and post? (not ans))
-                      (error 'instance-arm-race "stale #f verdict survived register-instance-check-arm!" ans)))
-                  (loop (+ n 1))))))
+                (let* ((post? (atomic-box-ref flipped?))
+                       (ans (read-arm)))
+                  (when (and post? (not (eq? ans (instance-check-walk tok-arm val-arm))))
+                    (error 'instance-arm-race "stale verdict after registration" ans))
+                  (unless (and post? (>= n 200))
+                    (loop (+ n 1)))))))
           (join-thread arm-writer))
-        (check "post-arm jolt-instance-site reflects newly registered arm"
-               (jolt-instance-site arm-site tok-arm val-arm)
-               #t))
-      (gc-pass! "jolt-instance-site race, active arm flip & uncached equivalence"))
+        (check "post-arm site agrees with the plain walk"
+               (list (read-arm) (instance-check-walk tok-arm val-arm)) '(#t #t)))
+      (gc-pass! "instance site race, complete states and uncached verdicts after each registration"))
 
     ;; 7e: keyword, symbol-string-pool, and weak meta-table growth / GC / deletion race
     (run-parallel! 8

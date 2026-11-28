@@ -4,6 +4,9 @@
     (throw-jvm 'UnsupportedOperationException
       (string-append name ": user FFI is unsupported on the guile target"))))
 
+;; Pointer bindings validate the address before constructing a procedure.
+(define jolt-ffi-function-pointer (guile-ffi-refusal "jolt.ffi/pointer-fn"))
+
 (for-each (lambda (name)
             (def-var! "jolt.ffi" name
               (guile-ffi-refusal (string-append "jolt.ffi/" name))))

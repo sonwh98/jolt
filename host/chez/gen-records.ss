@@ -56,7 +56,7 @@
       (put-string port ";; define-jrec-family transformer is expansion-phase-hostile on Gambit;\n")
       (put-string port ";; its uses are pre-expanded here.\n\n"))
     (put-string port
-      "#!no-fold-case\n;; records-guile.ss — GENERATED from host/chez/{records,records-coll,\n;; protocols,records-dispatch}.ss by host/chez/gen-records.ss (make\n;; guilegen). Do not edit. define-jrec-family uses are pre-expanded.\n\n"))
+      "#!no-fold-case\n;; records-guile.ss — GENERATED from host/chez/{records,records-coll,\n;; protocols,records-dispatch}.ss by host/chez/gen-records.ss.\n;; Regenerate with `make guilegen`. Do not edit. define-jrec-family uses are pre-expanded.\n\n"))
 (for-each
   (lambda (f)
     (cond

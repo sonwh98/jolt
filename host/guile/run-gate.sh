@@ -53,7 +53,7 @@ for profile in $profiles; do
   cat "$log"
   case "$gate" in
     adaptercheck) grep -Fxq 'adaptercheck (guile): guile adapter contract satisfied' "$log" ;;
-    guilecheck) grep -Eq '^guilecheck summary: [0-9]+ passed, 0 failed$' "$log" ;;
+    guilecheck) grep -Eq '^guilecheck summary: [1-9][0-9]* passed, 0 failed$' "$log" ;;
     *) grep -Fxq "$gate: PASS ($profile)" "$log" ;;
   esac
   if [ "$gate" = guileboot ]; then grep -Fxq BOOT-OK "$log"; fi

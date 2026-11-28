@@ -1,7 +1,7 @@
 #!no-fold-case
 ;; records-guile.ss — GENERATED from host/chez/{records,records-coll,
-;; protocols,records-dispatch}.ss by host/chez/gen-records.ss (make
-;; guilegen). Do not edit. define-jrec-family uses are pre-expanded.
+;; protocols,records-dispatch}.ss by host/chez/gen-records.ss.
+;; Regenerate with `make guilegen`. Do not edit. define-jrec-family uses are pre-expanded.
 
 (define-record-type (jrdesc make-jrdesc-rec jrdesc?)
   (fields tag fkeys index (mutable ptable))

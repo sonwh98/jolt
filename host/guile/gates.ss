@@ -73,6 +73,10 @@
 (case (string->symbol gate)
   ((guilekernel)
    (check "keyword intern identity" (eq? (keyword #f "a") (keyword #f "a")) #t)
+   (let* ((desc (make-jrdesc-rec "kernel.gate/Point" '#(x y) #f #f))
+          (point (make-jrec desc (vector 11 22) jolt-nil)))
+     (check "record descriptor" (eq? (jrec-desc point) desc) #t)
+     (check "record fields" (list (jrec-field-ref point 0) (jrec-field-ref point 1)) '(11 22)))
    (check "signed hash" (murmur3-hash-int 1) -68075478)
    (check "vector indexing" (pvec-nth! (jolt-vector 11 22) 1) 22)
    (check "map get" (jolt-get (jolt-hash-map "a" 7) "a") 7)
@@ -111,12 +115,13 @@
             (source "(def gate-value 17)" "#'user/gate-value")
             (source "(when true gate-value)" "17")
             (source "(def gate-value 42)" "#'user/gate-value")
-            (source "(let [v [1 2 3]] (nth v 2))" "3")
-            (source "((fn ([x] x) ([x & xs] (count xs))) 1 2 3)" "2")
+            (source "(let [v [1 2 3]] (nth v 2))" "3" "(jolt-nth v 2)")
+            (source "((fn ([x] x) ([x & xs] (count xs))) 1 2 3)" "2" "(case-lambda")
+            (source "((fn ([x] x) ([x & xs] (count xs))) 1)" "1" "(case-lambda")
             (source "(try (throw (ex-info \"gate\" {})) (catch Exception e (ex-message e)))" "\"gate\"")
             (source "(assoc {:a 1} :b 2)" "{:a 1, :b 2}")
             (source "(reduce + (map inc (range 5)))" "15")
-            (source "(.length \"Guile\")" "5")
+            (source "(.length \"Guile\")" "5" "(record-method-dispatch")
             (source "#?(:guile 42 :default 0)" "42")
             (source "(let [make (fn [x] (^:once fn* [] x)) f (make 42)] (f))"
                     "42" "jolt-once-tag" "vector-ref" "vector-set!")
@@ -124,6 +129,32 @@
                           (catch Exception e (ex-message e)))"
                     "\"jolt.guile: user FFI is unsupported on the guile target\""
                     "(sa-foreign-procedure a" "(sa-foreign-procedure  \"jolt_gate_unavailable\"")
+            (source "(try ((jolt.ffi/__cfn \"jolt_gate_unavailable\" [] :int32 :blocking))
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.guile: user FFI is unsupported on the guile target\""
+                    "(sa-foreign-procedure-blocking a" "(sa-foreign-procedure-blocking  \"jolt_gate_unavailable\"")
+            (source "(try ((jolt.ffi/__cfn \"jolt_gate_unavailable\" [] :int32
+                                           {:blocking true :capture-native-error true}))
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.guile: user FFI is unsupported on the guile target\""
+                    "(jolt-ffi-native-error-procedure (__collect_safe) a"
+                    "(jolt-ffi-native-error-procedure (__collect_safe) \"jolt_gate_unavailable\"")
+            (source "(try ((jolt.ffi/__cfn-pointer [] :int32) 0)
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.ffi/pointer-fn: user FFI is unsupported on the guile target\""
+                    "(sa-foreign-procedure" "(jolt-ffi-function-pointer function-pointer)")
+            (source "(try (jolt.ffi/__cfn \"jolt_gate_unavailable\" [:int32 :&] :int32)
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.ffi/foreign-fn: variadic and by-value signatures are unsupported on the guile target\""
+                    "(throw-jvm")
+            (source "(try (jolt.ffi/__layout [:struct [[:x :int32]]])
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.ffi/layout: ffi-layout aggregates using ftype are unsupported on the guile target\""
+                    "(throw-jvm")
+            (source "(try (jolt.ffi/__ccallable (fn [x] x) [:int32] :int32)
+                          (catch Exception e (ex-message e)))"
+                    "\"jolt.ffi/foreign-callable: user FFI is unsupported on the guile target\""
+                    "(throw-jvm")
             ((var-deref "jolt.backend-scheme" "set-var-cache!") #t)
             (source "(defprotocol GateShape (gate-perimeter [shape]))" "#'user/gate-perimeter"
                     "jolt-pic-site-make" "jolt-pic-site-ref" "jolt-pic-site-set!"
@@ -132,11 +163,17 @@
                        (gate-perimeter [shape] (* 4 (:width shape))))" "nil")
             (source "(gate-perimeter (->GateSquare 5))" "20")
             (source "(gate-perimeter (->GateSquare 11))" "44")
+            (source "(.-width (->GateSquare 5))" "5" "(record-method-dispatch")
             (source "(defn gate-instance [cls value] (instance? cls value))"
                     "#'user/gate-instance" "jolt-instance-site")
             (source "(gate-instance GateSquare (->GateSquare 5))" "true")
             ((var-deref "jolt.backend-scheme" "set-trace-frames!") #t)
-            (source "(try (+ 40 2) (catch Exception e 0))" "42" "jolt-catch-enter!")
+            (source "(try (+ 40 2) (catch Exception e 0))" "42" "jolt-catch-enter!" "(virtual-register 2)" "(virtual-register 12)")
+            (source "(defn gate-tail [x] (gate-perimeter x))" "#'user/gate-tail"
+                    "(jolt-site! '(\"user/gate-tail\" . ")
+            (source "(gate-tail (->GateSquare 5))" "20")
+            (source "(+ (gate-tail (->GateSquare 5)) 1)" "21"
+                    "(virtual-register 12)" "(set-virtual-register! 12")
             (%jolt-reset-compiler!)
             (check "reset compiler target" (eq? (target) (keyword #f "guile")) #t)
             (source "gate-value" "42"))

@@ -486,6 +486,19 @@
 
     ;; Honest refusals & fallback values per DESIGN.md & CONTRACT.txt
     (check "sa-current-stack-bytes unavailable returns #f" (sa-current-stack-bytes) #f)
+    (check "profiling cannot be enabled" (sa-profile-instrument! #t) #f)
+    (check "debug profiling cannot be enabled" (sa-profile-instrument! 'debug) #f)
+    (check "profiling remains disabled" (sa-profile-instrumenting?) #f)
+    (check "profiling can be disabled" (sa-profile-instrument! #f) #t)
+    (let ((runs 0))
+      (check "profile compile returns the thunk result"
+             (sa-profile-compile (lambda () (set! runs (+ runs 1)) 'compiled))
+             'compiled)
+      (check "profile compile calls the thunk once" runs 1))
+    (check "profile counts are empty" (sa-profile-counts) '())
+    (check "profile release is empty" (sa-profile-release!) '())
+    (sa-profile-clear!)
+    (check "profiling stays disabled after clear" (sa-profile-instrumenting?) #f)
     (let ((bp "build/guile/no-such-block-profile.bp"))
       (when (file-exists? bp) (delete-file bp))
       (check "sa-block-profile-dump! returns 0" (sa-block-profile-dump! bp 'tag) 0)

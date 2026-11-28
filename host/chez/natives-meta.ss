@@ -74,19 +74,9 @@
 ;; plain lookup is the whole read; the fences and the generation check are for
 ;; a process that has started a second thread.
 (define (meta-table-get k)
-  (if (not jolt-mt?)
-      (hashtable-ref meta-table k #f)
-      (let ((g (unbox meta-gen)))
-        (if (fxodd? g)
-            (jolt-with-mutex meta-table-mu (hashtable-ref meta-table k #f))
-            (begin
-              (memory-order-acquire)
-              (let ((v (hashtable-ref meta-table k #f)))
-                (memory-order-acquire)
-                (if (fx=? g (unbox meta-gen))
-                    v
-                    (jolt-with-mutex meta-table-mu (hashtable-ref meta-table k #f)))))))))
-(define (meta-table-empty?) (fx=? 0 (hashtable-size meta-table)))
+  (sa-seqlock-read meta-table-mu meta-gen (hashtable-ref meta-table k #f)))
+(define (meta-table-empty?)
+  (sa-shared-read meta-table-mu (fx=? 0 (hashtable-size meta-table))))
 
 ;; The meta slot of a collection that has one: jolt-nil or a map. #f when X is
 ;; not one of those kinds — jolt-nil is a record and so truthy, which is what

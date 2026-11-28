@@ -1322,13 +1322,18 @@
 ;; the way the JVM's clojure.lang.Keyword.table reads (its Reference values are
 ;; irrelevant to consumers, which only iterate the keys).
 (define (keyword-intern-table-map)
-  (let ((acc '()))
-    (let-values (((ks vs) (hashtable-entries keyword-table-bare)))
-      (vector-for-each (lambda (name kw) (set! acc (cons (jolt-symbol #f name) (cons kw acc)))) ks vs))
-    (let-values (((ks vs) (hashtable-entries keyword-table)))
-      (vector-for-each
-        (lambda (nk kw) (set! acc (cons (jolt-symbol (keyword-t-ns kw) (keyword-t-name kw)) (cons kw acc))))
-        ks vs))
+  (let* ((snap
+          (sa-shared-read keyword-table-mu
+            (let-values (((bks bvs) (hashtable-entries keyword-table-bare))
+                         ((nks nvs) (hashtable-entries keyword-table)))
+              (list bks bvs nks nvs))))
+         (bks (car snap)) (bvs (cadr snap))
+         (nks (caddr snap)) (nvs (cadddr snap))
+         (acc '()))
+    (vector-for-each (lambda (name kw) (set! acc (cons (jolt-symbol #f name) (cons kw acc)))) bks bvs)
+    (vector-for-each
+      (lambda (nk kw) (set! acc (cons (jolt-symbol (keyword-t-ns kw) (keyword-t-name kw)) (cons kw acc))))
+      nks nvs)
     (apply jolt-hash-map acc)))
 ;; clojure.lang.Keyword.table — compliment's keyword source reads it reflectively.
 (register-static-field! "clojure.lang.Keyword" "table" keyword-intern-table-map)

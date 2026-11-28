@@ -208,7 +208,7 @@
 ;; (jrdesc-ifc-of), which is what derives its value; this is the one that reads the
 ;; table, so nothing recurses.
 (define (jrec-record?-uncached x)
-  (and (jrec? x) (hashtable-ref chez-record-type-tbl (jrec-tag x) #f) #t))
+  (and (jrec? x) (sa-shared-read rec-tbl-mu (hashtable-ref chez-record-type-tbl (jrec-tag x) #f)) #t))
 (define (jrec-record? x) (and (jrec? x) (vector-ref (jrdesc-ifc-of x) 3)))
 ;; every deftype/defrecord tag, and a simple-name -> tag index. An extend-protocol
 ;; in a DIFFERENT ns names the type bare (it is :import-ed), so register-method
@@ -241,6 +241,7 @@
   (jolt-with-mutex chez-deftype-ctor-tag-mu
     (let ((t (hashtable-copy (unbox chez-deftype-ctor-tag-box) #t)))  ; copy is weak too
       (hashtable-set! t ctor tag)
+      (when jolt-mt? (memory-order-release))
       (set-box! chez-deftype-ctor-tag-box t))))
 ;; A deftype/defrecord name used as a multimethod DISPATCH VALUE evaluates to its
 ;; ctor token (a procedure). Normalize it to the "ns.Name" class-name STRING that
@@ -255,7 +256,8 @@
 (define chez-simple-name-tag (make-hashtable string-hash string=?))
 ;; simple deftype/defrecord name -> its "ns.Name" tag, or #f. Used by the analyzer
 ;; (host-contract.ss) to resolve a bare class name to its class-name string.
-(define (chez-deftype-simple->tag nm) (hashtable-ref chez-simple-name-tag nm #f))
+(define (chez-deftype-simple->tag nm)
+  (sa-shared-read rec-tbl-mu (hashtable-ref chez-simple-name-tag nm #f)))
 ;; type-tag STRING -> the shared jrdesc for that type (set at deftype/defrecord
 ;; ctor construction). Strong: a desc lives as long as any instance does (every
 ;; instance references it), so this never outlives the type. string=? because the
@@ -449,7 +451,7 @@
                                     (let ((m (jolt-hash-map kw-fields (apply jolt-vector fields)
                                                             kw-tags   (apply jolt-vector rtags)
                                                             kw-type   type-tag)))
-                                      (if (hashtable-ref chez-record-type-tbl type-tag #f)
+                                      (if (sa-shared-read rec-tbl-mu (hashtable-ref chez-record-type-tbl type-tag #f))
                                           (jolt-assoc m kw-record #t)
                                           m)))))))
         ks vs))
@@ -463,7 +465,7 @@
   (let* ((simple (chez-shape-simple-name name))
          (target (string-append "->" simple))
          (preferred (string-append ns "/->" simple)))
-    (if (hashtable-ref chez-record-shapes-tbl preferred #f)
+    (if (sa-shared-read rec-tbl-mu (hashtable-ref chez-record-shapes-tbl preferred #f))
         preferred
         (let loop ((ks (vector->list (jolt-with-mutex rec-tbl-mu (hashtable-keys chez-record-shapes-tbl)))))
           (cond ((null? ks) #f)
@@ -538,7 +540,7 @@
   (let* ((d (jrec-desc r)) (fk (jrdesc-fkeys d)))
     (if (fx<=? (vector-length fk) 8)
         (jrec-fkey-scan fk k)
-        (let ((i (hashtable-ref (jrdesc-index d) k #f)))
+        (let ((i (sa-shared-read rec-tbl-mu (hashtable-ref (jrdesc-index d) k #f))))
           (and i (if (fx<? i 0) (fx- -1 i) i))))))
 ;; The declared slot an interop member name K (a keyword) reads or sets, as its
 ;; keyword, or #f. The JVM compiler munges a member name before the reflector
@@ -563,9 +565,10 @@
 ;; the valAt that type declares.
 (define (jrec-get-index r k)
   (let* ((d (jrec-desc r)) (fk (jrdesc-fkeys d)))
-    (if (and (not jrdesc-masked-any?) (fx<=? (vector-length fk) 8))
+    (if (and (not (sa-pub-ref jrdesc-masked-any?-cell jrdesc-masked-any?))
+             (fx<=? (vector-length fk) 8))
         (jrec-fkey-scan fk k)
-        (let ((i (hashtable-ref (jrdesc-index d) k #f)))
+        (let ((i (sa-shared-read rec-tbl-mu (hashtable-ref (jrdesc-index d) k #f))))
           (and i (fx>=? i 0) i)))))
 ;; #t when TAG answers every key through a valAt IT declares — a bare deftype
 ;; implementing clojure.lang.ILookup. Such a type has no field-first lookup at
@@ -578,22 +581,24 @@
 ;; will not compile one declaring another valAt.
 (define (chez-type-owns-lookup? tag)
   (and (find-method-any-protocol tag "valAt")
-       (not (hashtable-ref chez-record-type-tbl tag #f))
+       (not (sa-shared-read rec-tbl-mu (hashtable-ref chez-record-type-tbl tag #f)))
        #t))
 ;; Bias every field of DESC negative. Driven by register-protocol-method the
 ;; moment a non-record type registers a valAt; fkeys is walked (not the table's
 ;; keys) so nothing scans a hashtable another thread may be writing.
 ;; jrdesc-masked-any? turns jrec-get-index's key scan off for good, before the
 ;; first mask lands: from then on the get path reads the table, where the mask is.
-(define jrdesc-masked-any? #f)
+(sa-pub-define jrdesc-masked-any?-cell jrdesc-masked-any? #f)
 (define (jrdesc-mask-fields! desc)
-  (set! jrdesc-masked-any? #t)
-  (let ((idx (jrdesc-index desc)))
-    (vector-for-each
-      (lambda (k)
-        (let ((i (hashtable-ref idx k #f)))
-          (when (and i (fx>=? i 0)) (hashtable-set! idx k (fx- -1 i)))))
-      (jrdesc-fkeys desc))))
+  (jolt-with-mutex rec-tbl-mu
+    (let ((idx (jrdesc-index desc)))
+      (vector-for-each
+        (lambda (k)
+          (let ((i (hashtable-ref idx k #f)))
+            (when (and i (fx>=? i 0)) (hashtable-set! idx k (fx- -1 i)))))
+        (jrdesc-fkeys desc))))
+  (when jolt-mt? (memory-order-release))
+  (sa-pub-set! jrdesc-masked-any?-cell jrdesc-masked-any? #t))
 ;; a vector-copy that doesn't depend on the optional rnrs vector-copy being present.
 (define (jrec-vec-copy v)
   (let* ((n (vector-length v)) (out (make-vector n)))
@@ -743,7 +748,9 @@
           ;; it returned, so inst is a jrec and k named a slot
           (when (and (jrec? inst) (keyword-t? k))
             (let ((k2 (jrec-member-field inst k)))
-              (when k2 (set-box! site (cons (jrec-desc inst) (jrec-field-index inst k2))))))
+              (when k2
+                (when jolt-mt? (memory-order-release))
+                (set-box! site (cons (jrec-desc inst) (jrec-field-index inst k2))))))
           r))))
 (define (jrec-ext=? ea eb)
   (cond ((and (jolt-nil? ea) (jolt-nil? eb)) #t)
@@ -769,10 +776,11 @@
 (define jrdesc-class-hash-tbl (make-weak-eq-hashtable))
 (define jrdesc-class-hash-mu (make-mutex))
 (define (jrdesc-class-hash d)
-  (or (hashtable-ref jrdesc-class-hash-tbl d #f)
-      (let ((h (compute-symbol-hasheq #f (jrdesc-tag d))))
-        (jolt-with-mutex jrdesc-class-hash-mu (hashtable-set! jrdesc-class-hash-tbl d h))
-        h)))
+  (sa-shared-intern jrdesc-class-hash-mu
+    (hashtable-ref jrdesc-class-hash-tbl d #f)
+    (let ((h (compute-symbol-hasheq #f (jrdesc-tag d))))
+      (hashtable-set! jrdesc-class-hash-tbl d h)
+      h)))
 (define (jrec-hash r)
   ;; JVM defrecord hasheq: (bit-xor class-hash map-hasheq)
   ;; class-hash = (hash classname-symbol).
@@ -849,7 +857,7 @@
     ;; a type this process never defined (an instance that came in through an
     ;; image, its code not loaded) cannot say whether it was a defrecord or a
     ;; deftype; it keeps the field form rather than guess
-    ((or (jrec-record? r) (not (hashtable-ref chez-deftype-tag-set (jrec-tag r) #f))) (jrec-field-pr r))
+    ((or (jrec-record? r) (not (sa-shared-read rec-tbl-mu (hashtable-ref chez-deftype-tag-set (jrec-tag r) #f)))) (jrec-field-pr r))
     ((rec-coll-method r "deref")
      (let ((port (open-output-string)))
        (deref-print-to! port r jrec-deref-print-state readable?)

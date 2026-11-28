@@ -3357,7 +3357,7 @@
 (def-var! "clojure.core" "__register-instance-check!"
   (lambda (f)
     (set! user-instance-checks (append user-instance-checks (list f)))
-    (set! instance-arms-epoch (fx+ instance-arms-epoch 1))
+    (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
     jolt-nil))
 
 ;; ---- value-semantics seams -------------------------------------------------
@@ -3670,9 +3670,10 @@
                     (values (let ((n (car args))) (if (jolt-nil? n) #f n)) (jolt-need-string (cadr args)))
                     (let ((s (jolt-symbol-new (car args))))   ; a symbol, or a string split at its first slash
                       (values (symbol-t-ns s) (symbol-t-name s))))))
-    (or (if ns
-            (hashtable-ref keyword-table (keyword-intern-key ns name) #f)
-            (hashtable-ref keyword-table-bare name #f))
+    (or (sa-shared-read keyword-table-mu
+          (if ns
+              (hashtable-ref keyword-table (keyword-intern-key ns name) #f)
+              (hashtable-ref keyword-table-bare name #f)))
         jolt-nil)))
 (register-class-statics! "clojure.lang.Keyword"
   (list (cons "intern" (lambda args (apply jolt-keyword args)))

@@ -170,9 +170,11 @@
 ;; a Chez hashtable survives (writer-vs-writer is what corrupts one).
 (define jrdesc-ifc-tbl (make-weak-eq-hashtable))
 (define jrdesc-ifc-mutex (make-mutex))
-(define (jrdesc-ifc d) (hashtable-ref jrdesc-ifc-tbl d #f))
+(define (jrdesc-ifc d) (sa-shared-read jrdesc-ifc-mutex (hashtable-ref jrdesc-ifc-tbl d #f)))
 (define (jrdesc-ifc-set! d v) (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! jrdesc-ifc-tbl d v)))
-(define (jrdesc-ifc-epoch) (fx+ jch-graph-epoch jolt-proto-epoch))
+(define (jrdesc-ifc-epoch)
+  (fx+ (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch)
+       (sa-epoch-ref jolt-proto-epoch-cell jolt-proto-epoch)))
 ;; The shape order is the JVM's print-method precedence, verified against it: ISeq
 ;; outranks IPersistentVector / IPersistentSet / IPersistentMap, and IRecord
 ;; outranks IPersistentMap (prefer-method), so a defrecord has no shape at all.
@@ -274,25 +276,27 @@
             ;; slot 15: the type's ^double field flags (chez-record-dbl-tbl), or
             ;; #f — what assoc widens a replaced field by, read here rather than
             ;; through a string-keyed lookup on every assoc
-            (hashtable-ref chez-record-dbl-tbl tag #f))))
+            (sa-shared-read rec-tbl-mu (hashtable-ref chez-record-dbl-tbl tag #f)))))
 ;; The derived vector of the descriptor asked last, as (desc . vector). Every
 ;; record op opens with jrdesc-ifc-of, and a weak-table probe is most of what a
 ;; plain record's count or contains? costs; a loop over one record type asks the
 ;; same descriptor every time. The pair is replaced whole, never mutated, so a
 ;; racing reader sees either the old pair or the new one, both consistent; the
 ;; epoch is still checked on the vector, so a hit can never outlive a change.
-(define jrdesc-ifc-last (cons #f #f))
+(define jrdesc-ifc-last (sa-site-cell-make (cons #f #f)))
 (define (jrdesc-ifc-of x)
   (let ((d (jrec-desc x))
-        (l jrdesc-ifc-last))
+        (l (sa-site-cell-ref jrdesc-ifc-last)))
     (if (and (eq? (car l) d) (fx=? (vector-ref (cdr l) 0) (jrdesc-ifc-epoch)))
         (cdr l)
         (let ((c (jrdesc-ifc d)))
           (if (and c (fx=? (vector-ref c 0) (jrdesc-ifc-epoch)))
-              (begin (set! jrdesc-ifc-last (cons d c)) c)
+              (begin (when jolt-mt? (memory-order-release))
+                     (sa-site-cell-set! jrdesc-ifc-last (cons d c)) c)
               (let ((fresh (jrdesc-derive-ifc d (jrec-record?-uncached x))))
                 (jrdesc-ifc-set! d fresh)
-                (set! jrdesc-ifc-last (cons d fresh))
+                (when jolt-mt? (memory-order-release))
+                (sa-site-cell-set! jrdesc-ifc-last (cons d fresh))
                 fresh))))))
 ;; A PLAIN record is a defrecord that declares none of the methods the generic
 ;; collection ops consult on a record — no count, containsKey, assoc, seq, valAt,
@@ -330,7 +334,7 @@
 ;; name spelled by a different string object just fills its own entry.
 (define (jrec-method x method)
   (let* ((t (vector-ref (jrdesc-ifc-of x) 7))
-         (hit (hashtable-ref t method 'none)))
+         (hit (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t method 'none))))
     (if (eq? hit 'none)
         (let ((m (find-method-any-protocol (jrec-tag x) method)))
           (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t method m))
@@ -348,7 +352,7 @@
 ;; (instance? P x) on such a value once a library had registered one.
 (define (jrec-type-isa? x iface)
   (let* ((t (vector-ref (jrdesc-ifc-of x) 11))
-         (hit (hashtable-ref t iface 'none)))
+         (hit (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t iface 'none))))
     (if (eq? hit 'none)
         (let* ((tag (jrec-tag x))
                (ans (or (jrec-declares-class? tag iface) (jch-isa? tag iface))))
@@ -362,7 +366,7 @@
 ;; instance's field, which every map probe keyed on such a type runs.
 (define (jrec-dash-field-index x method)
   (let* ((t (vector-ref (jrdesc-ifc-of x) 13))
-         (hit (hashtable-ref t method 'none)))
+         (hit (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t method 'none))))
     (if (eq? hit 'none)
         (let ((i (and (fx>? (string-length method) 1)
                       (char=? (string-ref method 0) #\-)
@@ -376,7 +380,7 @@
 ;; decides, including its any-arity fallback.
 (define (jrec-method-arity x method nargs)
   (let* ((t (vector-ref (jrdesc-ifc-of x) 9))
-         (hit (assv nargs (hashtable-ref t method '()))))
+         (hit (assv nargs (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t method '())))))
     (if hit
         (cdr hit)
         (let ((m (find-method-any-protocol-arity (jrec-tag x) method nargs)))
@@ -433,9 +437,11 @@
 ;; Keyed by TAG so jrdesc-derive-ifc can compute it once per type; the walk builds
 ;; a key list, which is why answering it per call was worth caching.
 (define (tag-declares-coll-iface? tag)
-  (let ((ti (hashtable-ref type-registry tag #f)))
-    (and ti
-         (let loop ((ps (vector->list (jolt-with-mutex rec-tbl-mu (hashtable-keys ti)))))
+  (let ((keys (jolt-with-mutex rec-tbl-mu
+                (let ((ti (hashtable-ref type-registry tag #f)))
+                  (and ti (vector->list (hashtable-keys ti)))))))
+    (and keys
+         (let loop ((ps keys))
            (cond ((null? ps) #f)
                  ((member (jch-last-segment (car ps)) jrec-coll-iface-names) #t)
                  (else (loop (cdr ps))))))))
@@ -451,9 +457,11 @@
 ;; answers it once per type per epoch (slot 5, read by jrec-equiv=?) instead of
 ;; once per comparison.
 (define (tag-declares-sequential? tag)
-  (let ((ti (hashtable-ref type-registry tag #f)))
-    (and ti
-         (let loop ((ps (vector->list (jolt-with-mutex rec-tbl-mu (hashtable-keys ti)))))
+  (let ((keys (jolt-with-mutex rec-tbl-mu
+                (let ((ti (hashtable-ref type-registry tag #f)))
+                  (and ti (vector->list (hashtable-keys ti)))))))
+    (and keys
+         (let loop ((ps keys))
            (cond ((null? ps) #f)
                  ((string=? (jch-last-segment (car ps)) "Sequential") #t)
                  (else (loop (cdr ps))))))))

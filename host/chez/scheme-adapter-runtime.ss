@@ -2283,3 +2283,153 @@
       sa-pin-drain-locked!
       (lambda () (jolt-unlock! sa-pin-mutex)))))
 
+;; Shared-table reads, inline-cache site cells, epoch counters, published
+;; tables, and multimethod snapshot tables. On Chez, readers run lock-free
+;; (safe under Chez's eq/string hashtable concurrency) and macros expand to
+;; the existing zero-overhead paths.
+(define-syntax sa-shared-read
+  (syntax-rules ()
+    ((_ _mu expr) expr)))
+
+(define-syntax sa-shared-intern
+  (syntax-rules ()
+    ((_ mu hit-expr miss-expr)
+     (or hit-expr (jolt-with-mutex mu (or hit-expr miss-expr))))))
+
+(define-syntax sa-seqlock-read
+  (syntax-rules ()
+    ((_ mu gen-box expr)
+     (if (not jolt-mt?)
+         expr
+         (let ((g (unbox gen-box)))
+           (if (fxodd? g)
+               (jolt-with-mutex mu expr)
+               (begin
+                 (memory-order-acquire)
+                 (let ((v expr))
+                   (memory-order-acquire)
+                   (if (fx=? g (unbox gen-box))
+                       v
+                       (jolt-with-mutex mu expr))))))))))
+
+(define-syntax sa-site-cell-make
+  (syntax-rules ()
+    ((_ init) (vector init))))
+
+(define-syntax sa-site-cell-ref
+  (syntax-rules ()
+    ((_ cell) (vector-ref cell 0))))
+
+(define-syntax sa-site-cell-set!
+  (syntax-rules ()
+    ((_ cell val) (vector-set! cell 0 val))))
+
+(define-syntax sa-epoch-define
+  (syntax-rules ()
+    ((_ _cell var init) (define var init))))
+
+(define-syntax sa-epoch-ref
+  (syntax-rules ()
+    ((_ _cell var) var)))
+
+(define-syntax sa-epoch-bump!
+  (syntax-rules ()
+    ((_ _cell var) (set! var (fx+ var 1)))))
+
+(define-syntax sa-pub-define
+  (syntax-rules ()
+    ((_ _cell var init) (define var init))))
+
+(define-syntax sa-pub-ref
+  (syntax-rules ()
+    ((_ _cell var) var)))
+
+(define-syntax sa-pub-set!
+  (syntax-rules ()
+    ((_ _cell var val) (set! var val))))
+
+(define-syntax sa-mm-table-make
+  (syntax-rules ()
+    ((_ h e) (make-hashtable h e))))
+
+(define-syntax sa-mm-table-ref
+  (syntax-rules ()
+    ((_ tbl k d) (hashtable-ref tbl k d))))
+
+(define-syntax sa-mm-table-keys
+  (syntax-rules ()
+    ((_ mu tbl) (jolt-with-mutex mu (hashtable-keys tbl)))))
+
+(define-syntax sa-mm-table-entries
+  (syntax-rules ()
+    ((_ mu tbl) (jolt-with-mutex mu (hashtable-entries tbl)))))
+
+(define-syntax sa-mm-table-put!
+  (syntax-rules ()
+    ((_ mu tbl k v after ...)
+     (jolt-with-mutex mu
+       (hashtable-set! tbl k v)
+       after ...))))
+
+(define-syntax sa-mm-table-del!
+  (syntax-rules ()
+    ((_ mu tbl k after ...)
+     (jolt-with-mutex mu
+       (hashtable-delete! tbl k)
+       after ...))))
+
+(define-syntax sa-mm-table-clear!
+  (syntax-rules ()
+    ((_ mu tbl after ...)
+     (jolt-with-mutex mu
+       (hashtable-clear! tbl)
+       after ...))))
+
+(define-syntax sa-mm-prefer-put!
+  (syntax-rules ()
+    ((_ mu prefers a b h e after ...)
+     (jolt-with-mutex mu
+       (let ((sub (or (hashtable-ref prefers a #f)
+                      (let ((tbl (make-hashtable h e)))
+                        (hashtable-set! prefers a tbl)
+                        tbl))))
+         (hashtable-set! sub b #t))
+       after ...))))
+
+(define-syntax sa-mm-prefers-entries
+  (syntax-rules ()
+    ((_ mu prefers)
+     (jolt-with-mutex mu
+       (let-values (((ks vs) (hashtable-entries prefers)))
+         (cons ks (vector-map (lambda (sub) (hashtable-keys sub)) vs)))))))
+
+(define-syntax sa-mm-cache-make
+  (syntax-rules ()
+    ((_ h e) (make-hashtable h e))))
+
+(define-syntax sa-mm-cache-ref
+  (syntax-rules ()
+    ((_ cache k d) (hashtable-ref cache k d))))
+
+(define-syntax sa-mm-cache-validate!
+  (syntax-rules ()
+    ((_ mu mf cur-ep cur-hier get-cache get-ep set-ep! get-hier set-hier!)
+     (unless (and (fx= (get-ep mf) cur-ep)
+                  (eq? (get-hier mf) cur-hier))
+       (jolt-with-mutex mu
+         (unless (and (fx= (get-ep mf) cur-ep)
+                      (eq? (get-hier mf) cur-hier))
+           (hashtable-clear! (get-cache mf))
+           (set-ep! mf cur-ep)
+           (set-hier! mf cur-hier)))))))
+
+(define-syntax sa-mm-cache-put!
+  (syntax-rules ()
+    ((_ mu mf cache cur-ep-expr target-ep target-hier dv m get-ep get-hier)
+     (jolt-with-mutex mu
+       (when (and (fx= target-ep cur-ep-expr)
+                  (fx= (get-ep mf) target-ep)
+                  (eq? (get-hier mf) target-hier))
+         (hashtable-set! cache dv m))))))
+
+

@@ -311,18 +311,16 @@
 (define (keyword ns name)
   (if ns
       (let ((k (keyword-intern-key ns name)))
-        (or (hashtable-ref keyword-table k #f)
-            (jolt-with-mutex keyword-table-mu
-              (or (hashtable-ref keyword-table k #f)
-                  (let ((kw (make-keyword-t ns name (compute-keyword-hasheq ns name))))
-                    (hashtable-set! keyword-table k kw)
-                    kw)))))
-      (or (hashtable-ref keyword-table-bare name #f)
-          (jolt-with-mutex keyword-table-mu
-            (or (hashtable-ref keyword-table-bare name #f)
-                (let ((kw (make-keyword-t #f name (compute-keyword-hasheq #f name))))
-                  (hashtable-set! keyword-table-bare name kw)
-                  kw))))))
+        (sa-shared-intern keyword-table-mu
+          (hashtable-ref keyword-table k #f)
+          (let ((kw (make-keyword-t ns name (compute-keyword-hasheq ns name))))
+            (hashtable-set! keyword-table k kw)
+            kw)))
+      (sa-shared-intern keyword-table-mu
+        (hashtable-ref keyword-table-bare name #f)
+        (let ((kw (make-keyword-t #f name (compute-keyword-hasheq #f name))))
+          (hashtable-set! keyword-table-bare name kw)
+          kw))))
 (define (keyword? x) (keyword-t? x))
 
 ;; --- symbols: ns + name + meta; NOT interned (meta varies), = by ns/name ------
@@ -388,12 +386,11 @@
 (define symcell-front-cap 2048)
 (define jolt-vreg-symcell-cache 8)
 (define (intern-symbol-cell-slow s)
-  (or (hashtable-ref symbol-string-pool s #f)
-      (jolt-with-mutex symbol-string-pool-mu
-        (or (hashtable-ref symbol-string-pool s #f)
-            (let ((c (make-symstr s)))
-              (hashtable-set! symbol-string-pool s c)
-              c)))))
+  (sa-shared-intern symbol-string-pool-mu
+    (hashtable-ref symbol-string-pool s #f)
+    (let ((c (make-symstr s)))
+      (hashtable-set! symbol-string-pool s c)
+      c)))
 (define (intern-symbol-cell s)
   (let ((cache (let ((c (virtual-register jolt-vreg-symcell-cache)))
                  (if (eq? c 0)

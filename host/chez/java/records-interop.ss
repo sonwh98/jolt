@@ -29,13 +29,13 @@
 ;; instance-check-base is the JVM taxonomy fallback when no arm decides.
 (define instance-check-registry '())
 (define (register-instance-check-arm! f)   ; f: (type-sym val) -> #t | #f | 'pass
-  (set! instance-arms-epoch (fx+ instance-arms-epoch 1))
+  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
   (set! instance-check-registry (cons f instance-check-registry)))
 ;; Bumped by every instance-check AND class arm registration (host-class.ss): what
 ;; the arms answer for a value kind can only change when one is added, the class
 ;; graph moves, or the protocol registry does — instance-kind-epoch below sums the
 ;; three for the verdict memo.
-(define instance-arms-epoch 0)
+(sa-epoch-define instance-arms-epoch-cell instance-arms-epoch 0)
 ;; The one arm that runs LIBRARY code (__register-instance-check!, host-static-
 ;; classes.ss) — the memo below never caches what it says, and asks it live, at
 ;; its own place in the order. Registered through here so instance-check can find
@@ -100,7 +100,7 @@
          ;; graph or the protocol registry moves), keyed eq? on the name object:
          ;; the name is the interned symbol's string, the same object every call
          (let* ((t (vector-ref (jrdesc-ifc-of val) 8))
-                (hit (hashtable-ref t tname 'none)))
+                (hit (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t tname 'none))))
            (if (eq? hit 'none)
                (let ((ans (and (jrec-declares-class? (jrec-tag val) tname) #t)))
                  (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t tname ans))
@@ -136,8 +136,9 @@
 ;; that seven times per question.
 (define reify-class-memo (make-weak-eq-hashtable))
 (define (reify-declares-class? protos tname)
-  (let* ((inner (hashtable-ref reify-class-memo protos #f))
-         (hit (if inner (hashtable-ref inner tname 'none) 'none)))
+  (let ((hit (sa-shared-read jch-cache-mutex
+               (let ((inner (hashtable-ref reify-class-memo protos #f)))
+                 (if inner (hashtable-ref inner tname 'none) 'none)))))
     (if (not (eq? hit 'none))
         hit
         (let ((ans (or (and (member (last-dot tname) '("IObj" "IMeta")) #t)
@@ -201,7 +202,9 @@
         (ref-kind-extra-hook (ref-kind-extra-hook x))
         (else #f)))
 (define (instance-kind-epoch)
-  (fx+ instance-arms-epoch (fx+ jch-graph-epoch jolt-proto-epoch)))
+  (fx+ (sa-epoch-ref instance-arms-epoch-cell instance-arms-epoch)
+       (fx+ (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch)
+            (sa-epoch-ref jolt-proto-epoch-cell jolt-proto-epoch))))
 (define instance-kind-memo (make-weak-eq-hashtable))
 (define instance-kind-mu (make-mutex))
 ;; Walk arms from RS until STOP (exclusive); 'pass when none decided.
@@ -224,8 +227,9 @@
                     before)))
     (vector epoch before after)))
 (define (instance-kind-entry key tname ts val)
-  (let* ((inner (hashtable-ref instance-kind-memo key #f))
-         (e (and inner (hashtable-ref inner tname #f))))
+  (let ((e (sa-shared-read instance-kind-mu
+             (let ((inner (hashtable-ref instance-kind-memo key #f)))
+               (and inner (hashtable-ref inner tname #f))))))
     (if (and e (fx= (vector-ref e 0) (instance-kind-epoch)))
         e
         (let ((fresh (instance-kind-verdict ts val)))
@@ -271,7 +275,7 @@
              (or (fx= 0 (string-length t)) (not (char=? (string-ref t 0) #\[))))
         (jolt-symbol #f t)
         t)))
-(define (jolt-instance-site-make) (vector #f))
+(define (jolt-instance-site-make) (sa-site-cell-make #f))
 ;; Is T the type argument the state was built for? A quoted class name may be a
 ;; fresh symbol per evaluation, but its name and ns are the intern pool's strings,
 ;; so two spellings of one name compare eq? on both.
@@ -281,7 +285,7 @@
            (eq? (symbol-t-name t) (symbol-t-name st-t))
            (eq? (symbol-t-ns t) (symbol-t-ns st-t)))))
 (define (jolt-instance-site site t val)
-  (let ((st (vector-ref site 0))
+  (let ((st (sa-site-cell-ref site))
         (k (instance-kind-key val)))
     (if (and st k (eq? k (vector-ref st 3)) (instance-site-same-t? t (vector-ref st 0))
              (fx= (vector-ref st 5) (instance-kind-epoch)))
@@ -304,9 +308,15 @@
     ;; (ARM64) another thread could otherwise see the new entry before its slots
     (if (eq? ans 'uncached)
         (begin
-          (unless same-t (memory-order-release) (vector-set! site 0 (vector t ts tname #f #f -1)))
+          (unless same-t
+            (let ((nv (vector t ts tname #f #f -1)))
+              (memory-order-release)
+              (sa-site-cell-set! site nv)))
           (if (instance-check ts val) #t #f))
-        (begin (memory-order-release) (vector-set! site 0 (vector t ts tname k ans epoch)) ans))))
+        (let ((nv (vector t ts tname k ans epoch)))
+          (memory-order-release)
+          (sa-site-cell-set! site nv)
+          ans))))
 
 ;; The plain walk, which the memo must always agree with (the dispatch-caches
 ;; unit rows compare the two).

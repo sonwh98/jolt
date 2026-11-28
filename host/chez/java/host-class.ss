@@ -19,10 +19,10 @@
 (define jolt-class-arms '())
 ;; the last class name the arm walk answered (jolt-class-name, below); a new arm
 ;; may change an answer, so it clears
-(define jolt-class-name-last (cons #f #f))
+(define jolt-class-name-last (sa-site-cell-make (cons #f #f)))
 (define (register-class-arm! pred handler)
-  (set! instance-arms-epoch (fx+ instance-arms-epoch 1))
-  (set! jolt-class-name-last (cons #f #f))
+  (sa-epoch-bump! instance-arms-epoch-cell instance-arms-epoch)
+  (sa-site-cell-set! jolt-class-name-last (cons #f #f))
   (set! jolt-class-arms (cons (cons pred handler) jolt-class-arms)))
 ;; A LIBRARY's arm (__register-class!) is probed as it registers: it arrives at
 ;; runtime, after the whole runtime has loaded, so its predicate can be run
@@ -154,22 +154,22 @@
 ;; generation counter: the graph is extensible (a library can graft supers onto a
 ;; class at any time), and a cached answer computed against the old graph must not
 ;; outlive it. Steady state is two fixnum compares and a vector-ref.
-(define seq-kind-counted-v #f)
-(define seq-kind-counted-epoch -1)
+(define seq-kind-counted-site (sa-site-cell-make #f))
 (define (seq-kind-counted-vec)
-  (if (and seq-kind-counted-v (fx=? seq-kind-counted-epoch jch-graph-epoch))
-      seq-kind-counted-v
-      (let ((v (make-vector sk-count #f))
-            (epoch jch-graph-epoch))    ; read BEFORE the walk, like jch-closure
-        (let loop ((k 0))
-          (when (fx<? k sk-count)
-            (vector-set! v k (and (jch-isa? (vector-ref seq-kind-class-v k)
-                                            "clojure.lang.Counted")
-                                  #t))
-            (loop (fx+ k 1))))
-        (set! seq-kind-counted-epoch epoch)
-        (set! seq-kind-counted-v v)
-        v)))
+  (let ((cur (sa-site-cell-ref seq-kind-counted-site))
+        (epoch (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch)))
+    (if (and cur (fx=? (car cur) epoch))
+        (cdr cur)
+        (let ((v (make-vector sk-count #f)))
+          (let loop ((k 0))
+            (when (fx<? k sk-count)
+              (vector-set! v k (and (jch-isa? (vector-ref seq-kind-class-v k)
+                                              "clojure.lang.Counted")
+                                    #t))
+              (loop (fx+ k 1))))
+          (when jolt-mt? (memory-order-release))
+          (sa-site-cell-set! seq-kind-counted-site (cons epoch v))
+          v))))
 (define (cseq-counted? s) (vector-ref (seq-kind-counted-vec) (cseq-kind s)))
 (define (jolt-class-base x)
   (cond
@@ -277,7 +277,7 @@
 (define (set-class-name-memo-cons! f) (set! class-name-memo-cons f))
 (define (jolt-class-name x)
   (or (class-fast-name x)
-      (let ((c jolt-class-name-last))
+      (let ((c (sa-site-cell-ref jolt-class-name-last)))
         (if (eq? (car c) x)
             (cdr c)
             (let ((n (let loop ((as jolt-class-arms))
@@ -285,7 +285,9 @@
                              (((caar as) x) ((cdar as) x))
                              (else (loop (cdr as)))))))
               (let ((m (class-name-memo-cons x n)))
-                (when m (set! jolt-class-name-last m)))
+                (when m
+                  (when jolt-mt? (memory-order-release))
+                  (sa-site-cell-set! jolt-class-name-last m)))
               n)))))
 ;; A Class is ONE object per class, as on the JVM: (class 1) and (class 2) hand
 ;; back the same token, and it is the same token the class-name symbol Long

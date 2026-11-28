@@ -47,7 +47,7 @@
 ;; first could derive from the old graph and stamp the answer as current, which
 ;; revalidation could never catch.
 (define jch-cache-mutex (make-mutex))
-(define jch-graph-epoch 0)
+(sa-epoch-define jch-graph-epoch-cell jch-graph-epoch 0)
 ;; Runs after a class is registered, OUTSIDE jch-cache-mutex, with its name. The
 ;; class-token interner (host-static-classes.ss) installs it to drop a token it
 ;; interned under the JVM spelling of a deftype before the deftype existed. Outside
@@ -60,14 +60,15 @@
 (define (jch-invalidate!/locked)
   (hashtable-clear! jch-closure-cache)
   (hashtable-clear! jch-tags-cache)
-  (set! jch-graph-epoch (fx+ jch-graph-epoch 1)))
+  (sa-epoch-bump! jch-graph-epoch-cell jch-graph-epoch))
 
 ;; Merge direct supers for a class (union with any already registered). Public so
 ;; libraries can graft their own classes onto the modeled hierarchy.
 (define (jch-register-supers! name supers)
   ;; the read-modify-write is ONE step: two threads grafting different supers
   ;; onto the same class would otherwise each union against the value they read
-  ;; and the second write would drop the first's.
+  ;; and the second write would drop the first's. Reset derived tables inside
+  ;; the same critical section, then run the post-registration hook outside.
   (jolt-with-mutex jch-cache-mutex
     (let ((cur (hashtable-ref jvm-class-parents name '())))
       (hashtable-set! jvm-class-parents name
@@ -77,10 +78,11 @@
                               (else (add (cdr ss) (append acc (list (car ss)))))))))
     ;; the name tables are derived from the rows too (jch-set-supers! resets
     ;; them the same way); left alone, jch-known? missed a class registered here
-    (set! jch-known-cache #f)
-    (set! jch-simple->fqn-cache #f)
-    (set! jch-jvm-name-cache #f)
-    (jch-invalidate!/locked)))
+    (sa-pub-set! jch-known-cache-cell jch-known-cache #f)
+    (sa-pub-set! jch-simple->fqn-cache-cell jch-simple->fqn-cache #f)
+    (sa-pub-set! jch-jvm-name-cache-cell jch-jvm-name-cache #f)
+    (jch-invalidate!/locked))
+  (jch-class-registered-hook name))
 
 ;; Register a class no other class can name as a super yet — a reify form's or a
 ;; proxy's generated class, made the moment it is first asked for. Adding such a
@@ -98,14 +100,15 @@
                        (hashtable-delete! jch-tags-cache name)
                        ;; the known-name table is published whole and read with no
                        ;; lock: add to a copy and publish that
-                       (let ((k jch-known-cache))
+                       (let ((k (sa-pub-ref jch-known-cache-cell jch-known-cache)))
                          (when k
                            (let ((c (hashtable-copy k #t)))
                              (for-each (lambda (n) (hashtable-set! c n #t) (hashtable-set! c (jch-last-segment n) #t))
                                        (cons name supers))
-                             (set! jch-known-cache c))))
-                       (set! jch-simple->fqn-cache #f)
-                       (set! jch-jvm-name-cache #f)
+                             (when jolt-mt? (memory-order-release))
+                             (sa-pub-set! jch-known-cache-cell jch-known-cache c))))
+                       (sa-pub-set! jch-simple->fqn-cache-cell jch-simple->fqn-cache #f)
+                       (sa-pub-set! jch-jvm-name-cache-cell jch-jvm-name-cache #f)
                        #t)))))
     (if new?
         (jch-class-registered-hook name)
@@ -123,7 +126,7 @@
 ;; used to read an empty row as absent, and a $ in the name then made the
 ;; interface a fn — (supers java.util.Map$Entry) answered the AFunction chain.
 (define (jch-direct-supers name)
-  (let ((direct (hashtable-ref jvm-class-parents name #f)))
+  (let ((direct (sa-shared-read jch-cache-mutex (hashtable-ref jvm-class-parents name #f))))
     (cond (direct direct)
           ((str-has-dollar? name) '("clojure.lang.AFunction"))
           (else '()))))
@@ -133,17 +136,17 @@
 (define (jch-set-supers! name supers)
   (jolt-with-mutex jch-cache-mutex
     (hashtable-set! jvm-class-parents name supers)
-    (set! jch-known-cache #f)
-    (set! jch-simple->fqn-cache #f)
-    (set! jch-jvm-name-cache #f)
+    (sa-pub-set! jch-known-cache-cell jch-known-cache #f)
+    (sa-pub-set! jch-simple->fqn-cache-cell jch-simple->fqn-cache #f)
+    (sa-pub-set! jch-jvm-name-cache-cell jch-jvm-name-cache #f)
     (jch-invalidate!/locked))
   (jch-class-registered-hook name))
 
 ;; transitive supers of NAME (canonical), excluding NAME and Object; Object is the
 ;; universal root supplied by callers. Breadth-first, deduped, stable order.
 (define (jch-closure name)
-  (or (hashtable-ref jch-closure-cache name #f)
-      (let* ((epoch jch-graph-epoch)      ; read BEFORE the walk — see jch-graph-epoch
+  (or (sa-shared-read jch-cache-mutex (hashtable-ref jch-closure-cache name #f))
+      (let* ((epoch (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
              (result
               (let loop ((pending (jch-direct-supers name)) (seen '()))
                 (cond ((null? pending) (reverse seen))
@@ -151,7 +154,8 @@
                       (else (loop (append (jch-direct-supers (car pending)) (cdr pending))
                                   (cons (car pending) seen)))))))
         (jolt-with-mutex jch-cache-mutex
-          (when (fx= epoch jch-graph-epoch) (hashtable-set! jch-closure-cache name result)))
+          (when (fx= epoch (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
+            (hashtable-set! jch-closure-cache name result)))
         result)))
 
 ;; ns segment munging for a JVM-spelled class name: dashes become underscores
@@ -181,8 +185,8 @@
 ;; and instance? accept either "Associative" or "clojure.lang.Associative"), plus
 ;; "Object". Memoized — this is on the hot protocol-dispatch path.
 (define (jch-tags name)
-  (or (hashtable-ref jch-tags-cache name #f)
-      (let* ((epoch jch-graph-epoch)      ; read BEFORE the walk — see jch-graph-epoch
+  (or (sa-shared-read jch-cache-mutex (hashtable-ref jch-tags-cache name #f))
+      (let* ((epoch (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
              (chain (cons name (jch-closure name)))
              (result
               (let build ((cs chain) (acc '()))
@@ -195,7 +199,8 @@
                                      acc1 (cons simple acc1))))
                       (build (cdr cs) acc2))))))
         (jolt-with-mutex jch-cache-mutex
-          (when (fx= epoch jch-graph-epoch) (hashtable-set! jch-tags-cache name result)))
+          (when (fx= epoch (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
+            (hashtable-set! jch-tags-cache name result)))
         result)))
 
 ;; Is WANTED (canonical or simple) the class CHILD (canonical) or one of its
@@ -223,11 +228,11 @@
 ;; double-check under the mutex means two racers agree on one table rather than
 ;; each filling their own. The hit path — every instance? after the first — is a
 ;; single global read and no lock.
-(define jch-known-cache #f)
+(sa-pub-define jch-known-cache-cell jch-known-cache #f)
 (define (jch-known-table)
-  (or jch-known-cache
+  (or (sa-pub-ref jch-known-cache-cell jch-known-cache)
       (jolt-with-mutex jch-cache-mutex
-        (or jch-known-cache
+        (or (sa-pub-ref jch-known-cache-cell jch-known-cache)
             (let ((t (make-hashtable string-hash string=?)))
               (let-values (((keys vals) (hashtable-entries jvm-class-parents)))
                 (vector-for-each
@@ -239,7 +244,8 @@
                                (hashtable-set! t (jch-last-segment s) #t))
                              supers))
                  keys vals))
-              (set! jch-known-cache t)
+              (when jolt-mt? (memory-order-release))
+              (sa-pub-set! jch-known-cache-cell jch-known-cache t)
               t)))))
 (define (jch-known? wanted)
   ;; bind once: an invalidation between the two probes would otherwise hand the
@@ -263,11 +269,11 @@
 ;; the JVM, where Compiler.munge turns the dash into an underscore. Host classes
 ;; never differ. Same build-into-a-local-then-publish rule as jch-known-table
 ;; above, for the same reason, and invalidated at the same sites.
-(define jch-jvm-name-cache #f)
+(sa-pub-define jch-jvm-name-cache-cell jch-jvm-name-cache #f)
 (define (jch-jvm-name-table)
-  (or jch-jvm-name-cache
+  (or (sa-pub-ref jch-jvm-name-cache-cell jch-jvm-name-cache)
       (jolt-with-mutex jch-cache-mutex
-        (or jch-jvm-name-cache
+        (or (sa-pub-ref jch-jvm-name-cache-cell jch-jvm-name-cache)
             (let ((t (make-hashtable string-hash string=?)))
               (let-values (((keys vals) (hashtable-entries jvm-class-parents)))
                 (vector-for-each
@@ -275,7 +281,8 @@
                    (let ((m (jch-munge-segments k)))
                      (unless (string=? m k) (hashtable-set! t m k))))
                  keys))
-              (set! jch-jvm-name-cache t)
+              (when jolt-mt? (memory-order-release))
+              (sa-pub-set! jch-jvm-name-cache-cell jch-jvm-name-cache t)
               t)))))
 ;; The name jolt registers a class under, given any spelling the JVM accepts for
 ;; it: the registration itself, else the registered name whose JVM spelling is
@@ -294,11 +301,11 @@
 ;; Same publish-when-complete rule as jch-known-table above, and for the same
 ;; reason: a half-filled table here resolves a simple exception name to itself
 ;; instead of its FQN.
-(define jch-simple->fqn-cache #f)
+(sa-pub-define jch-simple->fqn-cache-cell jch-simple->fqn-cache #f)
 (define (jch-simple->fqn-table)
-  (or jch-simple->fqn-cache
+  (or (sa-pub-ref jch-simple->fqn-cache-cell jch-simple->fqn-cache)
       (jolt-with-mutex jch-cache-mutex
-        (or jch-simple->fqn-cache
+        (or (sa-pub-ref jch-simple->fqn-cache-cell jch-simple->fqn-cache)
             (let ((t (make-hashtable string-hash string=?)))
               (let-values (((keys vals) (hashtable-entries jvm-class-parents)))
                 (vector-for-each
@@ -309,26 +316,11 @@
                                    (hashtable-set! t seg n))))
                              (cons k supers)))
                  keys vals))
-              (set! jch-simple->fqn-cache t)
+              (when jolt-mt? (memory-order-release))
+              (sa-pub-set! jch-simple->fqn-cache-cell jch-simple->fqn-cache t)
               t)))))
 (define (jch-fqn-of-simple name)
   (or (hashtable-ref (jch-simple->fqn-table) name #f) name))
-
-;; A register also invalidates the derived caches. The mutation and BOTH resets
-;; are one critical section, and the resets come AFTER the mutation: resetting
-;; first would leave a window where the graph is still the old one, so a
-;; concurrent jch-known-table could rebuild from it and publish, and this
-;; register would then never invalidate what that thread just cached. (The inner
-;; fn takes the same mutex; Chez's are recursive.)
-(define jch-register-supers!-inner jch-register-supers!)
-(set! jch-register-supers!
-  (lambda (name supers)
-    (jolt-with-mutex jch-cache-mutex
-      (jch-register-supers!-inner name supers)
-      (set! jch-known-cache #f)
-      (set! jch-simple->fqn-cache #f)
-      (set! jch-jvm-name-cache #f))
-    (jch-class-registered-hook name)))
 
 ;; throw-jvm (rt.ss) resolves an unlisted simple exception name through this graph
 ;; now that it exists — so (throw-jvm 'RuntimeException …) reports
@@ -354,7 +346,8 @@
     (jolt-with-mutex jch-cache-mutex (hashtable-set! jch-interface-set name #t))))
 ;; an interface the graph marked, or one of java.base's (jdk-interfaces.ss)
 (define (jch-interface? name)
-  (or (hashtable-ref jch-interface-set name #f) (hashtable-ref jdk-public-interfaces name #f)))
+  (or (sa-shared-read jch-cache-mutex (hashtable-ref jch-interface-set name #f))
+      (hashtable-ref jdk-public-interfaces name #f)))
 ;; a java.* / javax.* / com.sun.* / jdk.* name that is not an interface: a JDK
 ;; class, whether or not the graph models it (a proxy over java.util.TimerTask
 ;; extends it). The interface table covers the com.sun.* and jdk.* packages
@@ -441,17 +434,23 @@
   (jolt-with-mutex jch-cache-mutex (hashtable-set! jch-visibility-tbl name 0)))
 (define (jch-mark-private! name)
   (jolt-with-mutex jch-cache-mutex (hashtable-set! jch-visibility-tbl name jch-mod-private)))
-(define (jch-final? name) (and (hashtable-ref jch-final-set name #f) #t))
+(define (jch-final? name)
+  (and (sa-shared-read jch-cache-mutex (hashtable-ref jch-final-set name #f)) #t))
 (define (jch-abstract? name)
-  (or (jch-interface? name) (and (hashtable-ref jch-abstract-set name #f) #t)))
-(define (jch-enum? name) (and (hashtable-ref jch-enum-set name #f) #t))
+  (or (jch-interface? name)
+      (and (sa-shared-read jch-cache-mutex (hashtable-ref jch-abstract-set name #f)) #t)))
+(define (jch-enum? name)
+  (and (sa-shared-read jch-cache-mutex (hashtable-ref jch-enum-set name #f)) #t))
 ;; The bitmask for `name`, resolving a simple name to its FQN first so
 ;; (.getModifiers String) and (.getModifiers java.lang.String) agree.
 (define (jch-modifiers name)
-  (let ((n (if (jch-known? name) (jch-fqn-of-simple name) name)))
-    (+ (hashtable-ref jch-visibility-tbl n jch-mod-public)
-       (if (and (str-has-dollar? n) (jch-known-exact? n) (not (hashtable-ref jch-inner-set n #f)))
-           jch-mod-static 0)
+  (let* ((n (if (jch-known? name) (jch-fqn-of-simple name) name))
+         (known? (and (str-has-dollar? n) (jch-known-exact? n)))
+         (vis-inner (sa-shared-read jch-cache-mutex
+                      (cons (hashtable-ref jch-visibility-tbl n jch-mod-public)
+                            (and known? (not (hashtable-ref jch-inner-set n #f)))))))
+    (+ (car vis-inner)
+       (if (cdr vis-inner) jch-mod-static 0)
        (if (jch-final? n) jch-mod-final 0)
        (if (jch-interface? n) jch-mod-interface 0)
        (if (jch-abstract? n) jch-mod-abstract 0)

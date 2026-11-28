@@ -1623,7 +1623,7 @@
 ;; it through the registry (~320 ns, three times what the reify hit costs).
 (define (jrec-satisfies? obj pn-str)
   (let* ((t (vector-ref (jrdesc-ifc-of obj) 10))
-         (hit (hashtable-ref t pn-str 'none)))
+         (hit (sa-shared-read jrdesc-ifc-mutex (hashtable-ref t pn-str 'none))))
     (if (eq? hit 'none)
         (let ((ans (and (jolt-satisfies-walk obj pn-str) #t)))
           (jolt-with-mutex jrdesc-ifc-mutex (hashtable-set! t pn-str ans))
@@ -1639,9 +1639,10 @@
 (define reify-satisfies-mu (make-mutex))
 (define (reify-satisfies? obj pn-str)
   (let* ((protos (jreify-protos obj))
-         (epoch (fx+ jolt-proto-epoch jch-graph-epoch))
-         (inner (hashtable-ref reify-satisfies-memo protos #f))
-         (e (and inner (hashtable-ref inner pn-str #f))))
+         (epoch (jrdesc-ifc-epoch))
+         (e (sa-shared-read reify-satisfies-mu
+              (let ((inner (hashtable-ref reify-satisfies-memo protos #f)))
+                (and inner (hashtable-ref inner pn-str #f))))))
     (if (and e (fx= (car e) epoch))
         (cdr e)
         (let ((ans (and (jolt-satisfies-walk obj pn-str) #t)))
@@ -1671,8 +1672,8 @@
              (memo (satisfies-memo-ref pn-str tags)))
         (if memo
             (vector-ref memo 2)
-            (let* ((pe jolt-proto-epoch)
-                   (ge jch-graph-epoch)
+            (let* ((pe (sa-epoch-ref jolt-proto-epoch-cell jolt-proto-epoch))
+                   (ge (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
                    (ans (let loop ((tags tags))
                           (cond ((null? tags) #f)
                                 ((type-satisfies? (car tags) pn-str) #t)
@@ -1704,17 +1705,19 @@
 ;; is a protocol.
 (define satisfies-memo (make-hashtable string-hash string=?))
 (define (satisfies-memo-ref pn tags)
-  (let ((inner (hashtable-ref satisfies-memo pn #f)))
-    (and inner
-         (let ((e (hashtable-ref inner tags #f)))
-           (and e
-                (fx= (vector-ref e 0) jolt-proto-epoch)
-                (fx= (vector-ref e 1) jch-graph-epoch)
-                e)))))
+  (sa-shared-read jch-cache-mutex
+    (let ((inner (hashtable-ref satisfies-memo pn #f)))
+      (and inner
+           (let ((e (hashtable-ref inner tags #f)))
+             (and e
+                  (fx= (vector-ref e 0) (sa-epoch-ref jolt-proto-epoch-cell jolt-proto-epoch))
+                  (fx= (vector-ref e 1) (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch))
+                  e))))))
 (define (satisfies-memo-set! pn tags pe ge ans)
   (when (graph-owned-tags? tags)
     (jolt-with-mutex jch-cache-mutex
-      (when (and (fx= pe jolt-proto-epoch) (fx= ge jch-graph-epoch))
+      (when (and (fx= pe (sa-epoch-ref jolt-proto-epoch-cell jolt-proto-epoch))
+                 (fx= ge (sa-epoch-ref jch-graph-epoch-cell jch-graph-epoch)))
         (let ((inner (or (hashtable-ref satisfies-memo pn #f)
                          (let ((t (make-weak-eq-hashtable)))
                            (hashtable-set! satisfies-memo pn t)
@@ -1731,14 +1734,16 @@
 (define (extenders proto)
   (let* ((pn (jolt-get proto kw-proto-name jolt-nil))
          (pn-str (if (symbol-t? pn) (symbol-t-name pn) pn))
-         (out '()))
-    (vector-for-each
-      (lambda (tag)
-        (let ((ti (hashtable-ref type-registry tag #f)))
-          (when ti (let ((pi (hashtable-ref ti pn-str #f)))
-                     (when (and pi (hashtable-ref pi extend-mark #f))
-                       (set! out (cons (jolt-symbol jolt-nil tag) out)))))))
-      (jolt-with-mutex rec-tbl-mu (hashtable-keys type-registry)))
+         (out (jolt-with-mutex rec-tbl-mu
+                (let ((acc '()))
+                  (vector-for-each
+                    (lambda (tag)
+                      (let ((ti (hashtable-ref type-registry tag #f)))
+                        (when ti (let ((pi (hashtable-ref ti pn-str #f)))
+                                   (when (and pi (hashtable-ref pi extend-mark #f))
+                                     (set! acc (cons (jolt-symbol jolt-nil tag) acc)))))))
+                    (hashtable-keys type-registry))
+                  acc))))
     (if (null? out) jolt-nil (list->cseq out))))
 
 ;; jolt exception values (ex-info + host-constructed throwables) are ex-info-shaped
